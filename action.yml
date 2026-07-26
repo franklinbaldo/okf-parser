@@ -1,0 +1,20 @@
+name: Validate OKF bundle
+description: Validate every Markdown file below a path as Open Knowledge Format v0.2
+inputs:
+  path:
+    description: Bundle directory to validate
+    required: false
+    default: .
+runs:
+  using: composite
+  steps:
+    - name: Install uv
+      uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+      with:
+        version: "0.11.21"
+    - name: Validate OKF
+      shell: bash
+      env:
+        OKF_PATH: ${{ inputs.path }}
+      run: |
+        uv run --project "$GITHUB_ACTION_PATH" --frozen okf-parser check "$OKF_PATH"
