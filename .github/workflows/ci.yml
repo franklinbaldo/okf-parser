@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  version-bump:
+    name: Version bump and changelog
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require a version bump and matching changelog
+        shell: bash
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          read_version() {
+            sed -n 's/^version = "\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)"$/\1/p'
+          }
+
+          git fetch --quiet origin "$BASE"
+          head_version=$(read_version < pyproject.toml)
+          if git cat-file -e "origin/$BASE:pyproject.toml" 2>/dev/null; then
+            base_version=$(git show "origin/$BASE:pyproject.toml" | read_version)
+          else
+            base_version="0.0.0"
+          fi
+
+          if [[ -z "$head_version" ]]; then
+            echo "::error file=pyproject.toml::A versão SemVer não foi encontrada."
+            exit 1
+          fi
+          if [[ "$head_version" == "$base_version" ]]; then
+            echo "::error file=pyproject.toml::A versão continua $head_version; faça o bump."
+            exit 1
+          fi
+          highest=$(printf '%s\n%s\n' "$base_version" "$head_version" | sort -V | tail -1)
+          if [[ "$highest" != "$head_version" ]]; then
+            echo "::error file=pyproject.toml::A versão $head_version não supera $base_version."
+            exit 1
+          fi
+
+          expected_changelog="changelog/$head_version.md"
+          mapfile -t added_changelogs < <(
+            git diff --diff-filter=A --name-only "origin/$BASE...HEAD" -- "changelog/*.md"
+          )
+          if [[ "${#added_changelogs[@]}" -ne 1 ]]; then
+            echo "::error file=changelog::Cada PR deve adicionar exatamente um changelog."
+            printf 'Encontrado: %s\n' "${added_changelogs[@]}"
+            exit 1
+          fi
+          if [[ "${added_changelogs[0]}" != "$expected_changelog" ]]; then
+            echo "::error file=${added_changelogs[0]}::Esperado $expected_changelog."
+            exit 1
+          fi
+
+          echo "OK: $base_version -> $head_version; $expected_changelog presente."
+
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Install locked dependencies
+        run: uv sync --frozen --all-groups
+
+      - name: Check lockfile
+        run: uv lock --check
+
+      - name: Check Python formatting
+        run: uv run ruff format --check .
+
+      - name: Lint Python
+        run: uv run ruff check .
+
+      - name: Check types
+        run: uv run ty check src tests
+
+      - name: Find dead code
+        run: uv run vulture src --min-confidence 90
+
+      - name: Run tests
+        run: uv run pytest
+
+      - name: Validate this repository with okf-parser
+        run: uv run okf-parser check .
+
+      - name: Build distributions
+        run: uv build
