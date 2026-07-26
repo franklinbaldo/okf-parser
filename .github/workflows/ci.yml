@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Install locked dependencies
+        run: uv sync --frozen --all-groups
+
+      - name: Check lockfile
+        run: uv lock --check
+
+      - name: Check Python formatting
+        run: uv run ruff format --check .
+
+      - name: Lint Python
+        run: uv run ruff check .
+
+      - name: Check types
+        run: uv run ty check src tests
+
+      - name: Find dead code
+        run: uv run vulture src --min-confidence 90
+
+      - name: Run tests
+        run: uv run pytest
+
+      - name: Validate this repository with okf-tools
+        run: uv run okf-tools check . --require-all-caps-frontmatter
+
+      - name: Build distributions
+        run: uv build
