@@ -64,7 +64,7 @@ Add the repository as a CI check:
 
 ```yaml
 steps:
-  - uses: actions/checkout@v4
+  - uses: actions/checkout@v7
   - uses: franklinbaldo/okf-parser@v1
     with:
       path: knowledge
