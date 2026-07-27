@@ -59,6 +59,13 @@ The command exits with status `1` only when normative errors exist. Broken
 cross-links are warnings because OKF v0.2 explicitly says they do not make a
 bundle non-conformant.
 
+`format` numbers ordered lists consecutively (`1. 2. 3.`) without padding them
+to an even width, so appending an item does not rewrite the lines above it. A
+list whose markers would exceed CommonMark's nine-digit limit keeps plain
+numbering instead. Formatting never rewrites a file into a different document:
+a file whose block structure would change is reported in `skipped_paths` and
+left on disk.
+
 ## GitHub Actions
 
 Add the repository as a CI check:

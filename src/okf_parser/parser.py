@@ -144,6 +144,39 @@ def iter_headings(body: str) -> list[tuple[int, str]]:
     return headings
 
 
+def block_structure(text: str) -> list[tuple[str, str, int]]:
+    """Return a document's block-level shape: token type, tag, and nesting depth.
+
+    Inline tokens are excluded on purpose. A formatter may legitimately rewrite
+    inline whitespace, so comparing inline content reports a difference for
+    ordinary files; comparing block tokens alone still detects a rewrite that
+    changes what the document means.
+    """
+    return [
+        (token.type, token.tag, token.level)
+        for token in _MARKDOWN.parse(text)
+        if token.type != "inline"
+    ]
+
+
+def ordered_item_lines(text: str) -> set[int]:
+    """Return the zero-based lines that begin an ordered-list item.
+
+    Locating markers through CommonMark tokens keeps a lookalike such as
+    ``01. text`` inside a fenced code block from being treated as a marker.
+    """
+    lines: set[int] = set()
+    in_ordered: list[bool] = []
+    for token in _MARKDOWN.parse(text):
+        if token.type in {"ordered_list_open", "bullet_list_open"}:
+            in_ordered.append(token.type == "ordered_list_open")
+        elif token.type in {"ordered_list_close", "bullet_list_close"}:
+            in_ordered.pop()
+        elif token.type == "list_item_open" and token.map and in_ordered and in_ordered[-1]:
+            lines.add(token.map[0])
+    return lines
+
+
 def split_link_target(raw_target: str) -> SplitResult | None:
     """Split a raw link target, returning ``None`` when it is not a valid URL.
 
