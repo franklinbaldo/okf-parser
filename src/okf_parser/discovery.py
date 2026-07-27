@@ -10,6 +10,16 @@ if TYPE_CHECKING:
 IGNORED_DIRECTORIES = frozenset(
     {".git", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".ty_cache", ".venv"}
 )
+MARKDOWN_SUFFIX = ".md"
+
+
+def is_markdown_filename(name: str) -> bool:
+    """Return whether a filename is Markdown, ignoring extension casing.
+
+    Discovery and link classification must agree, otherwise an ``example.MD``
+    file is never validated while links pointing at it are reported unresolved.
+    """
+    return name.lower().endswith(MARKDOWN_SUFFIX)
 
 
 def discover_markdown(root: Path) -> tuple[Path, ...]:
@@ -29,6 +39,6 @@ def discover_markdown(root: Path) -> tuple[Path, ...]:
         paths.extend(
             candidate
             for name in filenames
-            if name.endswith(".md") and not (candidate := directory / name).is_symlink()
+            if is_markdown_filename(name) and not (candidate := directory / name).is_symlink()
         )
     return tuple(sorted(paths))

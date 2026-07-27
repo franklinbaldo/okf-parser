@@ -166,3 +166,105 @@ def test_logical_keys_do_not_depend_on_checkout_path(tmp_path: Path) -> None:
 
     assert first_keys.to_dict(orient="records") == [{"logical_key": "nested/concept"}]
     assert second_keys.to_dict(orient="records") == first_keys.to_dict(orient="records")
+
+
+def test_one_unparseable_concept_does_not_abort_the_run(tmp_path: Path) -> None:
+    _write(tmp_path / "a-broken.md", "---\n2026-01-01: released\n---\n")
+    _write(tmp_path / "b-cyclic.md", "---\nself: &a\n  child: *a\n---\n")
+    _write(tmp_path / "c-good.md", "---\ntype: Node\n---\n# Good\n")
+
+    report = validate_path(tmp_path)
+
+    assert report.markdown_count == 3
+    assert report.concept_count == 1
+    assert [item.code for item in report.violations] == ["OKF001", "OKF001"]
+
+
+def test_malformed_url_in_frontmatter_does_not_abort_the_run(tmp_path: Path) -> None:
+    _write(tmp_path / "a.md", "---\ntype: Node\nrelated: http://[oops/x.md\n---\n")
+
+    report = validate_path(tmp_path)
+
+    assert report.is_conformant
+    assert report.concept_count == 1
+
+
+def test_prose_ending_in_md_is_not_a_link(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "a.md",
+        "---\ntype: Node\ndescription: Supersedes the old draft in notes.md\n---\n",
+    )
+
+    bundle = load_bundle(tmp_path)
+
+    assert bundle.links.count().execute() == 0
+    assert bundle.validate() == []
+
+
+def test_fenced_code_does_not_create_log_date_headings(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "log.md",
+        "# Log\n\n## 2026-01-01\n\n```markdown\n## not a date heading\n```\n",
+    )
+
+    bundle = load_bundle(tmp_path)
+
+    assert bundle.is_conformant
+    assert bundle.validate() == []
+
+
+def test_fenced_code_does_not_satisfy_the_index_title_rule(tmp_path: Path) -> None:
+    _write(tmp_path / "index.md", "Intro paragraph.\n\n```markdown\n# fake title\n```\n")
+
+    bundle = load_bundle(tmp_path)
+
+    assert [item.code for item in bundle.validate()] == ["OKF005"]
+
+
+def test_empty_level_one_heading_does_not_satisfy_the_index_title_rule(tmp_path: Path) -> None:
+    _write(tmp_path / "index.md", "#\n\nIntro paragraph.\n")
+
+    bundle = load_bundle(tmp_path)
+
+    assert [item.code for item in bundle.validate()] == ["OKF005"]
+
+
+def test_empty_level_one_heading_does_not_satisfy_the_log_title_rule(tmp_path: Path) -> None:
+    _write(tmp_path / "log.md", "# \n\n## 2026-01-01\n\n* Entry\n")
+
+    bundle = load_bundle(tmp_path)
+
+    assert [item.code for item in bundle.validate()] == ["OKF007"]
+
+
+def test_uppercase_markdown_extension_is_discovered_and_resolvable(tmp_path: Path) -> None:
+    _write(tmp_path / "a.md", "---\ntype: Node\n---\n[B](B.MD)\n")
+    _write(tmp_path / "B.MD", "---\ntype: Node\n---\n# B\n")
+
+    report = validate_path(tmp_path)
+    bundle = load_bundle(tmp_path)
+
+    assert report.markdown_count == 2
+    assert report.concept_count == 2
+    assert report.is_conformant
+    [link] = bundle.links.execute().to_dict(orient="records")
+    assert link["target_id"] == "B"
+    assert link["exists"]
+
+
+def test_graph_has_no_phantom_nodes_for_unparseable_targets(tmp_path: Path) -> None:
+    _write(tmp_path / "a.md", "---\ntype: Node\n---\n[B](b.md)\n")
+    _write(tmp_path / "b.md", "no frontmatter\n")
+
+    graph = load_bundle(tmp_path).to_networkx()
+
+    assert set(graph.nodes) == {"a"}
+    assert all("type" in attributes for _node, attributes in graph.nodes(data=True))
+
+
+def test_graph_node_without_a_title_uses_none_not_nan(tmp_path: Path) -> None:
+    _write(tmp_path / "a.md", "---\ntype: Node\n---\n# A\n")
+
+    graph = load_bundle(tmp_path).to_networkx()
+
+    assert graph.nodes["a"]["title"] is None

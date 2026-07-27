@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import duckdb
 import pytest
 
-from okf_parser.duckdb import attach_okf
+from okf_parser.duckdb import BundleExportError, attach_okf
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -34,3 +34,27 @@ def test_attach_okf_rejects_unsafe_schema_name(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="invalid DuckDB schema"):
         attach_okf(connection, tmp_path, schema='okf"; DROP TABLE x; --')
+
+
+def test_attach_okf_refuses_to_clobber_existing_tables(tmp_path: Path) -> None:
+    (tmp_path / "a.md").write_text("---\ntype: Node\n---\n", encoding="utf-8")
+    connection = duckdb.connect()
+    attach_okf(connection, tmp_path)
+
+    with pytest.raises(BundleExportError) as excinfo:
+        attach_okf(connection, tmp_path)
+
+    assert excinfo.value.schema_name == "okf"
+    assert "concepts" in excinfo.value.tables
+    assert connection.sql("SELECT count(*) FROM okf.concepts").fetchone() == (1,)
+
+
+def test_attach_okf_overwrite_replaces_existing_tables(tmp_path: Path) -> None:
+    (tmp_path / "a.md").write_text("---\ntype: Node\n---\n", encoding="utf-8")
+    connection = duckdb.connect()
+    attach_okf(connection, tmp_path)
+
+    result = attach_okf(connection, tmp_path, overwrite=True)
+
+    assert result["concept_count"] == 1
+    assert connection.sql("SELECT count(*) FROM okf.concepts").fetchone() == (1,)
