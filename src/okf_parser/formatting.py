@@ -62,6 +62,10 @@ def format_path(path: Path, *, write: bool = False) -> FormatReport:
         formatted = mdformat.text(
             original,
             extensions={"frontmatter", "gfm"},
+            # Keep 1. 2. 3. rather than collapsing every marker to 1. Both
+            # render identically, but consecutive numbering keeps the source of
+            # a numbered plan readable in a diff.
+            options={"number": True},
         )
         if formatted == original:
             continue

@@ -57,6 +57,26 @@ def test_format_does_not_follow_markdown_symlinks(tmp_path: Path) -> None:
     assert outside.read_text(encoding="utf-8") == original
 
 
+def test_ordered_list_numbering_is_preserved(tmp_path: Path) -> None:
+    path = tmp_path / "plan.md"
+    original = "# Plan\n\n1. first\n2. second\n3. third\n"
+    path.write_text(original, encoding="utf-8")
+
+    report = format_path(tmp_path, write=True)
+
+    assert report.changed_paths == ()
+    assert path.read_text(encoding="utf-8") == original
+
+
+def test_ordered_list_numbering_is_renumbered_when_wrong(tmp_path: Path) -> None:
+    path = tmp_path / "plan.md"
+    path.write_text("# Plan\n\n1. first\n1. second\n1. third\n", encoding="utf-8")
+
+    format_path(tmp_path, write=True)
+
+    assert path.read_text(encoding="utf-8") == "# Plan\n\n1. first\n2. second\n3. third\n"
+
+
 def test_non_utf8_file_is_skipped_instead_of_raising(tmp_path: Path) -> None:
     (tmp_path / "latin1.md").write_bytes(b"# Caf\xe9\n")
 
