@@ -10,6 +10,7 @@ from typing import Literal
 from cyclopts import App
 from fastmcp import FastMCP
 
+from okf_parser.duckdb import BundleExportError
 from okf_parser.service import (
     check_bundle,
     check_format,
@@ -86,9 +87,21 @@ def duckdb_command(
     path: str,
     database: str = "okf.duckdb",
     schema: str = "okf",
+    *,
+    overwrite: bool = False,
 ) -> CliResult:
     """Materialize bundle relations into a DuckDB database."""
-    return CliResult(export_duckdb(path, database, schema))
+    try:
+        return CliResult(export_duckdb(path, database, schema, overwrite=overwrite))
+    except BundleExportError as exc:
+        return CliResult(
+            {
+                "error": str(exc),
+                "schema": exc.schema_name,
+                "existing_tables": list(exc.tables),
+            },
+            exit_code=1,
+        )
 
 
 @app.command

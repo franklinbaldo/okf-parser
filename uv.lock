@@ -823,7 +823,7 @@ wheels = [
 
 [[package]]
 name = "okf-parser"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "cyclopts" },
@@ -835,6 +835,7 @@ dependencies = [
     { name = "mdformat-frontmatter" },
     { name = "mdformat-gfm" },
     { name = "networkx" },
+    { name = "pydantic" },
     { name = "pyyaml" },
 ]
 
@@ -857,6 +858,7 @@ requires-dist = [
     { name = "mdformat-frontmatter", specifier = ">=2,<3" },
     { name = "mdformat-gfm", specifier = ">=1,<2" },
     { name = "networkx", specifier = ">=3.4,<4" },
+    { name = "pydantic", specifier = ">=2.11,<3" },
     { name = "pyyaml", specifier = ">=6,<7" },
 ]
 

@@ -1,6 +1,6 @@
 [project]
 name = "okf-parser"
-version = "0.1.0"
+version = "0.2.0"
 description = "Relational inspection and validation for Open Knowledge Format bundles"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -14,6 +14,7 @@ dependencies = [
   "mdformat-frontmatter>=2,<3",
   "mdformat-gfm>=1,<2",
   "networkx>=3.4,<4",
+  "pydantic>=2.11,<3",
   "pyyaml>=6,<7",
 ]
 
@@ -46,6 +47,11 @@ ignore = [
   "COM812",
   "ISC001",
 ]
+
+[tool.ruff.lint.flake8-type-checking]
+# Pydantic evaluates model annotations at runtime, so their imports must stay
+# outside a type-checking block.
+runtime-evaluated-base-classes = ["pydantic.BaseModel"]
 
 [tool.ruff.lint.per-file-ignores]
 "src/okf_parser/cli.py" = ["T201"]

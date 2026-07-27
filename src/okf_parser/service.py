@@ -9,7 +9,7 @@ import networkx as nx
 
 from okf_parser.bundle import load_bundle, validate_path
 from okf_parser.duckdb import attach_okf
-from okf_parser.formatting import format_path
+from okf_parser.formatting import FormatReport, format_path
 
 
 def check_bundle(path: str) -> dict[str, object]:
@@ -21,15 +21,7 @@ def check_bundle(path: str) -> dict[str, object]:
         "markdown_count": report.markdown_count,
         "concept_count": report.concept_count,
         "reserved_count": report.reserved_count,
-        "diagnostics": [
-            {
-                "code": item.code,
-                "severity": item.severity.value,
-                "path": item.path,
-                "message": item.message,
-            }
-            for item in report.violations
-        ],
+        "diagnostics": [item.model_dump(mode="json") for item in report.violations],
     }
 
 
@@ -60,33 +52,37 @@ def graph_bundle(path: str) -> dict[str, object]:
     }
 
 
-def check_format(path: str) -> dict[str, object]:
-    """Check mdformat canonical form without writing files."""
-    report = format_path(Path(path))
+def _format_payload(report: FormatReport) -> dict[str, object]:
     return {
         "markdown_count": report.markdown_count,
         "clean": report.clean,
         "changed_paths": list(report.changed_paths),
+        "skipped_paths": list(report.skipped_paths),
         "written": report.written,
     }
+
+
+def check_format(path: str) -> dict[str, object]:
+    """Check mdformat canonical form without writing files."""
+    return _format_payload(format_path(Path(path)))
 
 
 def write_format(path: str) -> dict[str, object]:
     """Explicitly rewrite Markdown files into mdformat canonical form."""
-    report = format_path(Path(path), write=True)
-    return {
-        "markdown_count": report.markdown_count,
-        "clean": report.clean,
-        "changed_paths": list(report.changed_paths),
-        "written": report.written,
-    }
+    return _format_payload(format_path(Path(path), write=True))
 
 
-def export_duckdb(path: str, database: str, schema: str = "okf") -> dict[str, object]:
+def export_duckdb(
+    path: str,
+    database: str,
+    schema: str = "okf",
+    *,
+    overwrite: bool = False,
+) -> dict[str, object]:
     """Materialize an OKF bundle into a DuckDB database file."""
     connection = duckdb.connect(database)
     try:
-        result = attach_okf(connection, path, schema=schema)
+        result = attach_okf(connection, path, schema=schema, overwrite=overwrite)
     finally:
         connection.close()
     return {**result, "database": str(Path(database).resolve())}

@@ -52,6 +52,7 @@ uv run okf-parser graph path/to/bundle
 uv run okf-parser format path/to/bundle
 uv run okf-parser format path/to/bundle --write
 uv run okf-parser duckdb path/to/bundle knowledge.duckdb
+uv run okf-parser duckdb path/to/bundle knowledge.duckdb --overwrite
 ```
 
 The command exits with status `1` only when normative errors exist. Broken
@@ -111,8 +112,10 @@ connection.sql("""
 ```
 
 The call creates `okf.concepts`, `okf.links`, `okf.reserved`, and
-`okf.diagnostics` as ordinary DuckDB tables. Use a new database or schema for
-each materialization.
+`okf.diagnostics` as ordinary DuckDB tables. Materializing twice into the same
+schema raises `BundleExportError` rather than clobbering an earlier export; pass
+`overwrite=True` (or `--overwrite` on the command line) to replace the four
+tables.
 
 ## Python API
 
@@ -134,9 +137,10 @@ assert report.is_conformant
 
 ## Current scope
 
-- UTF-8 Markdown discovery;
+- UTF-8 Markdown discovery, matching `.md` case-insensitively;
 - reserved `index.md` and `log.md` handling;
-- strict YAML-frontmatter parsing for concept documents;
+- strict YAML-frontmatter parsing for concept documents, validated with Pydantic
+  at the parse boundary so one malformed document cannot abort a run;
 - required non-empty `type`;
 - stable concept IDs derived from paths;
 - Markdown-link extraction and resolution;

@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import date
 from typing import TYPE_CHECKING, cast
-from urllib.parse import urlsplit
 
 import ibis
 import networkx as nx
@@ -20,12 +18,16 @@ from okf_parser.models import (
     Severity,
     ValidationReport,
     Violation,
+    YamlValue,
 )
 from okf_parser.parser import (
     DocumentParseError,
     concept_id,
+    has_markdown_suffix,
     is_reserved_document,
+    iter_headings,
     iter_markdown_links,
+    looks_like_frontmatter_link,
     parse_document,
     resolve_local_target,
     split_optional_frontmatter,
@@ -59,20 +61,34 @@ _LINK_SCHEMA = ibis.schema(
         "origin": "string",
     }
 )
-_H1_RE = re.compile(r"^# [^#\n].*$", re.MULTILINE)
-_H2_RE = re.compile(r"^## ([^#\n].*)$", re.MULTILINE)
 _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_TITLE_LEVEL = 1
+_DATE_LEVEL = 2
 type TableRecord = ConceptRecord | ReservedRecord | LinkRecord
 
 
 def _table(records: Sequence[TableRecord], schema: ibis.Schema) -> Table:
-    rows = [asdict(record) for record in records]
+    rows = [record.model_dump() for record in records]
     return ibis.memtable(rows, schema=schema)
+
+
+def _optional_text(value: object) -> str | None:
+    """Normalize an Ibis/pandas cell into a string or ``None``.
+
+    A null string column round-trips through pandas as float ``nan``, which
+    must not leak into NetworkX node attributes.
+    """
+    return value if isinstance(value, str) else None
 
 
 @dataclass(frozen=True, slots=True)
 class Bundle:
-    """An immutable relational view of one OKF bundle."""
+    """An immutable relational view of one OKF bundle.
+
+    Deliberately not a Pydantic model: the three table fields are live Ibis
+    query expressions rather than data crossing a boundary, and ``validate``
+    would collide with ``BaseModel.validate``.
+    """
 
     root: Path
     concepts: Table
@@ -101,13 +117,16 @@ class Bundle:
                 row["concept_id"],
                 path=row["path"],
                 type=row["concept_type"],
-                title=row["title"],
+                title=_optional_text(row["title"]),
             )
         for row in self.links.execute().to_dict(orient="records"):
-            if row["exists"] and isinstance(row["target_id"], str):
+            target_id = row["target_id"]
+            # A target that exists on disk but never became a concept - because
+            # it failed to parse - must not appear as an attribute-less node.
+            if isinstance(target_id, str) and graph.has_node(target_id):
                 graph.add_edge(
                     row["source_id"],
-                    row["target_id"],
+                    target_id,
                     raw_target=row["raw_target"],
                     origin=row["origin"],
                 )
@@ -126,19 +145,17 @@ def _load_concept(
         return (
             None,
             [],
-            [Violation("OKF001", Severity.ERROR, relative, str(exc))],
+            [Violation(code="OKF001", severity=Severity.ERROR, path=relative, message=str(exc))],
         )
 
-    raw_type = parsed.frontmatter.get("type")
-    concept_type = raw_type.strip() if isinstance(raw_type, str) else ""
     diagnostics: list[Violation] = []
-    if not concept_type:
+    if not parsed.concept_type:
         diagnostics.append(
             Violation(
-                "OKF002",
-                Severity.ERROR,
-                relative,
-                "frontmatter must contain a non-empty string type",
+                code="OKF002",
+                severity=Severity.ERROR,
+                path=relative,
+                message="frontmatter must contain a non-empty string type",
             )
         )
 
@@ -148,49 +165,53 @@ def _load_concept(
     raw_links.extend(_iter_frontmatter_links(parsed.frontmatter))
     for raw_target, origin in raw_links:
         resolved = resolve_local_target(root, path, raw_target)
-        is_markdown = urlsplit_path(raw_target).lower().endswith(".md")
-        if resolved is None or not is_markdown:
+        if resolved is None or not has_markdown_suffix(raw_target):
             continue
         exists = resolved in known_paths
         target_id = (
             concept_id(root, resolved) if exists and not is_reserved_document(resolved) else None
         )
-        links.append(LinkRecord(doc_id, raw_target, target_id, exists, origin))
+        links.append(
+            LinkRecord(
+                source_id=doc_id,
+                raw_target=raw_target,
+                target_id=target_id,
+                exists=exists,
+                origin=origin,
+            )
+        )
         if not exists:
             diagnostics.append(
                 Violation(
-                    "OKF101",
-                    Severity.WARNING,
-                    relative,
-                    f"local Markdown link does not resolve: {raw_target}",
+                    code="OKF101",
+                    severity=Severity.WARNING,
+                    path=relative,
+                    message=f"local Markdown link does not resolve: {raw_target}",
                 )
             )
 
-    title = parsed.frontmatter.get("title")
-    description = parsed.frontmatter.get("description")
     record = ConceptRecord(
         concept_id=doc_id,
         logical_key=doc_id,
         path=relative,
-        concept_type=concept_type,
-        title=title if isinstance(title, str) else None,
-        description=description if isinstance(description, str) else None,
-        frontmatter_json=json.dumps(
-            parsed.frontmatter,
-            ensure_ascii=False,
-            sort_keys=True,
-            default=str,
-        ),
+        concept_type=parsed.concept_type,
+        title=parsed.title,
+        description=parsed.description,
+        frontmatter_json=parsed.frontmatter_json,
         body=parsed.body,
     )
     return record, links, diagnostics
 
 
 def _iter_frontmatter_links(
-    value: object,
+    value: YamlValue,
     field_path: str = "frontmatter",
 ) -> list[tuple[str, str]]:
-    """Find local Markdown references nested in producer-defined frontmatter."""
+    """Find local Markdown references nested in producer-defined frontmatter.
+
+    The frontmatter has already been validated, so the structure is a finite
+    tree: a cyclic YAML anchor is rejected before this walk ever runs.
+    """
     if isinstance(value, dict):
         return [
             item
@@ -203,14 +224,9 @@ def _iter_frontmatter_links(
             for index, child in enumerate(value)
             for item in _iter_frontmatter_links(child, f"{field_path}[{index}]")
         ]
-    if isinstance(value, str) and urlsplit_path(value).lower().endswith(".md"):
+    if isinstance(value, str) and looks_like_frontmatter_link(value):
         return [(value, field_path)]
     return []
-
-
-def urlsplit_path(raw_target: str) -> str:
-    """Return only a link target's URL path."""
-    return urlsplit(raw_target).path
 
 
 def _validate_index(root: Path, path: Path, text: str) -> tuple[str, list[Violation]]:
@@ -219,37 +235,43 @@ def _validate_index(root: Path, path: Path, text: str) -> tuple[str, list[Violat
     try:
         frontmatter, body = split_optional_frontmatter(text)
     except DocumentParseError as exc:
-        return text, [Violation("OKF004", Severity.ERROR, relative, str(exc))]
+        return text, [
+            Violation(code="OKF004", severity=Severity.ERROR, path=relative, message=str(exc))
+        ]
 
     if frontmatter is not None:
         if path.parent != root:
             diagnostics.append(
                 Violation(
-                    "OKF004",
-                    Severity.ERROR,
-                    relative,
-                    "only the bundle-root index.md may contain frontmatter",
+                    code="OKF004",
+                    severity=Severity.ERROR,
+                    path=relative,
+                    message="only the bundle-root index.md may contain frontmatter",
                 )
             )
         elif set(frontmatter) - {"okf_version"}:
             diagnostics.append(
                 Violation(
-                    "OKF004",
-                    Severity.ERROR,
-                    relative,
-                    "root index.md frontmatter may contain only okf_version",
+                    code="OKF004",
+                    severity=Severity.ERROR,
+                    path=relative,
+                    message="root index.md frontmatter may contain only okf_version",
                 )
             )
-    if _H1_RE.search(body) is None:
+    if not _has_title(body):
         diagnostics.append(
             Violation(
-                "OKF005",
-                Severity.ERROR,
-                relative,
-                "index.md must contain at least one level-one section",
+                code="OKF005",
+                severity=Severity.ERROR,
+                path=relative,
+                message="index.md must contain at least one level-one section",
             )
         )
     return body, diagnostics
+
+
+def _has_title(body: str) -> bool:
+    return any(level == _TITLE_LEVEL for level, _text in iter_headings(body))
 
 
 def _validate_log(root: Path, path: Path, text: str) -> tuple[str, list[Violation]]:
@@ -258,31 +280,39 @@ def _validate_log(root: Path, path: Path, text: str) -> tuple[str, list[Violatio
     try:
         frontmatter, body = split_optional_frontmatter(text)
     except DocumentParseError as exc:
-        return text, [Violation("OKF006", Severity.ERROR, relative, str(exc))]
+        return text, [
+            Violation(code="OKF006", severity=Severity.ERROR, path=relative, message=str(exc))
+        ]
     if frontmatter is not None:
         diagnostics.append(
-            Violation("OKF006", Severity.ERROR, relative, "log.md must not contain frontmatter")
+            Violation(
+                code="OKF006",
+                severity=Severity.ERROR,
+                path=relative,
+                message="log.md must not contain frontmatter",
+            )
         )
-    if _H1_RE.search(body) is None:
+    if not _has_title(body):
         diagnostics.append(
             Violation(
-                "OKF007",
-                Severity.ERROR,
-                relative,
-                "log.md must contain a level-one title",
+                code="OKF007",
+                severity=Severity.ERROR,
+                path=relative,
+                message="log.md must contain a level-one title",
             )
         )
 
-    headings = _H2_RE.findall(body)
     parsed_dates: list[date] = []
-    for heading in headings:
+    for level, heading in iter_headings(body):
+        if level != _DATE_LEVEL:
+            continue
         if _ISO_DATE_RE.fullmatch(heading) is None:
             diagnostics.append(
                 Violation(
-                    "OKF008",
-                    Severity.ERROR,
-                    relative,
-                    f"log date heading must use YYYY-MM-DD: {heading}",
+                    code="OKF008",
+                    severity=Severity.ERROR,
+                    path=relative,
+                    message=f"log date heading must use YYYY-MM-DD: {heading}",
                 )
             )
             continue
@@ -291,19 +321,19 @@ def _validate_log(root: Path, path: Path, text: str) -> tuple[str, list[Violatio
         except ValueError:
             diagnostics.append(
                 Violation(
-                    "OKF008",
-                    Severity.ERROR,
-                    relative,
-                    f"log date heading is not a real date: {heading}",
+                    code="OKF008",
+                    severity=Severity.ERROR,
+                    path=relative,
+                    message=f"log date heading is not a real date: {heading}",
                 )
             )
     if parsed_dates != sorted(parsed_dates, reverse=True):
         diagnostics.append(
             Violation(
-                "OKF009",
-                Severity.ERROR,
-                relative,
-                "log date groups must be ordered newest first",
+                code="OKF009",
+                severity=Severity.ERROR,
+                path=relative,
+                message="log date groups must be ordered newest first",
             )
         )
     return body, diagnostics
@@ -329,14 +359,21 @@ def load_bundle(root: Path) -> Bundle:
             try:
                 text = path.read_text(encoding="utf-8")
             except (UnicodeDecodeError, OSError) as exc:
-                diagnostics.append(Violation("OKF003", Severity.ERROR, relative, str(exc)))
+                diagnostics.append(
+                    Violation(
+                        code="OKF003",
+                        severity=Severity.ERROR,
+                        path=relative,
+                        message=str(exc),
+                    )
+                )
                 continue
             if path.name == "index.md":
                 body, reserved_diagnostics = _validate_index(root, path, text)
             else:
                 body, reserved_diagnostics = _validate_log(root, path, text)
             diagnostics.extend(reserved_diagnostics)
-            reserved.append(ReservedRecord(relative, path.name, body))
+            reserved.append(ReservedRecord(path=relative, filename=path.name, body=body))
             continue
 
         record, document_links, document_diagnostics = _load_concept(root, path, known_paths)

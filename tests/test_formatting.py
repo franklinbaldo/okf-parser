@@ -55,3 +55,48 @@ def test_format_does_not_follow_markdown_symlinks(tmp_path: Path) -> None:
 
     assert report.markdown_count == 0
     assert outside.read_text(encoding="utf-8") == original
+
+
+def test_non_utf8_file_is_skipped_instead_of_raising(tmp_path: Path) -> None:
+    (tmp_path / "latin1.md").write_bytes(b"# Caf\xe9\n")
+
+    report = format_path(tmp_path)
+
+    assert report.skipped_paths == ("latin1.md",)
+    assert not report.clean
+
+
+def test_write_formats_readable_files_and_skips_the_rest(tmp_path: Path) -> None:
+    formattable = tmp_path / "a-formattable.md"
+    original = "# Heading\n\n-   item\n"
+    formattable.write_text(original, encoding="utf-8")
+    (tmp_path / "b-unreadable.md").write_bytes(b"# Caf\xe9\n")
+
+    report = format_path(tmp_path, write=True)
+
+    assert report.skipped_paths == ("b-unreadable.md",)
+    assert report.changed_paths == ("a-formattable.md",)
+    assert formattable.read_text(encoding="utf-8") != original
+
+
+def test_write_is_all_or_nothing_when_formatting_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = tmp_path / "a.md"
+    original = "# Heading\n\n-   item\n"
+    first.write_text(original, encoding="utf-8")
+    (tmp_path / "b.md").write_text(original, encoding="utf-8")
+
+    def explode(text: str, **_kwargs: object) -> str:
+        if "b.md" not in text:
+            return text.replace("-   item", "- item")
+        raise RuntimeError
+
+    monkeypatch.setattr("okf_parser.formatting.mdformat.text", explode)
+    (tmp_path / "b.md").write_text(f"{original}<!-- b.md -->\n", encoding="utf-8")
+
+    with pytest.raises(RuntimeError):
+        format_path(tmp_path, write=True)
+
+    assert first.read_text(encoding="utf-8") == original
