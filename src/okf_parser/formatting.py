@@ -28,6 +28,17 @@ class FormatReport(BaseModel):
         """Whether every file was readable and already in canonical mdformat form."""
         return not self.changed_paths and not self.skipped_paths
 
+    @property
+    def succeeded(self) -> bool:
+        """Whether the run leaves no formatting work behind.
+
+        Rewriting resolves the changed files but never the skipped ones, so
+        ``--write`` must not report success while any file went unread.
+        """
+        if self.skipped_paths:
+            return False
+        return self.written or not self.changed_paths
+
 
 def format_path(path: Path, *, write: bool = False) -> FormatReport:
     """Check or explicitly rewrite every Markdown file below a path.

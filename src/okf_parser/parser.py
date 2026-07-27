@@ -64,7 +64,11 @@ def _load_frontmatter(block: str) -> dict[str, YamlValue] | None:
         raise DocumentParseError(msg)
 
     try:
-        return FRONTMATTER_ADAPTER.validate_python(value)
+        # Strict: OKF promises to preserve producer-defined frontmatter, so an
+        # unsupported YAML value must be reported rather than quietly coerced.
+        # Lax validation turns !!binary into str and !!set into a list whose
+        # order depends on PYTHONHASHSEED.
+        return FRONTMATTER_ADAPTER.validate_python(value, strict=True)
     except ValidationError as exc:
         msg = f"invalid YAML frontmatter: {_describe_frontmatter_error(exc)}"
         raise DocumentParseError(msg) from exc

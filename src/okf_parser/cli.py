@@ -79,7 +79,7 @@ def graph(path: str) -> CliResult:
 def format_command(path: str, *, write: bool = False) -> CliResult:
     """Check mdformat style, writing only when --write is explicit."""
     payload = write_format(path) if write else check_format(path)
-    return CliResult(payload, 0 if payload["clean"] or write else 1)
+    return CliResult(payload, 0 if payload["succeeded"] else 1)
 
 
 @app.command(name="duckdb")

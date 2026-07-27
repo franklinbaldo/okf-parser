@@ -79,6 +79,24 @@ def test_write_formats_readable_files_and_skips_the_rest(tmp_path: Path) -> None
     assert formattable.read_text(encoding="utf-8") != original
 
 
+def test_write_does_not_report_success_when_a_file_was_skipped(tmp_path: Path) -> None:
+    (tmp_path / "unreadable.md").write_bytes(b"# Caf\xe9\n")
+
+    assert not format_path(tmp_path, write=True).succeeded
+
+
+def test_write_reports_success_once_every_file_is_formatted(tmp_path: Path) -> None:
+    (tmp_path / "a.md").write_text("# Heading\n\n-   item\n", encoding="utf-8")
+
+    assert format_path(tmp_path, write=True).succeeded
+
+
+def test_check_does_not_report_success_when_a_file_needs_formatting(tmp_path: Path) -> None:
+    (tmp_path / "a.md").write_text("# Heading\n\n-   item\n", encoding="utf-8")
+
+    assert not format_path(tmp_path).succeeded
+
+
 def test_write_is_all_or_nothing_when_formatting_fails(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

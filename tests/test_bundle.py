@@ -221,6 +221,22 @@ def test_fenced_code_does_not_satisfy_the_index_title_rule(tmp_path: Path) -> No
     assert [item.code for item in bundle.validate()] == ["OKF005"]
 
 
+def test_empty_level_one_heading_does_not_satisfy_the_index_title_rule(tmp_path: Path) -> None:
+    _write(tmp_path / "index.md", "#\n\nIntro paragraph.\n")
+
+    bundle = load_bundle(tmp_path)
+
+    assert [item.code for item in bundle.validate()] == ["OKF005"]
+
+
+def test_empty_level_one_heading_does_not_satisfy_the_log_title_rule(tmp_path: Path) -> None:
+    _write(tmp_path / "log.md", "# \n\n## 2026-01-01\n\n* Entry\n")
+
+    bundle = load_bundle(tmp_path)
+
+    assert [item.code for item in bundle.validate()] == ["OKF007"]
+
+
 def test_uppercase_markdown_extension_is_discovered_and_resolvable(tmp_path: Path) -> None:
     _write(tmp_path / "a.md", "---\ntype: Node\n---\n[B](B.MD)\n")
     _write(tmp_path / "B.MD", "---\ntype: Node\n---\n# B\n")

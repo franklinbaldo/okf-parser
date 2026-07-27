@@ -138,6 +138,27 @@ def test_markdown_suffix_is_case_insensitive() -> None:
     assert has_markdown_suffix("b.MD") is True
 
 
+def test_binary_frontmatter_value_is_rejected_not_coerced(tmp_path: Path) -> None:
+    path = tmp_path / "concept.md"
+    path.write_text("---\ntype: Reference\nblob: !!binary aGk=\n---\n", encoding="utf-8")
+
+    with pytest.raises(DocumentParseError, match="unsupported YAML value"):
+        parse_document(path)
+
+
+def test_set_frontmatter_value_is_rejected_not_coerced(tmp_path: Path) -> None:
+    path = tmp_path / "concept.md"
+    path.write_text("---\ntype: Reference\ntags: !!set {b: null, a: null}\n---\n", encoding="utf-8")
+
+    with pytest.raises(DocumentParseError, match="unsupported YAML value"):
+        parse_document(path)
+
+
+def test_iter_headings_reports_empty_heading_text() -> None:
+    assert iter_headings("#\n") == [(1, "")]
+    assert iter_headings("# \n") == [(1, "")]
+
+
 def test_iter_headings_ignores_fenced_code_blocks() -> None:
     body = "# Title\n\n## 2026-01-01\n\n```markdown\n# fake title\n## fake date\n```\n"
 

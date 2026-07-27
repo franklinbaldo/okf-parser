@@ -271,7 +271,12 @@ def _validate_index(root: Path, path: Path, text: str) -> tuple[str, list[Violat
 
 
 def _has_title(body: str) -> bool:
-    return any(level == _TITLE_LEVEL for level, _text in iter_headings(body))
+    """Whether the body opens a level-one section with actual text.
+
+    CommonMark emits a heading token for a bare ``#``, so the level alone is
+    not enough to satisfy the reserved-document title rules.
+    """
+    return any(level == _TITLE_LEVEL and text.strip() for level, text in iter_headings(body))
 
 
 def _validate_log(root: Path, path: Path, text: str) -> tuple[str, list[Violation]]:

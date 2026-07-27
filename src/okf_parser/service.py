@@ -58,6 +58,7 @@ def _format_payload(report: FormatReport) -> dict[str, object]:
         "clean": report.clean,
         "changed_paths": list(report.changed_paths),
         "skipped_paths": list(report.skipped_paths),
+        "succeeded": report.succeeded,
         "written": report.written,
     }
 
