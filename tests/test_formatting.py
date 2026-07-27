@@ -70,6 +70,11 @@ def _is_ordered_list(text: str) -> bool:
     return any(token.type == "ordered_list_open" for token in MarkdownIt("commonmark").parse(text))
 
 
+def _no_padded_marker(text: str) -> bool:
+    """Whether no zero-padded ordered marker survives, at any indent or container depth."""
+    return re.search(r"(?<!\d)0\d+[.)]\s", text) is None
+
+
 def test_ordered_list_numbering_is_preserved(tmp_path: Path) -> None:
     original = "# Plan\n\n1. first\n2. second\n3. third\n"
 
@@ -88,7 +93,7 @@ def test_crossing_a_marker_width_boundary_does_not_pad(tmp_path: Path) -> None:
 
     assert result.splitlines()[0] == "1. item1"
     assert result.splitlines()[-1] == "10. item10"
-    assert re.search(r"(?m)^\s*0\d+[.)]\s", result) is None
+    assert _no_padded_marker(result)
     assert _is_ordered_list(result)
 
 
@@ -97,7 +102,7 @@ def test_three_digit_list_does_not_pad(tmp_path: Path) -> None:
 
     assert result.splitlines()[0] == "1. i1"
     assert result.splitlines()[-1] == "100. i100"
-    assert re.search(r"(?m)^\s*0\d+[.)]\s", result) is None
+    assert _no_padded_marker(result)
 
 
 def test_list_at_the_nine_digit_limit_is_preserved(tmp_path: Path) -> None:
@@ -126,7 +131,59 @@ def test_list_items_with_continuation_content_survive(tmp_path: Path) -> None:
 
     assert _is_ordered_list(result)
     assert "detail10" in result
-    assert re.search(r"(?m)^\s*0\d+[.)]\s", result) is None
+    assert _no_padded_marker(result)
+
+
+def test_list_inside_a_blockquote_is_not_padded(tmp_path: Path) -> None:
+    source = "".join(f"> {index}. item{index}\n" for index in range(1, 11))
+
+    result = _format_once(tmp_path, source)
+
+    assert _no_padded_marker(result)
+    assert "> 1. item1" in result
+    assert "> 10. item10" in result
+
+
+def test_list_inside_a_bullet_is_not_padded(tmp_path: Path) -> None:
+    source = "- intro\n\n" + "".join(f"  {index}. item{index}\n" for index in range(1, 11))
+
+    result = _format_once(tmp_path, source)
+
+    assert _no_padded_marker(result)
+
+
+def test_list_opening_on_a_bullet_line_is_not_partially_padded(tmp_path: Path) -> None:
+    """A line-only match unpads every marker except the one sharing the bullet's line."""
+    source = "- " + "".join(
+        f"{index}. item{index}\n" if index == 1 else f"  {index}. item{index}\n"
+        for index in range(1, 11)
+    )
+
+    result = _format_once(tmp_path, source)
+
+    assert _no_padded_marker(result)
+
+
+def test_two_ordered_markers_on_one_line_are_both_unpadded(tmp_path: Path) -> None:
+    source = "1. " + "".join(
+        f"{index}. x{index}\n" if index == 1 else f"   {index}. x{index}\n"
+        for index in range(1, 11)
+    )
+
+    result = _format_once(tmp_path, source)
+
+    assert _no_padded_marker(result)
+
+
+def test_list_inside_a_bullet_inside_a_blockquote_is_not_padded(tmp_path: Path) -> None:
+    source = "> - a\n>\n> " + "".join(
+        f"{index}. b{index}\n" if index == 1 else f">   {index}. b{index}\n"
+        for index in range(1, 11)
+    )
+
+    result = _format_once(tmp_path, source)
+
+    assert _no_padded_marker(result)
 
 
 @pytest.mark.parametrize(
@@ -138,6 +195,10 @@ def test_list_items_with_continuation_content_survive(tmp_path: Path) -> None:
         "1. a\n   - x\n   - y\n2. b\n",
         "".join(f"{index}. step{index}\n\n   detail{index}\n\n" for index in range(1, 11)),
         "Text\n\n```\n01. not a list\n```\n",
+        "".join(f"> {index}. item{index}\n" for index in range(1, 11)),
+        "- intro\n\n" + "".join(f"  {index}. item{index}\n" for index in range(1, 11)),
+        "- 1. item1\n  2. item2\n",
+        "> - a\n>\n> 1. b1\n>   2. b2\n",
     ],
 )
 def test_formatting_is_idempotent(tmp_path: Path, source: str) -> None:

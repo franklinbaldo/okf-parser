@@ -2,20 +2,18 @@
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING
 
 import mdformat
 from pydantic import BaseModel, ConfigDict
 
 from okf_parser.discovery import discover_markdown
-from okf_parser.parser import block_structure, ordered_item_lines
+from okf_parser.parser import block_structure, ordered_item_markers
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 _EXTENSIONS = frozenset({"frontmatter", "gfm"})
-_PADDED_MARKER_RE = re.compile(r"^(\s*)0+(\d+[.)])")
 
 
 class FormatReport(BaseModel):
@@ -49,13 +47,23 @@ def _unpad_ordered_markers(text: str) -> str:
     """Strip the zero padding mdformat adds to keep marker widths even.
 
     mdformat renders ``1..10`` as ``01.`` through ``10.``, so appending one item
-    rewrites every earlier line. Only lines that CommonMark reports as ordered
-    list items are touched, leaving a lookalike inside a code block alone.
+    rewrites every earlier line. Each marker is replaced by matching its literal
+    text rather than its position, because a marker may follow a blockquote's
+    ``>`` or another list's marker rather than plain indentation.
     """
     lines = text.split("\n")
-    for index in ordered_item_lines(text):
-        if index < len(lines):
-            lines[index] = _PADDED_MARKER_RE.sub(r"\1\2", lines[index])
+    # Two ordered items can begin on one line when a list opens on another
+    # list's line, so resume each search past the previous replacement.
+    searched_to: dict[int, int] = {}
+    for line, number, delimiter in ordered_item_markers(text):
+        if line >= len(lines) or not number.startswith("0") or number == "0":
+            continue
+        padded, plain = f"{number}{delimiter}", f"{int(number)}{delimiter}"
+        start = lines[line].find(padded, searched_to.get(line, 0))
+        if start < 0:
+            continue
+        lines[line] = lines[line][:start] + plain + lines[line][start + len(padded) :]
+        searched_to[line] = start + len(plain)
     return "\n".join(lines)
 
 

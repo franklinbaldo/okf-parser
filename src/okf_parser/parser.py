@@ -159,13 +159,16 @@ def block_structure(text: str) -> list[tuple[str, str, int]]:
     ]
 
 
-def ordered_item_lines(text: str) -> set[int]:
-    """Return the zero-based lines that begin an ordered-list item.
+def ordered_item_markers(text: str) -> list[tuple[int, str, str]]:
+    """Return ``(line, number, delimiter)`` for each ordered-list item, in source order.
 
-    Locating markers through CommonMark tokens keeps a lookalike such as
-    ``01. text`` inside a fenced code block from being treated as a marker.
+    The number is the marker exactly as written, so a caller can match the
+    marker literally instead of guessing its column. That matters because a
+    marker is not always preceded by whitespace alone - it may follow a
+    blockquote's ``>`` or another list's marker - and because a lookalike such
+    as ``01. text`` inside a fenced code block is not a marker at all.
     """
-    lines: set[int] = set()
+    markers: list[tuple[int, str, str]] = []
     in_ordered: list[bool] = []
     for token in _MARKDOWN.parse(text):
         if token.type in {"ordered_list_open", "bullet_list_open"}:
@@ -173,8 +176,8 @@ def ordered_item_lines(text: str) -> set[int]:
         elif token.type in {"ordered_list_close", "bullet_list_close"}:
             in_ordered.pop()
         elif token.type == "list_item_open" and token.map and in_ordered and in_ordered[-1]:
-            lines.add(token.map[0])
-    return lines
+            markers.append((token.map[0], token.info, token.markup))
+    return markers
 
 
 def split_link_target(raw_target: str) -> SplitResult | None:
