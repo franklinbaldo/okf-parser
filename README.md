@@ -75,6 +75,57 @@ frontmatter. Inline content — link targets, emphasis, text inside a paragraph 
 table cell — is deliberately outside this check, because canonical formatting
 rewrites inline whitespace.
 
+## Excluding paths
+
+A repository that keeps OKF knowledge next to code, a README and vendored
+dependencies has no root that validates cleanly. Checking the repository root
+reports `OKF001` for every unrelated Markdown file; checking each bundle
+separately makes every link *between* bundles unresolvable, because the target
+sits outside the checked root. Excluding subpaths is what lets one root cover
+the whole tree, which is the only arrangement under which cross-bundle link
+validation runs at all.
+
+Put the patterns in an `.okfignore` beside the bundle, so the exclusions are
+versioned with the content and CI needs no extra flags:
+
+```gitignore
+# vendored dependencies
+vendor
+# project Markdown, not knowledge
+*.md
+```
+
+Or pass them for a single run — the option repeats, and adds to the file rather
+than replacing it:
+
+```bash
+uv run okf-parser check . --exclude vendor --exclude '*.md'
+```
+
+Every command that reads a bundle accepts `--exclude`: `check`, `inventory`,
+`graph`, `format` and `duckdb`. Excluded files are never read and never
+written, so `format --write` on a repository root leaves vendored documents
+alone.
+
+Patterns are matched against POSIX-style paths **relative to the bundle root**:
+
+| pattern     | matches                           | does not match     |
+| ----------- | --------------------------------- | ------------------ |
+| `vendor`    | `vendor`, `vendor/deep/a.md`      | `libs/vendor/a.md` |
+| `**/vendor` | `vendor/a.md`, `libs/vendor/a.md` |                    |
+| `*.md`      | `README.md`                       | `items/tarefa.md`  |
+| `**/*.md`   | `README.md`, `items/tarefa.md`    |                    |
+| `docs/*.md` | `docs/a.md`                       | `docs/deep/a.md`   |
+
+`*` and `?` stay inside one path segment; `**` spans segments. A pattern that
+matches a directory excludes everything below it.
+
+This is deliberately **narrower than `.gitignore`** despite the familiar file
+name: patterns are anchored at the bundle root, and there is no negation. A
+pattern that silently widened its own scope would drop documents the author
+meant to validate, and a bundle that quietly shrinks is worse than one that
+reports too much.
+
 ## GitHub Actions
 
 Add the repository as a CI check:
@@ -82,13 +133,19 @@ Add the repository as a CI check:
 ```yaml
 steps:
   - uses: actions/checkout@v4
-  - uses: franklinbaldo/okf-parser@v1
+  - uses: franklinbaldo/okf-parser@v0.4.0
     with:
       path: knowledge
 ```
 
 The composite action installs a pinned uv version and executes the same
 `validate_path()` function used by the Python API, CLI, and MCP server.
+
+Pin an exact version. There is no moving `@v1` ref: this repository's tags are
+package versions, because `publish.yml` refuses to publish a release whose tag
+does not equal the version in `pyproject.toml`. A `v1` tag would either break
+that check or drift away from the version it claims to be. A major-version ref
+becomes worth introducing when the package itself reaches `1.0.0`.
 
 Releases are published to PyPI from GitHub Releases through OIDC Trusted
 Publishing. No long-lived PyPI token is stored in the repository.
@@ -151,9 +208,17 @@ assert report.markdown_count == report.concept_count + report.reserved_count
 assert report.is_conformant
 ```
 
+`load_bundle`, `validate_path` and `format_path` read the bundle's `.okfignore`
+on their own, and take an `exclude` sequence for patterns supplied per call:
+
+```python
+report = validate_path(Path("."), exclude=["vendor", "*.md"])
+```
+
 ## Current scope
 
-- UTF-8 Markdown discovery, matching `.md` case-insensitively;
+- UTF-8 Markdown discovery, matching `.md` case-insensitively, with anchored
+  glob exclusions from `.okfignore` or `--exclude`;
 - reserved `index.md` and `log.md` handling;
 - strict YAML-frontmatter parsing for concept documents, validated with Pydantic
   at the parse boundary so one malformed document cannot abort a run;
