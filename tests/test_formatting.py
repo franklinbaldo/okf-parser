@@ -175,6 +175,40 @@ def test_two_ordered_markers_on_one_line_are_both_unpadded(tmp_path: Path) -> No
     assert _no_padded_marker(result)
 
 
+def test_outer_start_is_preserved_with_a_nested_list(tmp_path: Path) -> None:
+    """The case the AST redirection is about: start=101 must survive."""
+    # Five spaces is the content column of the "101. " marker, so the inner
+    # list nests rather than becoming an indented code block.
+    inner = "".join(f"     {index}. n{index}\n" for index in range(1, 11))
+    source = f"101. outer\n\n{inner}\n1. next\n"
+
+    result = _format_once(tmp_path, source)
+
+    assert result.startswith("101. outer")
+    assert "102. next" in result
+    assert "     10. n10" in result
+    assert _no_padded_marker(result)
+
+
+def test_a_gfm_table_is_not_rewritten_into_a_paragraph(tmp_path: Path) -> None:
+    original = "| a | b |\n|---|---|\n| 1 | 2 |\n"
+    path = tmp_path / "t.md"
+    path.write_text(original, encoding="utf-8")
+
+    format_path(tmp_path, write=True)
+
+    assert "|---" in path.read_text(encoding="utf-8").replace(" ", "")
+
+
+def test_adjacent_lists_of_different_markers_stay_distinct(tmp_path: Path) -> None:
+    source = "* a\n\n+ b\n\n- c\n"
+
+    result = _format_once(tmp_path, source)
+
+    parser = MarkdownIt("commonmark")
+    assert sum(1 for t in parser.parse(result) if t.type == "bullet_list_open") == 3
+
+
 def test_list_inside_a_bullet_inside_a_blockquote_is_not_padded(tmp_path: Path) -> None:
     source = "> - a\n>\n> " + "".join(
         f"{index}. b{index}\n" if index == 1 else f">   {index}. b{index}\n"
@@ -216,7 +250,7 @@ def test_a_file_whose_structure_would_change_is_skipped(
     original = "# Heading\n\n1. item\n"
     path.write_text(original, encoding="utf-8")
     monkeypatch.setattr(
-        "okf_parser.formatting.mdformat.text",
+        "okf_parser.markdown_style.mdformat.text",
         lambda *_args, **_kwargs: "just a paragraph now\n",
     )
 
@@ -281,7 +315,7 @@ def test_write_is_all_or_nothing_when_formatting_fails(
             return text.replace("-   item", "- item")
         raise RuntimeError
 
-    monkeypatch.setattr("okf_parser.formatting.mdformat.text", explode)
+    monkeypatch.setattr("okf_parser.markdown_style.mdformat.text", explode)
     (tmp_path / "b.md").write_text(f"{original}<!-- b.md -->\n", encoding="utf-8")
 
     with pytest.raises(RuntimeError):

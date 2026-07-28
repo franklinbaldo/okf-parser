@@ -4,16 +4,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import mdformat
 from pydantic import BaseModel, ConfigDict
 
 from okf_parser.discovery import discover_markdown
-from okf_parser.parser import block_structure, ordered_item_markers
+from okf_parser.markdown_style import format_markdown, protected_block_signature
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-_EXTENSIONS = frozenset({"frontmatter", "gfm"})
 
 
 class FormatReport(BaseModel):
@@ -43,46 +40,18 @@ class FormatReport(BaseModel):
         return self.written or not self.changed_paths
 
 
-def _unpad_ordered_markers(text: str) -> str:
-    """Strip the zero padding mdformat adds to keep marker widths even.
-
-    mdformat renders ``1..10`` as ``01.`` through ``10.``, so appending one item
-    rewrites every earlier line. Each marker is replaced by matching its literal
-    text rather than its position, because a marker may follow a blockquote's
-    ``>`` or another list's marker rather than plain indentation.
-    """
-    lines = text.split("\n")
-    # Two ordered items can begin on one line when a list opens on another
-    # list's line, so resume each search past the previous replacement.
-    searched_to: dict[int, int] = {}
-    for line, number, delimiter in ordered_item_markers(text):
-        if line >= len(lines) or not number.startswith("0") or number == "0":
-            continue
-        padded, plain = f"{number}{delimiter}", f"{int(number)}{delimiter}"
-        start = lines[line].find(padded, searched_to.get(line, 0))
-        if start < 0:
-            continue
-        lines[line] = lines[line][:start] + plain + lines[line][start + len(padded) :]
-        searched_to[line] = start + len(plain)
-    return "\n".join(lines)
-
-
 def _canonical_text(original: str) -> str | None:
-    """Return canonical Markdown, or ``None`` if formatting would change meaning.
+    """Return canonical Markdown, or ``None`` when formatting is not safe to apply.
 
-    Consecutive numbering keeps ``1. 2. 3.`` readable in a diff, but it is only
-    safe while every marker stays within CommonMark's nine-digit limit, so the
-    plain form is the fallback. Whichever candidate is used must preserve the
-    document's block structure; ``--write`` rewrites a whole tree and must never
-    silently alter what a file says.
+    ``--write`` rewrites a whole tree, so a rewrite that changes the document's
+    protected block structure is refused rather than saved. Marker numbering is
+    decided while rendering, so nothing here has to inspect or repair the
+    formatted text.
     """
-    numbered = mdformat.text(original, extensions=set(_EXTENSIONS), options={"number": True})
-    plain = mdformat.text(original, extensions=set(_EXTENSIONS))
-    expected = block_structure(original)
-    for candidate in (_unpad_ordered_markers(numbered), plain):
-        if block_structure(candidate) == expected:
-            return candidate
-    return None
+    formatted = format_markdown(original)
+    if protected_block_signature(formatted) != protected_block_signature(original):
+        return None
+    return formatted
 
 
 def format_path(path: Path, *, write: bool = False) -> FormatReport:
