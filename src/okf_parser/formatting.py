@@ -57,9 +57,9 @@ def _canonical_text(original: str) -> str | None:
 def format_path(path: Path, *, write: bool = False) -> FormatReport:
     """Check or explicitly rewrite every Markdown file below a path.
 
-    Files that cannot be read - a non-UTF-8 byte sequence, a permission error -
-    or that no candidate form can rewrite without changing their block
-    structure, are reported as skipped rather than aborting the run, matching
+    A file is reported as skipped, rather than aborting the run, when it cannot
+    be read - a non-UTF-8 byte sequence, a permission error - or when
+    canonicalizing it would change its protected block structure. This matches
     how ``validate_path`` aggregates instead of failing at the first bad
     document.
     """
