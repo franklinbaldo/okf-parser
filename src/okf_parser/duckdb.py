@@ -11,6 +11,8 @@ import ibis
 from okf_parser.bundle import Bundle, load_bundle
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     import duckdb
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -68,6 +70,7 @@ def attach_okf(
     *,
     schema: str = "okf",
     overwrite: bool = False,
+    exclude: Sequence[str] = (),
 ) -> dict[str, object]:
     """Materialize one OKF bundle into a DuckDB schema.
 
@@ -80,7 +83,7 @@ def attach_okf(
     unless ``overwrite`` is set, in which case the four tables are replaced.
     """
     _validate_schema_name(schema)
-    bundle = load_bundle(Path(path))
+    bundle = load_bundle(Path(path), exclude)
     relations = {
         "concepts": bundle.concepts,
         "links": bundle.links,

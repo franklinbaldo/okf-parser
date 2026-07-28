@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import duckdb
 import networkx as nx
@@ -11,10 +12,13 @@ from okf_parser.bundle import load_bundle, validate_path
 from okf_parser.duckdb import attach_okf
 from okf_parser.formatting import FormatReport, format_path
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
-def check_bundle(path: str) -> dict[str, object]:
+
+def check_bundle(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
     """Validate every Markdown file below a path."""
-    report = validate_path(Path(path))
+    report = validate_path(Path(path), exclude)
     return {
         "root": str(report.root),
         "conformant": report.is_conformant,
@@ -25,9 +29,9 @@ def check_bundle(path: str) -> dict[str, object]:
     }
 
 
-def inventory_bundle(path: str) -> dict[str, object]:
+def inventory_bundle(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
     """Count concepts by their producer-defined type."""
-    bundle = load_bundle(Path(path))
+    bundle = load_bundle(Path(path), exclude)
     rows = (
         bundle.concepts.group_by("concept_type")
         .aggregate(concept_count=lambda table: table.count())
@@ -38,9 +42,9 @@ def inventory_bundle(path: str) -> dict[str, object]:
     return {"root": str(bundle.root), "types": rows}
 
 
-def graph_bundle(path: str) -> dict[str, object]:
+def graph_bundle(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
     """Summarize the resolved concept graph."""
-    bundle = load_bundle(Path(path))
+    bundle = load_bundle(Path(path), exclude)
     graph = bundle.to_networkx()
     return {
         "root": str(bundle.root),
@@ -63,14 +67,14 @@ def _format_payload(report: FormatReport) -> dict[str, object]:
     }
 
 
-def check_format(path: str) -> dict[str, object]:
+def check_format(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
     """Check mdformat canonical form without writing files."""
-    return _format_payload(format_path(Path(path)))
+    return _format_payload(format_path(Path(path), exclude=exclude))
 
 
-def write_format(path: str) -> dict[str, object]:
+def write_format(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
     """Explicitly rewrite Markdown files into mdformat canonical form."""
-    return _format_payload(format_path(Path(path), write=True))
+    return _format_payload(format_path(Path(path), write=True, exclude=exclude))
 
 
 def export_duckdb(
@@ -79,11 +83,18 @@ def export_duckdb(
     schema: str = "okf",
     *,
     overwrite: bool = False,
+    exclude: Sequence[str] = (),
 ) -> dict[str, object]:
     """Materialize an OKF bundle into a DuckDB database file."""
     connection = duckdb.connect(database)
     try:
-        result = attach_okf(connection, path, schema=schema, overwrite=overwrite)
+        result = attach_okf(
+            connection,
+            path,
+            schema=schema,
+            overwrite=overwrite,
+            exclude=exclude,
+        )
     finally:
         connection.close()
     return {**result, "database": str(Path(database).resolve())}

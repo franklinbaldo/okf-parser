@@ -7,9 +7,11 @@ from typing import TYPE_CHECKING
 from pydantic import BaseModel, ConfigDict
 
 from okf_parser.discovery import discover_markdown
+from okf_parser.exclusion import ExclusionRules
 from okf_parser.markdown_style import format_markdown, protected_block_signature
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
 
 
@@ -54,7 +56,12 @@ def _canonical_text(original: str) -> str | None:
     return formatted
 
 
-def format_path(path: Path, *, write: bool = False) -> FormatReport:
+def format_path(
+    path: Path,
+    *,
+    write: bool = False,
+    exclude: Sequence[str] = (),
+) -> FormatReport:
     """Check or explicitly rewrite every Markdown file below a path.
 
     A file is reported as skipped, rather than aborting the run, when it cannot
@@ -62,9 +69,12 @@ def format_path(path: Path, *, write: bool = False) -> FormatReport:
     canonicalizing it would change its protected block structure. This matches
     how ``validate_path`` aggregates instead of failing at the first bad
     document.
+
+    Excluded paths are never read and never written, which is what keeps
+    ``--write`` on a repository root away from vendored dependencies.
     """
     root = path.resolve()
-    paths = discover_markdown(root)
+    paths = discover_markdown(root, ExclusionRules.read(root, exclude))
     changed: list[str] = []
     skipped: list[str] = []
     pending: list[tuple[Path, str]] = []

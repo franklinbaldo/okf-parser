@@ -21,6 +21,9 @@ from okf_parser.service import (
 )
 
 type McpTransport = Literal["stdio", "http", "sse"]
+# Cyclopts resolves annotations at runtime, so command signatures use builtin
+# generics rather than a name that only exists while type checking.
+type ExcludePatterns = list[str] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,28 +60,34 @@ mcp = FastMCP(
 
 
 @app.command
-def check(path: str) -> CliResult:
+def check(path: str, *, exclude: ExcludePatterns = None) -> CliResult:
     """Validate every Markdown file recursively as OKF v0.2."""
-    payload = check_bundle(path)
+    payload = check_bundle(path, exclude or ())
     return CliResult(payload, 0 if payload["conformant"] else 1)
 
 
 @app.command
-def inventory(path: str) -> CliResult:
+def inventory(path: str, *, exclude: ExcludePatterns = None) -> CliResult:
     """Count concepts by type using an Ibis relation."""
-    return CliResult(inventory_bundle(path))
+    return CliResult(inventory_bundle(path, exclude or ()))
 
 
 @app.command
-def graph(path: str) -> CliResult:
+def graph(path: str, *, exclude: ExcludePatterns = None) -> CliResult:
     """Summarize the resolved concept graph with NetworkX."""
-    return CliResult(graph_bundle(path))
+    return CliResult(graph_bundle(path, exclude or ()))
 
 
 @app.command(name="format")
-def format_command(path: str, *, write: bool = False) -> CliResult:
+def format_command(
+    path: str,
+    *,
+    write: bool = False,
+    exclude: ExcludePatterns = None,
+) -> CliResult:
     """Check mdformat style, writing only when --write is explicit."""
-    payload = write_format(path) if write else check_format(path)
+    patterns = exclude or ()
+    payload = write_format(path, patterns) if write else check_format(path, patterns)
     return CliResult(payload, 0 if payload["succeeded"] else 1)
 
 
@@ -89,10 +98,13 @@ def duckdb_command(
     schema: str = "okf",
     *,
     overwrite: bool = False,
+    exclude: ExcludePatterns = None,
 ) -> CliResult:
     """Materialize bundle relations into a DuckDB database."""
     try:
-        return CliResult(export_duckdb(path, database, schema, overwrite=overwrite))
+        return CliResult(
+            export_duckdb(path, database, schema, overwrite=overwrite, exclude=exclude or ())
+        )
     except BundleExportError as exc:
         return CliResult(
             {
@@ -118,27 +130,27 @@ def serve(
 
 
 @mcp.tool(name="check")
-def mcp_check(path: str) -> dict[str, object]:
+def mcp_check(path: str, exclude: ExcludePatterns = None) -> dict[str, object]:
     """Validate every Markdown file recursively as OKF v0.2."""
-    return check_bundle(path)
+    return check_bundle(path, exclude or ())
 
 
 @mcp.tool(name="inventory")
-def mcp_inventory(path: str) -> dict[str, object]:
+def mcp_inventory(path: str, exclude: ExcludePatterns = None) -> dict[str, object]:
     """Count concepts by type."""
-    return inventory_bundle(path)
+    return inventory_bundle(path, exclude or ())
 
 
 @mcp.tool(name="graph")
-def mcp_graph(path: str) -> dict[str, object]:
+def mcp_graph(path: str, exclude: ExcludePatterns = None) -> dict[str, object]:
     """Summarize resolved concept relationships."""
-    return graph_bundle(path)
+    return graph_bundle(path, exclude or ())
 
 
 @mcp.tool(name="format_check")
-def mcp_format_check(path: str) -> dict[str, object]:
+def mcp_format_check(path: str, exclude: ExcludePatterns = None) -> dict[str, object]:
     """Check mdformat style without modifying files."""
-    return check_format(path)
+    return check_format(path, exclude or ())
 
 
 def run_mcp_stdio() -> None:

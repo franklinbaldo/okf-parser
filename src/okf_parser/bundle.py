@@ -11,6 +11,7 @@ import ibis
 import networkx as nx
 
 from okf_parser.discovery import discover_markdown
+from okf_parser.exclusion import ExclusionRules
 from okf_parser.models import (
     ConceptRecord,
     LinkRecord,
@@ -344,14 +345,18 @@ def _validate_log(root: Path, path: Path, text: str) -> tuple[str, list[Violatio
     return body, diagnostics
 
 
-def load_bundle(root: Path) -> Bundle:
-    """Scan a directory and compile its OKF documents into Ibis tables."""
+def load_bundle(root: Path, exclude: Sequence[str] = ()) -> Bundle:
+    """Scan a directory and compile its OKF documents into Ibis tables.
+
+    Exclusions come from the bundle's ``.okfignore`` and from ``exclude``,
+    which a caller supplies for a one-off run.
+    """
     root = root.resolve()
     if not root.is_dir():
         msg = f"bundle root is not a directory: {root}"
         raise NotADirectoryError(msg)
 
-    paths = discover_markdown(root)
+    paths = discover_markdown(root, ExclusionRules.read(root, exclude))
     known_paths = {path.resolve() for path in paths}
     concepts: list[ConceptRecord] = []
     reserved: list[ReservedRecord] = []
@@ -397,9 +402,9 @@ def load_bundle(root: Path) -> Bundle:
     )
 
 
-def validate_path(path: Path) -> ValidationReport:
+def validate_path(path: Path, exclude: Sequence[str] = ()) -> ValidationReport:
     """Validate every Markdown file recursively below a path as OKF v0.2."""
-    bundle = load_bundle(path)
+    bundle = load_bundle(path, exclude)
     violations = tuple(bundle.validate())
     return ValidationReport(
         root=bundle.root,
