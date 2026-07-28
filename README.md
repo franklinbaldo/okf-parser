@@ -118,7 +118,9 @@ Patterns are matched against POSIX-style paths **relative to the bundle root**:
 | `docs/*.md` | `docs/a.md`                       | `docs/deep/a.md`   |
 
 `*` and `?` stay inside one path segment; `**` spans segments. A pattern that
-matches a directory excludes everything below it.
+matches a directory excludes everything below it. A leading or trailing `/`
+carries no meaning and is dropped, so `vendor/` and `/vendor` both mean
+`vendor`.
 
 This is deliberately **narrower than `.gitignore`** despite the familiar file
 name: patterns are anchored at the bundle root, and there is no negation. A

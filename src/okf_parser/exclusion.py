@@ -11,7 +11,7 @@ actually runs.
 from __future__ import annotations
 
 import re
-from functools import cache
+from functools import lru_cache
 from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict
@@ -23,6 +23,11 @@ if TYPE_CHECKING:
 EXCLUSION_FILENAME = ".okfignore"
 _COMMENT_PREFIX = "#"
 _RECURSIVE_SEGMENT = "**"
+_SEPARATOR = "/"
+# Compiled patterns are cached across bundles, but the cache is bounded: the
+# MCP tools accept patterns from a client, and an unbounded cache would let a
+# long-running server grow with every distinct pattern it is ever sent.
+_PATTERN_CACHE_SIZE = 512
 
 
 class ExclusionFileError(ValueError):
@@ -48,16 +53,29 @@ def _segment_expression(segment: str) -> str:
     return expression
 
 
-@cache
+def _normalize(pattern: str) -> str:
+    """Drop the surrounding separators that a ``.gitignore`` habit adds.
+
+    Patterns are already anchored at the bundle root, and a match on a
+    directory already takes everything below it, so a leading or trailing ``/``
+    adds nothing. Left in place it would make ``vendor/`` and ``/vendor``
+    compile to expressions that match no path at all — an exclusion that
+    silently excludes nothing, which is the failure this module exists to
+    prevent.
+    """
+    return pattern.strip(_SEPARATOR)
+
+
+@lru_cache(maxsize=_PATTERN_CACHE_SIZE)
 def _compile(pattern: str) -> re.Pattern[str]:
-    """Compile an anchored glob pattern into a regular expression.
+    """Compile a normalized, anchored glob pattern into a regular expression.
 
     ``**`` spans whole segments, everything else stays within one. Anchoring at
     the bundle root is what makes ``*.md`` mean "the Markdown beside the root"
     rather than every document in the tree.
     """
     expression = ""
-    segments = pattern.split("/")
+    segments = pattern.split(_SEPARATOR)
     for index, segment in enumerate(segments):
         if segment == _RECURSIVE_SEGMENT:
             # Absorb the following separator so `**/vendor` also matches
@@ -66,15 +84,15 @@ def _compile(pattern: str) -> re.Pattern[str]:
             continue
         expression += _segment_expression(segment)
         if index < len(segments) - 1:
-            expression += "/"
+            expression += _SEPARATOR
     return re.compile(expression)
 
 
 def _iter_ancestors(relative: str) -> Iterable[str]:
     """Yield the path itself, then each directory above it."""
-    segments = relative.split("/")
+    segments = relative.split(_SEPARATOR)
     for count in range(len(segments), 0, -1):
-        yield "/".join(segments[:count])
+        yield _SEPARATOR.join(segments[:count])
 
 
 class ExclusionRules(BaseModel):
@@ -84,7 +102,9 @@ class ExclusionRules(BaseModel):
     relative paths. This is deliberately narrower than ``.gitignore``: there is
     no negation and no implicit "match at any depth", because a pattern that
     silently widened its own scope would drop documents the author meant to
-    validate.
+    validate. A leading or trailing ``/`` is accepted and carries no meaning,
+    so the ``vendor/`` a ``.gitignore`` habit produces excludes what it looks
+    like it excludes.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -99,6 +119,11 @@ class ExclusionRules(BaseModel):
         exists but cannot be decoded is an error, because silently ignoring it
         would validate a tree the author believed was filtered.
         """
+        if isinstance(extra, str):
+            # A bare string is iterable, so it would otherwise become one
+            # single-character pattern per letter and quietly exclude nothing.
+            msg = f"exclude takes a sequence of patterns, not the single string {extra!r}"
+            raise TypeError(msg)
         path = root / EXCLUSION_FILENAME
         patterns: list[str] = []
         if path.is_file():
@@ -116,9 +141,11 @@ class ExclusionRules(BaseModel):
 
     def excludes(self, relative: str) -> bool:
         """Whether a relative POSIX path, or any directory above it, is excluded."""
-        if not self.patterns:
+        expressions = [
+            _compile(normalized) for pattern in self.patterns if (normalized := _normalize(pattern))
+        ]
+        if not expressions:
             return False
-        expressions = [_compile(pattern) for pattern in self.patterns]
         return any(
             expression.fullmatch(ancestor)
             for ancestor in _iter_ancestors(relative)

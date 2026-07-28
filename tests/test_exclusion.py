@@ -41,6 +41,13 @@ def test_no_patterns_excludes_nothing() -> None:
         ("docs/*.md", "docs/a.md", True),
         ("docs/*.md", "docs/deep/a.md", False),
         ("docs/**", "docs/deep/a.md", True),
+        # A `.gitignore` habit writes `vendor/` or `/vendor`; anchoring already
+        # gives both, so the separators are dropped rather than matching nothing.
+        ("vendor/", "vendor/a.md", True),
+        ("vendor/", "vendor", True),
+        ("/vendor", "vendor/a.md", True),
+        ("/vendor/", "vendor/deep/a.md", True),
+        ("/", "a.md", False),
     ],
 )
 def test_pattern_matching(pattern: str, relative: str, *, expected: bool) -> None:
@@ -90,6 +97,23 @@ def test_an_unreadable_exclusion_file_names_the_path(tmp_path: Path) -> None:
         ExclusionRules.read(tmp_path)
 
     assert caught.value.path == path
+
+
+def test_a_directory_pattern_written_with_a_trailing_slash_still_excludes(
+    tmp_path: Path,
+) -> None:
+    """`.okfignore` looks like `.gitignore`, so `vendor/` must not be a silent no-op."""
+    (tmp_path / EXCLUSION_FILENAME).write_text("vendor/\n", encoding="utf-8")
+
+    rules = ExclusionRules.read(tmp_path)
+
+    assert rules.excludes("vendor/dep/guide.md")
+
+
+def test_a_single_string_is_rejected_rather_than_split_into_letters(tmp_path: Path) -> None:
+    """`exclude="vendor"` type-checks as a sequence and would exclude nothing."""
+    with pytest.raises(TypeError):
+        ExclusionRules.read(tmp_path, extra="vendor")
 
 
 def test_command_line_patterns_extend_the_file(tmp_path: Path) -> None:
