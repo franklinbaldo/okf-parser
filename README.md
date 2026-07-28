@@ -59,6 +59,22 @@ The command exits with status `1` only when normative errors exist. Broken
 cross-links are warnings because OKF v0.2 explicitly says they do not make a
 bundle non-conformant.
 
+`format` is an opinionated canonicalizer, not a syntax-preserving rewriter. It
+keeps [mdformat](https://mdformat.readthedocs.io/) as its base and replaces only
+the numbering policy for ordered lists: markers are decided while rendering, so
+they are consecutive (`1. 2. 3.`) and never zero-padded to an even width. A list
+starting at `101` is written `101. 102. 103.`, appending an item does not rewrite
+the lines above it, and a list whose markers would exceed CommonMark's nine-digit
+limit keeps plain numbering.
+
+Formatting will not write a file whose **protected block structure** the rewrite
+would change; such a file is reported in `skipped_paths` and left on disk.
+Protected means the sequence, nesting and tag of every block, block attributes
+such as an ordered list's `start`, and the content of code blocks, raw HTML and
+frontmatter. Inline content — link targets, emphasis, text inside a paragraph or
+table cell — is deliberately outside this check, because canonical formatting
+rewrites inline whitespace.
+
 ## GitHub Actions
 
 Add the repository as a CI check:

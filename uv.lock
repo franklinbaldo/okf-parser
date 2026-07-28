@@ -823,7 +823,7 @@ wheels = [
 
 [[package]]
 name = "okf-parser"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "cyclopts" },
@@ -854,7 +854,7 @@ requires-dist = [
     { name = "fastmcp", specifier = ">=3.4,<4" },
     { name = "ibis-framework", extras = ["duckdb"], specifier = ">=12,<13" },
     { name = "markdown-it-py", specifier = ">=4,<5" },
-    { name = "mdformat", specifier = ">=1,<2" },
+    { name = "mdformat", specifier = ">=1,<1.1" },
     { name = "mdformat-frontmatter", specifier = ">=2,<3" },
     { name = "mdformat-gfm", specifier = ">=1,<2" },
     { name = "networkx", specifier = ">=3.4,<4" },

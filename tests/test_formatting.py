@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 import pytest
+from markdown_it import MarkdownIt
 
 from okf_parser.formatting import format_path
 
@@ -55,6 +57,214 @@ def test_format_does_not_follow_markdown_symlinks(tmp_path: Path) -> None:
 
     assert report.markdown_count == 0
     assert outside.read_text(encoding="utf-8") == original
+
+
+def _format_once(tmp_path: Path, source: str) -> str:
+    path = tmp_path / "plan.md"
+    path.write_text(source, encoding="utf-8")
+    format_path(tmp_path, write=True)
+    return path.read_text(encoding="utf-8")
+
+
+def _is_ordered_list(text: str) -> bool:
+    return any(token.type == "ordered_list_open" for token in MarkdownIt("commonmark").parse(text))
+
+
+def _no_padded_marker(text: str) -> bool:
+    """Whether no zero-padded ordered marker survives, at any indent or container depth."""
+    return re.search(r"(?<!\d)0\d+[.)]\s", text) is None
+
+
+def test_ordered_list_numbering_is_preserved(tmp_path: Path) -> None:
+    original = "# Plan\n\n1. first\n2. second\n3. third\n"
+
+    assert _format_once(tmp_path, original) == original
+
+
+def test_ordered_list_numbering_is_renumbered_when_wrong(tmp_path: Path) -> None:
+    result = _format_once(tmp_path, "# Plan\n\n1. first\n1. second\n1. third\n")
+
+    assert result == "# Plan\n\n1. first\n2. second\n3. third\n"
+
+
+def test_crossing_a_marker_width_boundary_does_not_pad(tmp_path: Path) -> None:
+    """Padding 1..10 to 01...10 would rewrite all nine earlier lines."""
+    result = _format_once(tmp_path, "".join(f"{index}. item{index}\n" for index in range(1, 11)))
+
+    assert result.splitlines()[0] == "1. item1"
+    assert result.splitlines()[-1] == "10. item10"
+    assert _no_padded_marker(result)
+    assert _is_ordered_list(result)
+
+
+def test_three_digit_list_does_not_pad(tmp_path: Path) -> None:
+    result = _format_once(tmp_path, "".join(f"{index}. i{index}\n" for index in range(1, 101)))
+
+    assert result.splitlines()[0] == "1. i1"
+    assert result.splitlines()[-1] == "100. i100"
+    assert _no_padded_marker(result)
+
+
+def test_list_at_the_nine_digit_limit_is_preserved(tmp_path: Path) -> None:
+    """Consecutive numbering would overflow to 1000000000 and stop being a list."""
+    original = "999999999. first\n1. second\n"
+
+    result = _format_once(tmp_path, original)
+
+    assert _is_ordered_list(result)
+    assert "1000000000." not in result
+
+
+def test_padded_marker_inside_a_code_block_is_left_alone(tmp_path: Path) -> None:
+    original = "Text\n\n```\n01. not a list\n02. also not\n```\n"
+
+    result = _format_once(tmp_path, original)
+
+    assert "01. not a list" in result
+    assert "02. also not" in result
+
+
+def test_list_items_with_continuation_content_survive(tmp_path: Path) -> None:
+    source = "".join(f"{index}. step{index}\n\n   detail{index}\n\n" for index in range(1, 11))
+
+    result = _format_once(tmp_path, source)
+
+    assert _is_ordered_list(result)
+    assert "detail10" in result
+    assert _no_padded_marker(result)
+
+
+def test_list_inside_a_blockquote_is_not_padded(tmp_path: Path) -> None:
+    source = "".join(f"> {index}. item{index}\n" for index in range(1, 11))
+
+    result = _format_once(tmp_path, source)
+
+    assert _no_padded_marker(result)
+    assert "> 1. item1" in result
+    assert "> 10. item10" in result
+
+
+def test_list_inside_a_bullet_is_not_padded(tmp_path: Path) -> None:
+    source = "- intro\n\n" + "".join(f"  {index}. item{index}\n" for index in range(1, 11))
+
+    result = _format_once(tmp_path, source)
+
+    assert _no_padded_marker(result)
+
+
+def test_list_opening_on_a_bullet_line_is_not_partially_padded(tmp_path: Path) -> None:
+    """A line-only match unpads every marker except the one sharing the bullet's line."""
+    source = "- " + "".join(
+        f"{index}. item{index}\n" if index == 1 else f"  {index}. item{index}\n"
+        for index in range(1, 11)
+    )
+
+    result = _format_once(tmp_path, source)
+
+    assert _no_padded_marker(result)
+
+
+def test_two_ordered_markers_on_one_line_are_both_unpadded(tmp_path: Path) -> None:
+    source = "1. " + "".join(
+        f"{index}. x{index}\n" if index == 1 else f"   {index}. x{index}\n"
+        for index in range(1, 11)
+    )
+
+    result = _format_once(tmp_path, source)
+
+    assert _no_padded_marker(result)
+
+
+def test_outer_start_is_preserved_with_a_nested_list(tmp_path: Path) -> None:
+    """The case the AST redirection is about: start=101 must survive."""
+    # Five spaces is the content column of the "101. " marker, so the inner
+    # list nests rather than becoming an indented code block.
+    inner = "".join(f"     {index}. n{index}\n" for index in range(1, 11))
+    source = f"101. outer\n\n{inner}\n1. next\n"
+
+    result = _format_once(tmp_path, source)
+
+    assert result.startswith("101. outer")
+    assert "102. next" in result
+    assert "     10. n10" in result
+    assert _no_padded_marker(result)
+
+
+def test_a_gfm_table_is_not_rewritten_into_a_paragraph(tmp_path: Path) -> None:
+    original = "| a | b |\n|---|---|\n| 1 | 2 |\n"
+    path = tmp_path / "t.md"
+    path.write_text(original, encoding="utf-8")
+
+    format_path(tmp_path, write=True)
+
+    assert "|---" in path.read_text(encoding="utf-8").replace(" ", "")
+
+
+def test_adjacent_lists_of_different_markers_stay_distinct(tmp_path: Path) -> None:
+    source = "* a\n\n+ b\n\n- c\n"
+
+    result = _format_once(tmp_path, source)
+
+    parser = MarkdownIt("commonmark")
+    assert sum(1 for t in parser.parse(result) if t.type == "bullet_list_open") == 3
+
+
+def test_list_inside_a_bullet_inside_a_blockquote_is_not_padded(tmp_path: Path) -> None:
+    source = "> - a\n>\n> " + "".join(
+        f"{index}. b{index}\n" if index == 1 else f">   {index}. b{index}\n"
+        for index in range(1, 11)
+    )
+
+    result = _format_once(tmp_path, source)
+
+    assert _no_padded_marker(result)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "".join(f"{index}. i{index}\n" for index in range(1, 11)),
+        "".join("1. x\n" for _ in range(12)),
+        "999999999. first\n1. second\n",
+        "1. a\n   - x\n   - y\n2. b\n",
+        "".join(f"{index}. step{index}\n\n   detail{index}\n\n" for index in range(1, 11)),
+        "Text\n\n```\n01. not a list\n```\n",
+        "".join(f"> {index}. item{index}\n" for index in range(1, 11)),
+        "- intro\n\n" + "".join(f"  {index}. item{index}\n" for index in range(1, 11)),
+        "- 1. item1\n  2. item2\n",
+        "> - a\n>\n> 1. b1\n>   2. b2\n",
+        "101. outer\n\n"
+        + "".join(f"     {index}. n{index}\n" for index in range(1, 11))
+        + "\n1. next\n",
+        "| a | b |\n|---|---|\n| 1 | 2 |\n",
+        "* a\n\n+ b\n\n- c\n",
+        "1. a\n\n1) b\n",
+    ],
+)
+def test_formatting_is_idempotent(tmp_path: Path, source: str) -> None:
+    """A formatter that flip-flops would make format --check flap in CI."""
+    once = _format_once(tmp_path, source)
+
+    assert _format_once(tmp_path, once) == once
+
+
+def test_a_file_whose_structure_would_change_is_skipped(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "a.md"
+    original = "# Heading\n\n1. item\n"
+    path.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(
+        "okf_parser.markdown_style.mdformat.text",
+        lambda *_args, **_kwargs: "just a paragraph now\n",
+    )
+
+    report = format_path(tmp_path, write=True)
+
+    assert report.skipped_paths == ("a.md",)
+    assert report.changed_paths == ()
+    assert path.read_text(encoding="utf-8") == original
 
 
 def test_non_utf8_file_is_skipped_instead_of_raising(tmp_path: Path) -> None:
@@ -111,7 +321,7 @@ def test_write_is_all_or_nothing_when_formatting_fails(
             return text.replace("-   item", "- item")
         raise RuntimeError
 
-    monkeypatch.setattr("okf_parser.formatting.mdformat.text", explode)
+    monkeypatch.setattr("okf_parser.markdown_style.mdformat.text", explode)
     (tmp_path / "b.md").write_text(f"{original}<!-- b.md -->\n", encoding="utf-8")
 
     with pytest.raises(RuntimeError):

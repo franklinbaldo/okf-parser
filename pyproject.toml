@@ -1,6 +1,6 @@
 [project]
 name = "okf-parser"
-version = "0.2.0"
+version = "0.3.0"
 description = "Relational inspection and validation for Open Knowledge Format bundles"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -10,7 +10,10 @@ dependencies = [
   "fastmcp>=3.4,<4",
   "ibis-framework[duckdb]>=12,<13",
   "markdown-it-py>=4,<5",
-  "mdformat>=1,<2",
+  # okf_parser.markdown_style overrides mdformat's ordered-list renderer, which
+  # needs symbols mdformat does not export. Keep this range as narrow as that
+  # dependency is real; the adapter also fails fast if the symbols are missing.
+  "mdformat>=1,<1.1",
   "mdformat-frontmatter>=2,<3",
   "mdformat-gfm>=1,<2",
   "networkx>=3.4,<4",

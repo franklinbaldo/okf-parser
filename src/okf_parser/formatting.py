@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-import mdformat
 from pydantic import BaseModel, ConfigDict
 
 from okf_parser.discovery import discover_markdown
+from okf_parser.markdown_style import format_markdown, protected_block_signature
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -40,12 +40,28 @@ class FormatReport(BaseModel):
         return self.written or not self.changed_paths
 
 
+def _canonical_text(original: str) -> str | None:
+    """Return canonical Markdown, or ``None`` when formatting is not safe to apply.
+
+    ``--write`` rewrites a whole tree, so a rewrite that changes the document's
+    protected block structure is refused rather than saved. Marker numbering is
+    decided while rendering, so nothing here has to inspect or repair the
+    formatted text.
+    """
+    formatted = format_markdown(original)
+    if protected_block_signature(formatted) != protected_block_signature(original):
+        return None
+    return formatted
+
+
 def format_path(path: Path, *, write: bool = False) -> FormatReport:
     """Check or explicitly rewrite every Markdown file below a path.
 
-    Files that cannot be read - a non-UTF-8 byte sequence, a permission error -
-    are reported as skipped rather than aborting the run, matching how
-    ``validate_path`` aggregates instead of failing at the first bad document.
+    A file is reported as skipped, rather than aborting the run, when it cannot
+    be read - a non-UTF-8 byte sequence, a permission error - or when
+    canonicalizing it would change its protected block structure. This matches
+    how ``validate_path`` aggregates instead of failing at the first bad
+    document.
     """
     root = path.resolve()
     paths = discover_markdown(root)
@@ -59,10 +75,10 @@ def format_path(path: Path, *, write: bool = False) -> FormatReport:
         except (UnicodeDecodeError, OSError):
             skipped.append(relative)
             continue
-        formatted = mdformat.text(
-            original,
-            extensions={"frontmatter", "gfm"},
-        )
+        formatted = _canonical_text(original)
+        if formatted is None:
+            skipped.append(relative)
+            continue
         if formatted == original:
             continue
         changed.append(relative)
