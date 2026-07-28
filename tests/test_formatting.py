@@ -233,6 +233,12 @@ def test_list_inside_a_bullet_inside_a_blockquote_is_not_padded(tmp_path: Path) 
         "- intro\n\n" + "".join(f"  {index}. item{index}\n" for index in range(1, 11)),
         "- 1. item1\n  2. item2\n",
         "> - a\n>\n> 1. b1\n>   2. b2\n",
+        "101. outer\n\n"
+        + "".join(f"     {index}. n{index}\n" for index in range(1, 11))
+        + "\n1. next\n",
+        "| a | b |\n|---|---|\n| 1 | 2 |\n",
+        "* a\n\n+ b\n\n- c\n",
+        "1. a\n\n1) b\n",
     ],
 )
 def test_formatting_is_idempotent(tmp_path: Path, source: str) -> None:
