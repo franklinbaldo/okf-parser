@@ -149,8 +149,7 @@ def test_nullability_inside_lists_is_preserved(tmp_path: Path) -> None:
 
     assert '"values": z.array(z.number().int().nullable())' in zod
     assert '"objects": z.array(z.object({' in zod
-    assert "}).nullable())" not in zod
-    assert "}).nullable())".rstrip('"') in zod
+    assert "}).nullable())" in zod
 
 
 def test_unicode_names_are_preserved_and_collisions_are_errors(tmp_path: Path) -> None:
