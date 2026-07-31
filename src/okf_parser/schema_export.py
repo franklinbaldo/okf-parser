@@ -211,7 +211,7 @@ def _build_model(
         nullable = any(value is None for value in present_values)
 
         if key == "type" and concept_type is not None:
-            annotation: Any = Literal[concept_type]
+            annotation: Any = cast("Any", Literal)[concept_type]
             required = True
             nullable = False
         else:
@@ -223,13 +223,13 @@ def _build_model(
             )
 
         if not required or nullable:
-            annotation |= None
+            annotation = cast("Any", annotation) | None
             default: Any = None
         else:
             default = ...
         fields[key] = (annotation, default)
 
-    return create_model(name, **fields)
+    return create_model(name, **cast("dict[str, Any]", fields))
 
 
 def build_pydantic_models(
