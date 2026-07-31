@@ -74,8 +74,7 @@ def _model_name(value: str, suffix: str) -> str:
     """Return a deterministic Unicode-aware Python and JavaScript identifier."""
     normalized = unicodedata.normalize("NFKC", value)
     identifier = "".join(
-        character if character == "_" or character.isalnum() else "_"
-        for character in normalized
+        character if character == "_" or character.isalnum() else "_" for character in normalized
     ).strip("_")
     parts = [part for part in identifier.split("_") if part]
     name = "".join(part[:1].upper() + part[1:] for part in parts) or "Concept"

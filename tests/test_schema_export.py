@@ -134,11 +134,7 @@ def test_list_items_are_inferred_together(tmp_path: Path) -> None:
 def test_nullability_inside_lists_is_preserved(tmp_path: Path) -> None:
     _write_concept(
         tmp_path / "sample.md",
-        "type: test_type\n"
-        "values: [null, 1]\n"
-        "objects:\n"
-        "  - null\n"
-        "  - name: Example\n",
+        "type: test_type\nvalues: [null, 1]\nobjects:\n  - null\n  - name: Example\n",
     )
 
     schema = export_json_schema(str(tmp_path), infer_types=True)["schemas"]["test_type"]
