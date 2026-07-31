@@ -1,0 +1,45 @@
+name: Format review fixes
+
+on:
+  push:
+    branches: [refactor/string-first-schema-inference]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: format-review-fixes
+  cancel-in-progress: true
+
+jobs:
+  format:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: refactor/string-first-schema-inference
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Format and commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv sync --frozen --all-groups
+          uv run ruff format src/okf_parser/schema_export.py tests/test_schema_export.py
+          if git diff --quiet; then
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/okf_parser/schema_export.py tests/test_schema_export.py
+          git commit -m "style: format schema review fixes"
+          git pull --rebase origin refactor/string-first-schema-inference
+          git push origin HEAD:refactor/string-first-schema-inference
