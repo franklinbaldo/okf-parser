@@ -311,9 +311,7 @@ def _resolve_ref(schema: dict[str, Any], definitions: Mapping[str, Any]) -> dict
 
 
 def _zod_union(any_of: list[Any], definitions: Mapping[str, Any]) -> str:
-    non_null = [
-        item for item in any_of if isinstance(item, dict) and item.get("type") != "null"
-    ]
+    non_null = [item for item in any_of if isinstance(item, dict) and item.get("type") != "null"]
     nullable = len(non_null) != len(any_of)
     if len(non_null) == 1:
         rendered = _schema_to_zod(non_null[0], definitions)
