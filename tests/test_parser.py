@@ -95,6 +95,28 @@ def test_ordinary_yaml_scalars_preserve_their_authored_spelling(tmp_path: Path) 
     }
 
 
+def test_yaml_merge_keys_keep_structure_and_string_scalars(tmp_path: Path) -> None:
+    path = tmp_path / "concept.md"
+    path.write_text(
+        "---\n"
+        "type: Reference\n"
+        "defaults: &defaults\n"
+        "  active: true\n"
+        "item:\n"
+        "  <<: *defaults\n"
+        "  title: Example\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    parsed = parse_document(path)
+
+    assert parsed.frontmatter["item"] == {
+        "active": "true",
+        "title": "Example",
+    }
+
+
 def test_plain_scalar_mapping_keys_are_strings(tmp_path: Path) -> None:
     path = tmp_path / "concept.md"
     path.write_text("---\ntype: Reference\n2026-01-01: released\n---\n", encoding="utf-8")
