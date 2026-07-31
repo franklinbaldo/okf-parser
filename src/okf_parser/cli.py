@@ -27,13 +27,14 @@ type SchemaFormat = Literal["json", "zod"]
 type CliSchemaFormat = Annotated[SchemaFormat, Parameter(name="format")]
 type McpSchemaFormat = Annotated[SchemaFormat, Field(alias="format")]
 type RepeatableStrings = list[str] | None
+type JsonPayload = dict[str, object]
 
 
 @dataclass(frozen=True, slots=True)
-class CliResult:
+class CliResult[PayloadT]:
     """A JSON payload or plain text string and its intended process exit code."""
 
-    payload: dict[str, object] | str
+    payload: PayloadT
     exit_code: int = 0
 
 
@@ -66,20 +67,20 @@ mcp = FastMCP(
 
 
 @app.command
-def check(path: str, *, exclude: RepeatableStrings = None) -> CliResult:
+def check(path: str, *, exclude: RepeatableStrings = None) -> CliResult[JsonPayload]:
     """Validate every Markdown file recursively as OKF v0.2."""
     payload = check_bundle(path, exclude or ())
     return CliResult(payload, 0 if payload["conformant"] else 1)
 
 
 @app.command
-def inventory(path: str, *, exclude: RepeatableStrings = None) -> CliResult:
+def inventory(path: str, *, exclude: RepeatableStrings = None) -> CliResult[JsonPayload]:
     """Count concepts by type using an Ibis relation."""
     return CliResult(inventory_bundle(path, exclude or ()))
 
 
 @app.command
-def graph(path: str, *, exclude: RepeatableStrings = None) -> CliResult:
+def graph(path: str, *, exclude: RepeatableStrings = None) -> CliResult[JsonPayload]:
     """Summarize the resolved concept graph with NetworkX."""
     return CliResult(graph_bundle(path, exclude or ()))
 
@@ -92,7 +93,7 @@ def schema(
     infer_types: bool = False,
     cast: RepeatableStrings = None,
     exclude: RepeatableStrings = None,
-) -> CliResult:
+) -> CliResult[JsonPayload | str]:
     """Export string-first JSON Schema or Zod, with optional type inference."""
     return CliResult(
         schema_bundle(
@@ -111,7 +112,7 @@ def format_command(
     *,
     write: bool = False,
     exclude: RepeatableStrings = None,
-) -> CliResult:
+) -> CliResult[JsonPayload]:
     """Check mdformat style, writing only when --write is explicit."""
     patterns = exclude or ()
     payload = write_format(path, patterns) if write else check_format(path, patterns)
@@ -126,7 +127,7 @@ def duckdb_command(
     *,
     overwrite: bool = False,
     exclude: RepeatableStrings = None,
-) -> CliResult:
+) -> CliResult[JsonPayload]:
     """Materialize bundle relations into a DuckDB database."""
     try:
         return CliResult(
