@@ -169,7 +169,7 @@ def test_logical_keys_do_not_depend_on_checkout_path(tmp_path: Path) -> None:
 
 
 def test_one_unparseable_concept_does_not_abort_the_run(tmp_path: Path) -> None:
-    _write(tmp_path / "a-broken.md", "---\n2026-01-01: released\n---\n")
+    _write(tmp_path / "a-broken.md", "---\nblob: !!binary aGk=\n---\n")
     _write(tmp_path / "b-cyclic.md", "---\nself: &a\n  child: *a\n---\n")
     _write(tmp_path / "c-good.md", "---\ntype: Node\n---\n# Good\n")
 
