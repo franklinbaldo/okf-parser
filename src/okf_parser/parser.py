@@ -22,6 +22,34 @@ _FRONTMATTER_RE = re.compile(
 )
 RESERVED_FILENAMES = frozenset({"index.md", "log.md"})
 _MARKDOWN = MarkdownIt("commonmark")
+_SCALAR_TAGS = (
+    "tag:yaml.org,2002:bool",
+    "tag:yaml.org,2002:int",
+    "tag:yaml.org,2002:float",
+    "tag:yaml.org,2002:timestamp",
+)
+
+
+class _StringScalarLoader(yaml.SafeLoader):
+    """Preserve scalar spelling while retaining YAML mapping/list structure."""
+
+
+# Copy before filtering: mutating the inherited registry would change SafeLoader
+# process-wide. Null keeps its structural meaning; every other implicit scalar
+# remains authored text and may be interpreted later by optional schema casts.
+_StringScalarLoader.yaml_implicit_resolvers = {
+    key: [
+        resolver
+        for resolver in resolvers
+        if resolver[0] == "tag:yaml.org,2002:null"
+    ]
+    for key, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+}
+for _tag in _SCALAR_TAGS:
+    _StringScalarLoader.add_constructor(
+        _tag,
+        lambda loader, node: loader.construct_scalar(node),
+    )
 
 
 def is_reserved_document(path: Path) -> bool:
@@ -50,9 +78,9 @@ def _describe_frontmatter_error(exc: ValidationError) -> str:
 
 
 def _load_frontmatter(block: str) -> dict[str, YamlValue] | None:
-    """Load and validate one frontmatter block, or ``None`` when it is empty."""
+    """Load one frontmatter block with every ordinary scalar preserved as text."""
     try:
-        value = yaml.safe_load(block)
+        value = yaml.load(block, Loader=_StringScalarLoader)
     except yaml.YAMLError as exc:
         msg = f"invalid YAML frontmatter: {exc}"
         raise DocumentParseError(msg) from exc
@@ -64,10 +92,6 @@ def _load_frontmatter(block: str) -> dict[str, YamlValue] | None:
         raise DocumentParseError(msg)
 
     try:
-        # Strict: OKF promises to preserve producer-defined frontmatter, so an
-        # unsupported YAML value must be reported rather than quietly coerced.
-        # Lax validation turns !!binary into str and !!set into a list whose
-        # order depends on PYTHONHASHSEED.
         return FRONTMATTER_ADAPTER.validate_python(value, strict=True)
     except ValidationError as exc:
         msg = f"invalid YAML frontmatter: {_describe_frontmatter_error(exc)}"
