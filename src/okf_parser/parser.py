@@ -35,10 +35,10 @@ class _StringScalarLoader(yaml.SafeLoader):
 
 
 # Copy before filtering: mutating the inherited registry would change SafeLoader
-# process-wide. Null keeps its structural meaning; every other implicit scalar
-# remains authored text and may be interpreted later by optional schema casts.
+# process-wide. Remove only implicit scalar typing; null, merge keys and every
+# other structural resolver keep their SafeLoader behavior.
 _StringScalarLoader.yaml_implicit_resolvers = {
-    key: [resolver for resolver in resolvers if resolver[0] == "tag:yaml.org,2002:null"]
+    key: [resolver for resolver in resolvers if resolver[0] not in _SCALAR_TAGS]
     for key, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
 }
 for _tag in _SCALAR_TAGS:
