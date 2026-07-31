@@ -1,10 +1,12 @@
-"""Export JSON Schema and Zod schema definitions for OKF concepts."""
+"""Export JSON Schema and Zod definitions for OKF concepts cleanly using Pydantic."""
 
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
+
+from pydantic import BaseModel, create_model
 
 from okf_parser.bundle import load_bundle
 
@@ -12,30 +14,37 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
-def _infer_type_from_value(value: Any) -> dict[str, Any]:
+def _infer_field_definition(value: Any) -> tuple[type, Any]:
+    """Recursively infer a clean Pydantic (Type, Default) tuple from any YAML/JSON value."""
     if isinstance(value, bool):
-        return {"type": "boolean"}
+        return (bool | None, None)
     if isinstance(value, int):
-        return {"type": "integer"}
+        return (int | None, None)
     if isinstance(value, float):
-        return {"type": "number"}
+        return (float | None, None)
     if isinstance(value, list):
         if value:
-            item_schema = _infer_type_from_value(value[0])
-            return {"type": "array", "items": item_schema}
-        return {"type": "array", "items": {"type": "string"}}
+            elem_type = _infer_field_definition(value[0])[0]
+            return (list[elem_type] | None, None)
+        return (list[str] | None, None)
     if isinstance(value, dict):
-        properties = {k: _infer_type_from_value(v) for k, v in value.items()}
-        return {"type": "object", "properties": properties}
-    return {"type": "string"}
+        nested_fields = {k: _infer_field_definition(v) for k, v in value.items()}
+        nested_model = create_model("NestedConceptStructure", **nested_fields)
+        return (nested_model | None, None)
+    return (str | None, None)
 
 
-def export_json_schema(path: str, exclude: Sequence[str] = ()) -> dict[str, Any]:
-    """Inspect an OKF bundle and infer a JSON Schema for every concept type."""
+def _concept_type_to_model_name(ctype: str) -> str:
+    """Convert snake-case or kebab-case concept types into clean PascalCase Model names."""
+    return "".join(part.capitalize() for part in ctype.replace("-", "_").split("_")) + "Concept"
+
+
+def build_pydantic_models(path: str, exclude: Sequence[str] = ()) -> dict[str, type[BaseModel]]:
+    """Build dynamic Pydantic BaseModel classes for every concept type found in an OKF bundle."""
     bundle = load_bundle(Path(path), exclude)
     df_concepts = bundle.concepts.to_pandas()
 
-    schemas_by_type: dict[str, dict[str, Any]] = {}
+    fields_by_type: dict[str, dict[str, Any]] = {}
 
     for _, row in df_concepts.iterrows():
         ctype = str(row.get("concept_type", "concept"))
@@ -49,35 +58,53 @@ def export_json_schema(path: str, exclude: Sequence[str] = ()) -> dict[str, Any]
         if not isinstance(frontmatter, dict):
             frontmatter = {}
 
-        if ctype not in schemas_by_type:
-            schemas_by_type[ctype] = {
-                "$schema": "https://json-schema.org/draft/2020-12/schema",
-                "title": f"{ctype.capitalize()}Concept",
-                "type": "object",
-                "properties": {
-                    "type": {"type": "string", "const": ctype},
-                    "title": {"type": "string"},
-                    "description": {"type": "string"},
-                },
-                "required": ["type"],
+        if ctype not in fields_by_type:
+            fields_by_type[ctype] = {
+                "type": (Literal[ctype], ctype),
+                "title": (str | None, None),
+                "description": (str | None, None),
             }
 
-        properties = schemas_by_type[ctype]["properties"]
+        type_fields = fields_by_type[ctype]
         for key, val in frontmatter.items():
-            if key not in properties:
-                properties[key] = _infer_type_from_value(val)
+            if key not in type_fields:
+                type_fields[key] = _infer_field_definition(val)
+
+    models_by_type: dict[str, type[BaseModel]] = {}
+    for ctype, fields in fields_by_type.items():
+        model_name = _concept_type_to_model_name(ctype)
+        models_by_type[ctype] = create_model(model_name, **fields)
+
+    return models_by_type
+
+
+def export_json_schema(path: str, exclude: Sequence[str] = ()) -> dict[str, Any]:
+    """Export complete JSON Schema draft-2020-12 using Pydantic's native model_json_schema()."""
+    models = build_pydantic_models(path, exclude)
+    bundle_root = str(Path(path).resolve())
+
+    schemas = {ctype: model.model_json_schema() for ctype, model in models.items()}
 
     return {
-        "root": str(bundle.root),
-        "total_types": len(schemas_by_type),
-        "schemas": schemas_by_type,
+        "root": bundle_root,
+        "total_types": len(schemas),
+        "schemas": schemas,
     }
 
 
-def _json_schema_to_zod(prop_schema: dict[str, Any]) -> str:
-    stype = prop_schema.get("type", "string")
-    if prop_schema.get("const"):
+def _json_schema_property_to_zod(prop_schema: dict[str, Any]) -> str:
+    """Translate Pydantic's generated JSON Schema properties into Zod validator expressions."""
+    if prop_schema.get("const") is not None:
         return f"z.literal({json.dumps(prop_schema['const'])})"
+
+    if "anyOf" in prop_schema:
+        # Resolve Pydantic's Optional types (Union with Null)
+        non_null = [t for t in prop_schema["anyOf"] if t.get("type") != "null"]
+        if non_null:
+            return _json_schema_property_to_zod(non_null[0]) + ".optional()"
+
+    stype = prop_schema.get("type", "string")
+
     if stype == "boolean":
         return "z.boolean().optional()"
     if stype == "integer":
@@ -85,23 +112,24 @@ def _json_schema_to_zod(prop_schema: dict[str, Any]) -> str:
     if stype == "number":
         return "z.number().optional()"
     if stype == "array":
-        item_type = _json_schema_to_zod(prop_schema.get("items", {"type": "string"}))
+        item_type = _json_schema_property_to_zod(prop_schema.get("items", {"type": "string"}))
         if item_type.endswith(".optional()"):
             item_type = item_type[:-11]
         return f"z.array({item_type}).optional()"
     if stype == "object":
         inner_props = prop_schema.get("properties", {})
-        inner_zod = ", ".join(f"{k}: {_json_schema_to_zod(v)}" for k, v in inner_props.items())
+        inner_zod = ", ".join(f"{k}: {_json_schema_property_to_zod(v)}" for k, v in inner_props.items())
         return f"z.object({{ {inner_zod} }}).optional()"
+
     return "z.string().optional()"
 
 
 def export_zod_schema(path: str, exclude: Sequence[str] = ()) -> str:
-    """Generate Zod schema definitions for Astro Content Collections."""
+    """Generate clean Zod schema definitions for Astro Content Collections."""
     json_schemas = export_json_schema(path, exclude)["schemas"]
 
     lines = [
-        "// Generated by okf-parser",
+        "// Generated by okf-parser using Pydantic model_json_schema()",
         "import { z } from 'astro:content';",
         "",
     ]
@@ -112,7 +140,7 @@ def export_zod_schema(path: str, exclude: Sequence[str] = ()) -> str:
 
         zod_props = []
         for key, prop_def in props.items():
-            zod_code = _json_schema_to_zod(prop_def)
+            zod_code = _json_schema_property_to_zod(prop_def)
             zod_props.append(f"  {key}: {zod_code}")
 
         lines.append(f"export const {var_name} = z.object({{")
