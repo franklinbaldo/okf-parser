@@ -25,7 +25,6 @@ from okf_parser.service import (
 type McpTransport = Literal["stdio", "http", "sse"]
 type SchemaFormat = Literal["json", "zod"]
 type CliSchemaFormat = Annotated[SchemaFormat, Parameter(name="format")]
-type McpSchemaFormat = Annotated[SchemaFormat, Field(alias="format")]
 type RepeatableStrings = list[str] | None
 type JsonPayload = dict[str, object]
 
@@ -179,7 +178,7 @@ def mcp_graph(path: str, exclude: RepeatableStrings = None) -> dict[str, object]
 def mcp_schema(
     path: str,
     *,
-    schema_format: McpSchemaFormat = "json",
+    schema_format: Annotated[SchemaFormat, Field(alias="format")] = "json",
     infer_types: bool = False,
     cast: RepeatableStrings = None,
     exclude: RepeatableStrings = None,
