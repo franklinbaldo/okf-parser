@@ -23,9 +23,7 @@ from okf_parser.service import (
 
 type McpTransport = Literal["stdio", "http", "sse"]
 type SchemaFormat = Literal["json", "zod"]
-# Cyclopts resolves annotations at runtime, so command signatures use builtin
-# generics rather than a name that only exists while type checking.
-type ExcludePatterns = list[str] | None
+type RepeatableStrings = list[str] | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,20 +63,20 @@ mcp = FastMCP(
 
 
 @app.command
-def check(path: str, *, exclude: ExcludePatterns = None) -> CliResult:
+def check(path: str, *, exclude: RepeatableStrings = None) -> CliResult:
     """Validate every Markdown file recursively as OKF v0.2."""
     payload = check_bundle(path, exclude or ())
     return CliResult(payload, 0 if payload["conformant"] else 1)
 
 
 @app.command
-def inventory(path: str, *, exclude: ExcludePatterns = None) -> CliResult:
+def inventory(path: str, *, exclude: RepeatableStrings = None) -> CliResult:
     """Count concepts by type using an Ibis relation."""
     return CliResult(inventory_bundle(path, exclude or ()))
 
 
 @app.command
-def graph(path: str, *, exclude: ExcludePatterns = None) -> CliResult:
+def graph(path: str, *, exclude: RepeatableStrings = None) -> CliResult:
     """Summarize the resolved concept graph with NetworkX."""
     return CliResult(graph_bundle(path, exclude or ()))
 
@@ -88,10 +86,20 @@ def schema(
     path: str,
     *,
     format: SchemaFormat = "json",
-    exclude: ExcludePatterns = None,
+    infer_types: bool = False,
+    cast: RepeatableStrings = None,
+    exclude: RepeatableStrings = None,
 ) -> CliResult:
-    """Export JSON Schema or Zod schemas for OKF concepts."""
-    return CliResult(schema_bundle(path, format, exclude or ()))
+    """Export string-first JSON Schema or Zod, with optional type inference."""
+    return CliResult(
+        schema_bundle(
+            path,
+            format,
+            exclude or (),
+            infer_types=infer_types,
+            casts=cast or (),
+        )
+    )
 
 
 @app.command(name="format")
@@ -99,7 +107,7 @@ def format_command(
     path: str,
     *,
     write: bool = False,
-    exclude: ExcludePatterns = None,
+    exclude: RepeatableStrings = None,
 ) -> CliResult:
     """Check mdformat style, writing only when --write is explicit."""
     patterns = exclude or ()
@@ -114,7 +122,7 @@ def duckdb_command(
     schema: str = "okf",
     *,
     overwrite: bool = False,
-    exclude: ExcludePatterns = None,
+    exclude: RepeatableStrings = None,
 ) -> CliResult:
     """Materialize bundle relations into a DuckDB database."""
     try:
@@ -146,31 +154,43 @@ def serve(
 
 
 @mcp.tool(name="check")
-def mcp_check(path: str, exclude: ExcludePatterns = None) -> dict[str, object]:
+def mcp_check(path: str, exclude: RepeatableStrings = None) -> dict[str, object]:
     """Validate every Markdown file recursively as OKF v0.2."""
     return check_bundle(path, exclude or ())
 
 
 @mcp.tool(name="inventory")
-def mcp_inventory(path: str, exclude: ExcludePatterns = None) -> dict[str, object]:
+def mcp_inventory(path: str, exclude: RepeatableStrings = None) -> dict[str, object]:
     """Count concepts by type."""
     return inventory_bundle(path, exclude or ())
 
 
 @mcp.tool(name="graph")
-def mcp_graph(path: str, exclude: ExcludePatterns = None) -> dict[str, object]:
+def mcp_graph(path: str, exclude: RepeatableStrings = None) -> dict[str, object]:
     """Summarize resolved concept relationships."""
     return graph_bundle(path, exclude or ())
 
 
 @mcp.tool(name="schema")
-def mcp_schema(path: str, format: SchemaFormat = "json", exclude: ExcludePatterns = None) -> dict[str, object] | str:
-    """Export JSON Schema or Zod schemas for OKF concepts."""
-    return schema_bundle(path, format, exclude or ())
+def mcp_schema(
+    path: str,
+    format: SchemaFormat = "json",
+    infer_types: bool = False,
+    cast: RepeatableStrings = None,
+    exclude: RepeatableStrings = None,
+) -> dict[str, object] | str:
+    """Export string-first schemas, optionally inferring or declaring scalar types."""
+    return schema_bundle(
+        path,
+        format,
+        exclude or (),
+        infer_types=infer_types,
+        casts=cast or (),
+    )
 
 
 @mcp.tool(name="format_check")
-def mcp_format_check(path: str, exclude: ExcludePatterns = None) -> dict[str, object]:
+def mcp_format_check(path: str, exclude: RepeatableStrings = None) -> dict[str, object]:
     """Check mdformat style without modifying files."""
     return check_format(path, exclude or ())
 
