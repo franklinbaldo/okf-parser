@@ -45,8 +45,7 @@ def _parse_casts(specifications: Sequence[str]) -> dict[str, CastKind]:
         if not separator or not path or kind not in _CAST_KINDS:
             allowed = ", ".join(sorted(_CAST_KINDS))
             message = (
-                f"invalid cast {specification!r}; expected FIELD=TYPE, "
-                f"where TYPE is {allowed}"
+                f"invalid cast {specification!r}; expected FIELD=TYPE, where TYPE is {allowed}"
             )
             raise SchemaCastError(message)
         previous = casts.get(path)
@@ -311,17 +310,17 @@ def _schema_to_zod(schema: dict[str, Any], definitions: Mapping[str, Any]) -> st
     any_of = schema.get("anyOf")
     if isinstance(any_of, list):
         non_null = [
-            item
-            for item in any_of
-            if isinstance(item, dict) and item.get("type") != "null"
+            item for item in any_of if isinstance(item, dict) and item.get("type") != "null"
         ]
         nullable = len(non_null) != len(any_of)
         if len(non_null) == 1:
             rendered = _schema_to_zod(non_null[0], definitions)
         else:
-            rendered = "z.union([" + ", ".join(
-                _schema_to_zod(item, definitions) for item in non_null
-            ) + "])"
+            rendered = (
+                "z.union(["
+                + ", ".join(_schema_to_zod(item, definitions) for item in non_null)
+                + "])"
+            )
         return f"{rendered}.nullable()" if nullable else rendered
 
     schema_type = schema.get("type")
