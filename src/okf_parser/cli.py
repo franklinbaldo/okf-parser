@@ -17,10 +17,12 @@ from okf_parser.service import (
     export_duckdb,
     graph_bundle,
     inventory_bundle,
+    schema_bundle,
     write_format,
 )
 
 type McpTransport = Literal["stdio", "http", "sse"]
+type SchemaFormat = Literal["json", "zod"]
 # Cyclopts resolves annotations at runtime, so command signatures use builtin
 # generics rather than a name that only exists while type checking.
 type ExcludePatterns = list[str] | None
@@ -28,19 +30,22 @@ type ExcludePatterns = list[str] | None
 
 @dataclass(frozen=True, slots=True)
 class CliResult:
-    """A JSON payload and its intended process exit code."""
+    """A JSON payload or plain text string and its intended process exit code."""
 
-    payload: dict[str, object]
+    payload: dict[str, object] | str
     exit_code: int = 0
 
 
 def _render_cli_result(result: object) -> None:
-    """Render stable JSON and preserve command-specific exit status."""
+    """Render stable JSON/text and preserve command-specific exit status."""
     if not isinstance(result, CliResult):
         return
-    sys.stdout.write(
-        json.dumps(result.payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    )
+    if isinstance(result.payload, str):
+        sys.stdout.write(result.payload + "\n")
+    else:
+        sys.stdout.write(
+            json.dumps(result.payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        )
     if result.exit_code:
         raise SystemExit(result.exit_code)
 
@@ -76,6 +81,17 @@ def inventory(path: str, *, exclude: ExcludePatterns = None) -> CliResult:
 def graph(path: str, *, exclude: ExcludePatterns = None) -> CliResult:
     """Summarize the resolved concept graph with NetworkX."""
     return CliResult(graph_bundle(path, exclude or ()))
+
+
+@app.command
+def schema(
+    path: str,
+    *,
+    format: SchemaFormat = "json",
+    exclude: ExcludePatterns = None,
+) -> CliResult:
+    """Export JSON Schema or Zod schemas for OKF concepts."""
+    return CliResult(schema_bundle(path, format, exclude or ()))
 
 
 @app.command(name="format")
@@ -145,6 +161,12 @@ def mcp_inventory(path: str, exclude: ExcludePatterns = None) -> dict[str, objec
 def mcp_graph(path: str, exclude: ExcludePatterns = None) -> dict[str, object]:
     """Summarize resolved concept relationships."""
     return graph_bundle(path, exclude or ())
+
+
+@mcp.tool(name="schema")
+def mcp_schema(path: str, format: SchemaFormat = "json", exclude: ExcludePatterns = None) -> dict[str, object] | str:
+    """Export JSON Schema or Zod schemas for OKF concepts."""
+    return schema_bundle(path, format, exclude or ())
 
 
 @mcp.tool(name="format_check")

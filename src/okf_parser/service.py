@@ -11,6 +11,7 @@ import networkx as nx
 from okf_parser.bundle import load_bundle, validate_path
 from okf_parser.duckdb import attach_okf
 from okf_parser.formatting import FormatReport, format_path
+from okf_parser.schema_export import export_json_schema, export_zod_schema
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -54,6 +55,13 @@ def graph_bundle(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
         "strongly_connected_components": nx.number_strongly_connected_components(graph),
         "directed_acyclic": nx.is_directed_acyclic_graph(graph),
     }
+
+
+def schema_bundle(path: str, fmt: str = "json", exclude: Sequence[str] = ()) -> dict[str, object] | str:
+    """Export inferred JSON Schema or Zod definitions for Astro."""
+    if fmt == "zod":
+        return export_zod_schema(path, exclude)
+    return export_json_schema(path, exclude)
 
 
 def _format_payload(report: FormatReport) -> dict[str, object]:
