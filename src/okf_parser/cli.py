@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import dataclass
-from typing import Literal
+from typing import Annotated, Literal
 
-from cyclopts import App
+from cyclopts import App, Parameter
 from fastmcp import FastMCP
+from pydantic import Field
 
 from okf_parser.duckdb import BundleExportError
 from okf_parser.service import (
@@ -23,6 +24,8 @@ from okf_parser.service import (
 
 type McpTransport = Literal["stdio", "http", "sse"]
 type SchemaFormat = Literal["json", "zod"]
+type CliSchemaFormat = Annotated[SchemaFormat, Parameter(name="format")]
+type McpSchemaFormat = Annotated[SchemaFormat, Field(alias="format")]
 type RepeatableStrings = list[str] | None
 
 
@@ -85,7 +88,7 @@ def graph(path: str, *, exclude: RepeatableStrings = None) -> CliResult:
 def schema(
     path: str,
     *,
-    format: SchemaFormat = "json",
+    schema_format: CliSchemaFormat = "json",
     infer_types: bool = False,
     cast: RepeatableStrings = None,
     exclude: RepeatableStrings = None,
@@ -94,7 +97,7 @@ def schema(
     return CliResult(
         schema_bundle(
             path,
-            format,
+            schema_format,
             exclude or (),
             infer_types=infer_types,
             casts=cast or (),
@@ -174,7 +177,8 @@ def mcp_graph(path: str, exclude: RepeatableStrings = None) -> dict[str, object]
 @mcp.tool(name="schema")
 def mcp_schema(
     path: str,
-    format: SchemaFormat = "json",
+    *,
+    schema_format: McpSchemaFormat = "json",
     infer_types: bool = False,
     cast: RepeatableStrings = None,
     exclude: RepeatableStrings = None,
@@ -182,7 +186,7 @@ def mcp_schema(
     """Export string-first schemas, optionally inferring or declaring scalar types."""
     return schema_bundle(
         path,
-        format,
+        schema_format,
         exclude or (),
         infer_types=infer_types,
         casts=cast or (),
