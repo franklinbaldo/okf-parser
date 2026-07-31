@@ -210,7 +210,7 @@ def _field_annotation(
             else _scalar_annotation((), path, options)
         )
         if item_nullable:
-            item_annotation = cast("Any", item_annotation) | None
+            item_annotation = item_annotation | None
         return list[item_annotation]
 
     if any(isinstance(value, (dict, list)) for value in non_null):
