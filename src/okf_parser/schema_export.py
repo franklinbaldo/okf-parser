@@ -23,6 +23,12 @@ type FieldDefinition = tuple[Any, Any]
 _CAST_KINDS = frozenset({"string", "boolean", "integer", "number", "date", "datetime"})
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _IDENTIFIER_RE = re.compile(r"[^0-9A-Za-z_]+")
+_MISSING = object()
+_SIMPLE_ZOD = {
+    "boolean": "z.boolean()",
+    "integer": "z.number().int()",
+    "number": "z.number()",
+}
 
 
 class SchemaCastError(ValueError):
@@ -149,7 +155,7 @@ def _field_annotation(
     path: str,
     nested_name: str,
     options: _SchemaOptions,
-) -> Any:
+) -> object:
     non_null = [value for value in values if value is not None]
     if not non_null:
         return str
@@ -163,15 +169,16 @@ def _field_annotation(
 
     if all(isinstance(value, list) for value in non_null):
         items = [item for value in non_null for item in cast("list[object]", value)]
-        if not items:
-            item_annotation: Any = _scalar_annotation((), path, options)
-        else:
-            item_annotation = _field_annotation(
+        item_annotation: Any = (
+            _field_annotation(
                 items,
                 path=path,
                 nested_name=f"{nested_name}Item",
                 options=options,
             )
+            if items
+            else _scalar_annotation((), path, options)
+        )
         return list[item_annotation]
 
     if any(isinstance(value, (dict, list)) for value in non_null):
@@ -268,7 +275,8 @@ def build_pydantic_models(
     unused = set(options.casts) - options.used_casts
     if unused:
         fields = ", ".join(repr(item) for item in sorted(unused))
-        raise SchemaCastError(f"cast field was not found in the bundle: {fields}")
+        message = f"cast field was not found in the bundle: {fields}"
+        raise SchemaCastError(message)
     return models
 
 
@@ -302,56 +310,60 @@ def _resolve_ref(schema: dict[str, Any], definitions: Mapping[str, Any]) -> dict
     return resolved if isinstance(resolved, dict) else schema
 
 
+def _zod_union(any_of: list[Any], definitions: Mapping[str, Any]) -> str:
+    non_null = [
+        item for item in any_of if isinstance(item, dict) and item.get("type") != "null"
+    ]
+    nullable = len(non_null) != len(any_of)
+    if len(non_null) == 1:
+        rendered = _schema_to_zod(non_null[0], definitions)
+    else:
+        members = ", ".join(_schema_to_zod(item, definitions) for item in non_null)
+        rendered = f"z.union([{members}])"
+    return f"{rendered}.nullable()" if nullable else rendered
+
+
+def _zod_object(schema: dict[str, Any], definitions: Mapping[str, Any]) -> str:
+    properties = schema.get("properties")
+    property_map = properties if isinstance(properties, dict) else {}
+    required_value = schema.get("required")
+    required = set(required_value) if isinstance(required_value, list) else set()
+    rows: list[str] = []
+    for key, value in property_map.items():
+        child = value if isinstance(value, dict) else {}
+        rendered = _schema_to_zod(child, definitions)
+        if key not in required:
+            rendered += ".optional()"
+        rows.append(f"  {json.dumps(key, ensure_ascii=False)}: {rendered}")
+    return "z.object({\n" + ",\n".join(rows) + "\n})"
+
+
+def _zod_scalar(schema_type: object, schema_format: object) -> str:
+    if schema_type == "string" and schema_format == "date":
+        return "z.string().date()"
+    if schema_type == "string" and schema_format == "date-time":
+        return "z.string().datetime({ offset: true, local: true })"
+    return _SIMPLE_ZOD.get(schema_type, "z.string()")
+
+
 def _schema_to_zod(schema: dict[str, Any], definitions: Mapping[str, Any]) -> str:
     schema = _resolve_ref(schema, definitions)
-    if "const" in schema:
-        return f"z.literal({json.dumps(schema['const'], ensure_ascii=False)})"
+    constant = schema.get("const", _MISSING)
+    if constant is not _MISSING:
+        return f"z.literal({json.dumps(constant, ensure_ascii=False)})"
 
     any_of = schema.get("anyOf")
     if isinstance(any_of, list):
-        non_null = [
-            item for item in any_of if isinstance(item, dict) and item.get("type") != "null"
-        ]
-        nullable = len(non_null) != len(any_of)
-        if len(non_null) == 1:
-            rendered = _schema_to_zod(non_null[0], definitions)
-        else:
-            rendered = (
-                "z.union(["
-                + ", ".join(_schema_to_zod(item, definitions) for item in non_null)
-                + "])"
-            )
-        return f"{rendered}.nullable()" if nullable else rendered
+        return _zod_union(any_of, definitions)
 
     schema_type = schema.get("type")
-    if schema_type == "boolean":
-        return "z.boolean()"
-    if schema_type == "integer":
-        return "z.number().int()"
-    if schema_type == "number":
-        return "z.number()"
     if schema_type == "array":
         items = schema.get("items")
         item_schema = items if isinstance(items, dict) else {"type": "string"}
         return f"z.array({_schema_to_zod(item_schema, definitions)})"
     if schema_type == "object":
-        properties = schema.get("properties")
-        property_map = properties if isinstance(properties, dict) else {}
-        required_value = schema.get("required")
-        required = set(required_value) if isinstance(required_value, list) else set()
-        rows = []
-        for key, value in property_map.items():
-            child = value if isinstance(value, dict) else {}
-            rendered = _schema_to_zod(child, definitions)
-            if key not in required:
-                rendered += ".optional()"
-            rows.append(f"  {json.dumps(key, ensure_ascii=False)}: {rendered}")
-        return "z.object({\n" + ",\n".join(rows) + "\n})"
-    if schema_type == "string" and schema.get("format") == "date":
-        return "z.string().date()"
-    if schema_type == "string" and schema.get("format") == "date-time":
-        return "z.string().datetime({ offset: true, local: true })"
-    return "z.string()"
+        return _zod_object(schema, definitions)
+    return _zod_scalar(schema_type, schema.get("format"))
 
 
 def export_zod_schema(
