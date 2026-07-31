@@ -75,11 +75,14 @@ def _describe_frontmatter_error(exc: ValidationError) -> str:
 
 def _load_frontmatter(block: str) -> dict[str, YamlValue] | None:
     """Load one frontmatter block with every ordinary scalar preserved as text."""
+    loader = _StringScalarLoader(block)
     try:
-        value = yaml.load(block, Loader=_StringScalarLoader)
+        value = loader.get_single_data()
     except yaml.YAMLError as exc:
         msg = f"invalid YAML frontmatter: {exc}"
         raise DocumentParseError(msg) from exc
+    finally:
+        loader.dispose()
 
     if value is None:
         return None
