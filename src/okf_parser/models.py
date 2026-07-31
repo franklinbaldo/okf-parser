@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
 from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
 
-type YamlValue = (
-    str | bool | int | float | None | date | datetime | list[YamlValue] | dict[str, YamlValue]
-)
-"""Every value ``yaml.safe_load`` may produce inside OKF frontmatter."""
+type YamlValue = str | None | list[YamlValue] | dict[str, YamlValue]
+"""OKF frontmatter with mapping/list structure and scalar spelling preserved."""
 
 FRONTMATTER_ADAPTER: TypeAdapter[dict[str, YamlValue]] = TypeAdapter(dict[str, YamlValue])
 """Validates a loaded YAML mapping before any other code touches it."""
@@ -100,12 +97,8 @@ class ParsedDocument(BaseModel):
 
     @property
     def frontmatter_json(self) -> str:
-        """Deterministic JSON for the preserved frontmatter, dates included."""
-        return json.dumps(
-            FRONTMATTER_ADAPTER.dump_python(self.frontmatter, mode="json"),
-            ensure_ascii=False,
-            sort_keys=True,
-        )
+        """Deterministic JSON for the preserved frontmatter."""
+        return json.dumps(self.frontmatter, ensure_ascii=False, sort_keys=True)
 
     def _string_field(self, field: str) -> str | None:
         value = self.frontmatter.get(field)

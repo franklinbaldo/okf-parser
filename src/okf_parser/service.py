@@ -57,11 +57,28 @@ def graph_bundle(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
     }
 
 
-def schema_bundle(path: str, fmt: str = "json", exclude: Sequence[str] = ()) -> dict[str, object] | str:
-    """Export inferred JSON Schema or Zod definitions for Astro."""
+def schema_bundle(
+    path: str,
+    fmt: str = "json",
+    exclude: Sequence[str] = (),
+    *,
+    infer_types: bool = False,
+    casts: Sequence[str] = (),
+) -> dict[str, object] | str:
+    """Export string-first JSON Schema or Zod definitions for Astro."""
     if fmt == "zod":
-        return export_zod_schema(path, exclude)
-    return export_json_schema(path, exclude)
+        return export_zod_schema(
+            path,
+            exclude,
+            infer_types=infer_types,
+            casts=casts,
+        )
+    return export_json_schema(
+        path,
+        exclude,
+        infer_types=infer_types,
+        casts=casts,
+    )
 
 
 def _format_payload(report: FormatReport) -> dict[str, object]:

@@ -1,51 +1,187 @@
-"""Tests for JSON Schema and Zod export services using Pydantic."""
+"""Tests for string-first JSON Schema and Zod export."""
 
-from pathlib import Path
-from okf_parser.schema_export import export_json_schema, export_zod_schema, build_pydantic_models
+from __future__ import annotations
 
-def test_build_pydantic_models(tmp_path: Path) -> None:
-    concept_dir = tmp_path / "concepts"
-    concept_dir.mkdir()
-    (concept_dir / "sample.md").write_text(
-        "---\ntype: test_type\ntitle: Sample\nactive: true\ncount: 42\ntags: [a, b]\n---\nBody",
-        encoding="utf-8",
+from typing import TYPE_CHECKING
+
+import pytest
+
+from okf_parser.schema_export import (
+    SchemaCastError,
+    SchemaNameCollisionError,
+    export_json_schema,
+    export_zod_schema,
+)
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+def _write_concept(path: Path, frontmatter: str) -> None:
+    path.write_text(f"---\n{frontmatter}---\nBody\n", encoding="utf-8")
+
+
+def test_schema_keeps_scalars_as_strings_by_default(tmp_path: Path) -> None:
+    _write_concept(
+        tmp_path / "sample.md",
+        "type: test_type\nactive: true\ncount: 42\ncreated: 2026-01-01\n",
     )
 
-    models = build_pydantic_models(str(tmp_path))
-    assert "test_type" in models
-    model_cls = models["test_type"]
-    assert model_cls.__name__ == "TestTypeConcept"
+    schema = export_json_schema(str(tmp_path))["schemas"]["test_type"]
+    properties = schema["properties"]
+
+    assert properties["active"]["type"] == "string"
+    assert properties["count"]["type"] == "string"
+    assert properties["created"]["type"] == "string"
+    assert properties["type"]["const"] == "test_type"
 
 
-def test_export_json_schema_pydantic(tmp_path: Path) -> None:
-    concept_dir = tmp_path / "concepts"
-    concept_dir.mkdir()
-    (concept_dir / "sample.md").write_text(
-        "---\ntype: test_type\ntitle: Sample\nactive: true\ncount: 42\ntags: [a, b]\n---\nBody",
-        encoding="utf-8",
+def test_schema_infers_types_from_every_observation_with_pandas(tmp_path: Path) -> None:
+    _write_concept(
+        tmp_path / "one.md",
+        "type: test_type\nactive: true\ncount: 42\ncreated: 2026-01-01\n",
+    )
+    _write_concept(
+        tmp_path / "two.md",
+        "type: test_type\nactive: false\ncount: 7\ncreated: 2026-02-01\n",
     )
 
-    report = export_json_schema(str(tmp_path))
-    assert report["total_types"] == 1
-    schemas = report["schemas"]
-    assert "test_type" in schemas
+    report = export_json_schema(str(tmp_path), infer_types=True)
+    properties = report["schemas"]["test_type"]["properties"]
 
-    schema = schemas["test_type"]
-    assert schema["title"] == "TestTypeConcept"
-    assert "properties" in schema
-    props = schema["properties"]
-    assert props["type"]["const"] == "test_type"
+    assert report["inferred_types"] is True
+    assert properties["active"]["type"] == "boolean"
+    assert properties["count"]["type"] == "integer"
+    assert properties["created"] == {
+        "format": "date",
+        "title": "Created",
+        "type": "string",
+    }
 
 
-def test_export_zod_schema_pydantic(tmp_path: Path) -> None:
-    concept_dir = tmp_path / "concepts"
-    concept_dir.mkdir()
-    (concept_dir / "sample.md").write_text(
-        "---\ntype: test_type\ntitle: Sample\n---\nBody",
-        encoding="utf-8",
+def test_inference_falls_back_to_string_when_one_value_is_incompatible(tmp_path: Path) -> None:
+    _write_concept(tmp_path / "one.md", "type: test_type\ncount: 42\n")
+    _write_concept(tmp_path / "two.md", "type: test_type\ncount: unknown\n")
+
+    schema = export_json_schema(str(tmp_path), infer_types=True)["schemas"]["test_type"]
+
+    assert schema["properties"]["count"]["type"] == "string"
+
+
+def test_explicit_cast_overrides_default_and_is_strict(tmp_path: Path) -> None:
+    _write_concept(tmp_path / "one.md", "type: test_type\ncount: 42\n")
+    _write_concept(tmp_path / "two.md", "type: test_type\ncount: 7\n")
+
+    report = export_json_schema(str(tmp_path), casts=["count=integer"])
+
+    assert report["casts"] == ["count=integer"]
+    assert report["schemas"]["test_type"]["properties"]["count"]["type"] == "integer"
+
+    with pytest.raises(SchemaCastError, match="cannot cast 'count' to date"):
+        export_json_schema(str(tmp_path), casts=["count=date"])
+
+
+def test_unknown_or_invalid_cast_is_reported(tmp_path: Path) -> None:
+    _write_concept(tmp_path / "sample.md", "type: test_type\ncount: 42\n")
+
+    with pytest.raises(SchemaCastError, match="cast field was not found"):
+        export_json_schema(str(tmp_path), casts=["missing=integer"])
+    with pytest.raises(SchemaCastError, match="expected FIELD=TYPE"):
+        export_json_schema(str(tmp_path), casts=["count=uuid"])
+
+
+def test_requiredness_and_nullability_are_independent(tmp_path: Path) -> None:
+    _write_concept(
+        tmp_path / "one.md",
+        "type: test_type\noptional_value: present\nnullable_value: null\n",
+    )
+    _write_concept(
+        tmp_path / "two.md",
+        "type: test_type\nnullable_value: present\n",
     )
 
-    zod_code = export_zod_schema(str(tmp_path))
-    assert "import { z } from 'astro:content';" in zod_code
-    assert "export const TestTypeSchema = z.object({" in zod_code
-    assert 'type: z.literal("test_type")' in zod_code
+    schema = export_json_schema(str(tmp_path))["schemas"]["test_type"]
+    required = set(schema["required"])
+    optional_property = schema["properties"]["optional_value"]
+    nullable_property = schema["properties"]["nullable_value"]
+
+    assert "optional_value" not in required
+    assert optional_property["type"] == "string"
+    assert "anyOf" not in optional_property
+
+    assert "nullable_value" in required
+    assert {item.get("type") for item in nullable_property["anyOf"]} == {
+        "null",
+        "string",
+    }
+
+    zod = export_zod_schema(str(tmp_path))
+
+    assert '"optional_value": z.string().optional()' in zod
+    assert '"nullable_value": z.string().nullable()' in zod
+    assert '"nullable_value": z.string().nullable().optional()' not in zod
+
+
+def test_list_items_are_inferred_together(tmp_path: Path) -> None:
+    _write_concept(tmp_path / "one.md", "type: test_type\nvalues: [1, 2]\n")
+    _write_concept(tmp_path / "two.md", "type: test_type\nvalues: [3]\n")
+
+    schema = export_json_schema(str(tmp_path), infer_types=True)["schemas"]["test_type"]
+
+    assert schema["properties"]["values"]["items"]["type"] == "integer"
+
+
+def test_nullability_inside_lists_is_preserved(tmp_path: Path) -> None:
+    _write_concept(
+        tmp_path / "sample.md",
+        "type: test_type\nvalues: [null, 1]\nobjects:\n  - null\n  - name: Example\n",
+    )
+
+    schema = export_json_schema(str(tmp_path), infer_types=True)["schemas"]["test_type"]
+    scalar_items = schema["properties"]["values"]["items"]["anyOf"]
+    object_items = schema["properties"]["objects"]["items"]["anyOf"]
+
+    assert {item.get("type") for item in scalar_items} == {"integer", "null"}
+    assert any("$ref" in item for item in object_items)
+    assert any(item.get("type") == "null" for item in object_items)
+
+    zod = export_zod_schema(str(tmp_path), infer_types=True)
+
+    assert '"values": z.array(z.number().int().nullable())' in zod
+    assert '"objects": z.array(z.object({' in zod
+    assert "}).nullable())" in zod
+
+
+def test_unicode_names_are_preserved_and_collisions_are_errors(tmp_path: Path) -> None:
+    _write_concept(tmp_path / "accent.md", "type: ação\n")
+    _write_concept(tmp_path / "hyphen.md", "type: a-o\n")
+    _write_concept(tmp_path / "japanese.md", "type: 日本\n")
+
+    zod = export_zod_schema(str(tmp_path))
+
+    assert "export const AçãoSchema =" in zod
+    assert "export const AOSchema =" in zod
+    assert "export const 日本Schema =" in zod
+
+    collision = tmp_path / "collision"
+    collision.mkdir()
+    _write_concept(collision / "hyphen.md", "type: a-o\n")
+    _write_concept(collision / "underscore.md", "type: a_o\n")
+
+    with pytest.raises(SchemaNameCollisionError, match="both normalize to 'AOConcept'"):
+        export_json_schema(str(collision))
+
+
+def test_zod_uses_the_same_inferred_schema(tmp_path: Path) -> None:
+    _write_concept(
+        tmp_path / "sample.md",
+        "type: test_type\nactive: true\ncount: 42\ncreated: 2026-01-01\n",
+    )
+
+    zod = export_zod_schema(str(tmp_path), infer_types=True)
+
+    assert "export const TestTypeSchema = z.object({" in zod
+    assert '"active": z.boolean()' in zod
+    assert '"count": z.number().int()' in zod
+    assert '"created": z.string().date()' in zod
+    assert '"type": z.literal("test_type")' in zod

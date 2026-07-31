@@ -71,20 +71,59 @@ def test_link_extraction_uses_commonmark_tokens() -> None:
     ]
 
 
-def test_non_string_frontmatter_key_is_a_parse_error(tmp_path: Path) -> None:
+def test_ordinary_yaml_scalars_preserve_their_authored_spelling(tmp_path: Path) -> None:
+    path = tmp_path / "concept.md"
+    path.write_text(
+        "---\n"
+        "type: Reference\n"
+        "number: 0012\n"
+        "active: false\n"
+        "created: 2026-01-01\n"
+        "nothing: null\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    parsed = parse_document(path)
+
+    assert parsed.frontmatter == {
+        "type": "Reference",
+        "number": "0012",
+        "active": "false",
+        "created": "2026-01-01",
+        "nothing": None,
+    }
+
+
+def test_yaml_merge_keys_keep_structure_and_string_scalars(tmp_path: Path) -> None:
+    path = tmp_path / "concept.md"
+    path.write_text(
+        "---\n"
+        "type: Reference\n"
+        "defaults: &defaults\n"
+        "  active: true\n"
+        "item:\n"
+        "  <<: *defaults\n"
+        "  title: Example\n"
+        "---\n",
+        encoding="utf-8",
+    )
+
+    parsed = parse_document(path)
+
+    assert parsed.frontmatter["item"] == {
+        "active": "true",
+        "title": "Example",
+    }
+
+
+def test_plain_scalar_mapping_keys_are_strings(tmp_path: Path) -> None:
     path = tmp_path / "concept.md"
     path.write_text("---\ntype: Reference\n2026-01-01: released\n---\n", encoding="utf-8")
 
-    with pytest.raises(DocumentParseError, match="keys must be strings"):
-        parse_document(path)
+    parsed = parse_document(path)
 
-
-def test_nested_non_string_frontmatter_key_is_a_parse_error(tmp_path: Path) -> None:
-    path = tmp_path / "concept.md"
-    path.write_text("---\ntype: Reference\nmeta:\n  2026-01-01: released\n---\n", encoding="utf-8")
-
-    with pytest.raises(DocumentParseError, match="keys must be strings"):
-        parse_document(path)
+    assert parsed.frontmatter["2026-01-01"] == "released"
 
 
 def test_cyclic_yaml_anchor_is_a_parse_error_not_a_recursion_error(tmp_path: Path) -> None:
@@ -115,13 +154,18 @@ def test_blank_frontmatter_block_is_still_valid(tmp_path: Path) -> None:
     assert parsed.body == "# Body\n"
 
 
-def test_frontmatter_dates_serialize_as_iso_strings(tmp_path: Path) -> None:
+def test_frontmatter_json_preserves_scalar_strings(tmp_path: Path) -> None:
     path = tmp_path / "concept.md"
-    path.write_text("---\ntype: Reference\ncreated: 2026-01-01\n---\n", encoding="utf-8")
+    path.write_text(
+        "---\ntype: Reference\ncreated: 2026-01-01\nnumber: 0012\n---\n",
+        encoding="utf-8",
+    )
 
     parsed = parse_document(path)
 
-    assert parsed.frontmatter_json == '{"created": "2026-01-01", "type": "Reference"}'
+    assert parsed.frontmatter_json == (
+        '{"created": "2026-01-01", "number": "0012", "type": "Reference"}'
+    )
 
 
 def test_malformed_url_target_does_not_raise(tmp_path: Path) -> None:
