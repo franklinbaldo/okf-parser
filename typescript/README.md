@@ -6,9 +6,9 @@ description: Native TypeScript package usage and capability scope
 
 # okf-parser for TypeScript
 
-Native ESM implementation of the OKF parser and validator. It follows the same
-observable contract as the Python package while using an idiomatic immutable
-TypeScript core.
+Native ESM implementation of the OKF parser, validator and formatter. It follows
+the same observable contract as the Python package while using an idiomatic
+immutable TypeScript core.
 
 ```bash
 npm install okf-parser
@@ -22,6 +22,31 @@ const parsed = parseDocumentContent(`---\ntype: Reference\ncount: 0012\n---\n`);
 const report = await checkBundle("./knowledge");
 const zod = await exportZod("./knowledge", { inferTypes: true });
 ```
+
+## Markdown formatting
+
+Formatting is read-only unless `--write` is explicit:
+
+```bash
+npx --package okf-parser okf-parser-ts format ./knowledge
+npx --package okf-parser okf-parser-ts format ./knowledge --write
+```
+
+The library exposes both the pure one-document formatter and the filesystem
+operation:
+
+```ts
+import { formatMarkdown, formatPath } from "okf-parser";
+
+const canonical = formatMarkdown("# Heading\n\n-   item\n");
+const report = await formatPath("./knowledge", { write: true });
+```
+
+The formatter parses CommonMark, GFM and YAML frontmatter into a public mdast
+syntax tree, serializes canonically, and refuses a rewrite when the protected
+block signature changes. Ordered lists are consecutive without zero-padding,
+code/frontmatter/raw HTML content is protected, and all candidate files are
+formatted before the first write.
 
 ## MCP server
 
@@ -72,7 +97,6 @@ import { exportDuckDb } from "okf-parser-duckdb";
 await exportDuckDb("./knowledge", { database: "knowledge.duckdb" });
 ```
 
-Parsing, validation, inventory, graph summaries, JSON Schema, Zod generation and
-MCP are stable capabilities in this package. DuckDB materialization is provided
-by the optional `okf-parser-duckdb` sibling package. Formatter support remains
-`not_implemented` in TypeScript.
+Parsing, validation, formatting, inventory, graph summaries, JSON Schema, Zod
+generation and MCP are stable capabilities in this package. DuckDB
+materialization is provided by the optional `okf-parser-duckdb` sibling package.
