@@ -17,6 +17,11 @@
       "kind": "integer"
     },
     {
+      "id": "non-ascii-digits-are-not-integers",
+      "values": ["١٢"],
+      "kind": "string"
+    },
+    {
       "id": "decimal-and-exponent",
       "values": ["1.5", "2e3", "-0.25"],
       "kind": "number"
@@ -39,6 +44,11 @@
     {
       "id": "impossible-calendar-date",
       "values": ["2023-02-29"],
+      "kind": "string"
+    },
+    {
+      "id": "non-ascii-date-digits-are-not-dates",
+      "values": ["٢٠٢٤-٠١-٠١"],
       "kind": "string"
     },
     {
@@ -101,6 +111,12 @@
     {
       "id": "nan-not-number",
       "values": ["NaN"],
+      "kind": "number",
+      "valid": false
+    },
+    {
+      "id": "non-ascii-digits-not-number",
+      "values": ["١٢"],
       "kind": "number",
       "valid": false
     }
