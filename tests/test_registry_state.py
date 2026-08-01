@@ -162,13 +162,9 @@ def test_absent_version_distinguishes_an_existing_package() -> None:
         PYPI_VERSION_URL: _result(PYPI_VERSION_URL, 404),
         PYPI_PACKAGE_URL: _result(PYPI_PACKAGE_URL, 200, {"info": {"name": "okf-parser"}}),
         NPM_PARSER_VERSION_URL: _result(NPM_PARSER_VERSION_URL, 404),
-        NPM_PARSER_PACKAGE_URL: _result(
-            NPM_PARSER_PACKAGE_URL, 200, {"name": "okf-parser"}
-        ),
+        NPM_PARSER_PACKAGE_URL: _result(NPM_PARSER_PACKAGE_URL, 200, {"name": "okf-parser"}),
         NPM_DUCKDB_VERSION_URL: _result(NPM_DUCKDB_VERSION_URL, 404),
-        NPM_DUCKDB_PACKAGE_URL: _result(
-            NPM_DUCKDB_PACKAGE_URL, 200, {"name": "okf-parser-duckdb"}
-        ),
+        NPM_DUCKDB_PACKAGE_URL: _result(NPM_DUCKDB_PACKAGE_URL, 200, {"name": "okf-parser-duckdb"}),
     }
     report = inspect_registry_state(_manifest(), fetch=_fetcher(routes))
     assert [entry["package_exists"] for entry in _entries(report)] == [True, True, True]
