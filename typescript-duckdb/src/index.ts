@@ -104,7 +104,7 @@ async function replaceConcepts(
       "concept_type VARCHAR NOT NULL, title VARCHAR, description VARCHAR, " +
       "frontmatter_json VARCHAR NOT NULL, body VARCHAR NOT NULL)",
   );
-  const appender = await connection.createAppender(schema, "concepts");
+  const appender = await connection.createAppender("concepts", schema);
   try {
     for (const row of bundle.concepts) {
       appender.appendVarchar(row.conceptId);
@@ -134,7 +134,7 @@ async function replaceLinks(
       "source_id VARCHAR NOT NULL, raw_target VARCHAR NOT NULL, target_id VARCHAR, " +
       "exists BOOLEAN NOT NULL, origin VARCHAR NOT NULL)",
   );
-  const appender = await connection.createAppender(schema, "links");
+  const appender = await connection.createAppender("links", schema);
   try {
     for (const row of bundle.links) {
       appender.appendVarchar(row.sourceId);
@@ -160,7 +160,7 @@ async function replaceReserved(
     `CREATE TABLE ${table} (` +
       "path VARCHAR NOT NULL, filename VARCHAR NOT NULL, body VARCHAR NOT NULL)",
   );
-  const appender = await connection.createAppender(schema, "reserved");
+  const appender = await connection.createAppender("reserved", schema);
   try {
     for (const row of bundle.reserved) {
       appender.appendVarchar(row.path);
@@ -193,7 +193,7 @@ async function replaceDiagnostics(
       "code VARCHAR NOT NULL, severity VARCHAR NOT NULL, path VARCHAR NOT NULL, " +
       "message VARCHAR NOT NULL)",
   );
-  const appender = await connection.createAppender(schema, "diagnostics");
+  const appender = await connection.createAppender("diagnostics", schema);
   try {
     for (const row of orderedDiagnostics(bundle.diagnostics)) {
       appender.appendVarchar(row.code);
