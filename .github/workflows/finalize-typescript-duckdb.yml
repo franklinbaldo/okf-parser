@@ -80,6 +80,7 @@ jobs:
         run: |
           set -euo pipefail
           rm .github/workflows/finalize-typescript-duckdb.yml
+          rm .github/workflows/diagnose-typescript-duckdb.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add \
@@ -100,6 +101,8 @@ jobs:
             typescript-duckdb/tsconfig.json \
             typescript-duckdb/tsconfig.build.json \
             uv.lock
-          git add -u .github/workflows/finalize-typescript-duckdb.yml
+          git add -u \
+            .github/workflows/finalize-typescript-duckdb.yml \
+            .github/workflows/diagnose-typescript-duckdb.yml
           git commit -m "feat(ts): add optional DuckDB adapter"
           git push origin HEAD:feat/typescript-duckdb
