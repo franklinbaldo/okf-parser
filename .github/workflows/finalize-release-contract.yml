@@ -99,6 +99,7 @@ jobs:
           rm -rf release
           mkdir -p release/python release/npm
           uv build --out-dir release/python
+          rm -f release/python/.gitignore
           (cd typescript && npm pack --pack-destination ../release/npm --silent)
           (cd typescript-duckdb && npm pack --pack-destination ../release/npm --silent)
           python scripts/release_contract.py build-manifest \
