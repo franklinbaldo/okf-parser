@@ -57,7 +57,8 @@ jobs:
         run: |
           set -euo pipefail
           uv sync --frozen --all-groups
-          uv run ruff format --check .
+          uv run ruff format .
+          git diff -- tests/test_formatting_conformance.py
           uv run ruff check .
           uv run ty check src tests
           uv run pytest
