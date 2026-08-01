@@ -1,3 +1,5 @@
+"""Cross-runtime conformance tests for exact schema scalar inference."""
+
 from __future__ import annotations
 
 import json
