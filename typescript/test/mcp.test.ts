@@ -61,14 +61,15 @@ test("returns structured validation and schema results", async () => {
 
 test("reports domain failures as tool errors without closing the session", async () => {
   const client = await connectedClient();
+  const missingPath = "/path/that/does/not/exist";
 
   const failed = await client.callTool({
     name: "check",
-    arguments: { path: "/path/that/does/not/exist" },
+    arguments: { path: missingPath },
   });
   expect(failed.isError).toBe(true);
   expect(failed.content).toEqual([
-    expect.objectContaining({ type: "text", text: expect.stringContaining("not a directory") }),
+    expect.objectContaining({ type: "text", text: expect.stringContaining(missingPath) }),
   ]);
 
   await expect(client.listTools()).resolves.toHaveProperty("tools");
