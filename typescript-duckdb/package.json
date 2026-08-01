@@ -1,7 +1,7 @@
 {
-  "name": "okf-parser",
+  "name": "okf-parser-duckdb",
   "version": "0.10.0",
-  "description": "Native TypeScript parser, validator, graph inspector, schema exporter, and MCP server for Open Knowledge Format bundles",
+  "description": "DuckDB materialization adapter for the TypeScript okf-parser package",
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -9,26 +9,18 @@
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./schema": {
-      "types": "./dist/schema.d.ts",
-      "import": "./dist/schema.js"
-    },
-    "./mcp": {
-      "types": "./dist/mcp.d.ts",
-      "import": "./dist/mcp.js"
-    },
     "./package.json": "./package.json"
   },
   "bin": {
-    "okf-parser-ts": "./dist/cli.js",
-    "okf-parser-ts-mcp": "./dist/mcp-cli.js"
+    "okf-parser-ts-duckdb": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -38,31 +30,27 @@
     "prepack": "npm run build"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.30.0",
-    "markdown-it": "^14.1.0",
-    "yaml": "^2.8.1",
-    "zod": "^4.0.0"
+    "@duckdb/node-api": "1.5.5-r.1"
+  },
+  "peerDependencies": {
+    "okf-parser": "^0.10.0"
   },
   "devDependencies": {
-    "@types/markdown-it": "^14.1.2",
     "@types/node": "^24.0.0",
+    "okf-parser": "file:../typescript",
     "typescript": "^5.9.0",
     "vitest": "^3.2.4"
   },
   "keywords": [
     "okf",
     "open-knowledge-format",
-    "markdown",
-    "knowledge-graph",
-    "json-schema",
-    "zod",
-    "mcp",
-    "model-context-protocol",
+    "duckdb",
+    "analytics",
     "typescript"
   ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/franklinbaldo/okf-parser.git",
-    "directory": "typescript"
+    "directory": "typescript-duckdb"
   }
 }

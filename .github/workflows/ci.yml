@@ -55,13 +55,15 @@ jobs:
             exit 1
           fi
 
-          if [[ -f typescript/package.json ]]; then
-            typescript_version=$(sed -n 's/^[[:space:]]*"version": "\([^"]*\)",$/\1/p' typescript/package.json)
-            if [[ "$typescript_version" != "$head_version" ]]; then
-              echo "::error file=typescript/package.json::A versão npm $typescript_version difere da versão Python $head_version."
-              exit 1
+          for manifest in typescript/package.json typescript-duckdb/package.json; do
+            if [[ -f "$manifest" ]]; then
+              package_version=$(sed -n 's/^[[:space:]]*"version": "\([^"]*\)",$/\1/p' "$manifest")
+              if [[ "$package_version" != "$head_version" ]]; then
+                echo "::error file=$manifest::A versão npm $package_version difere da versão Python $head_version."
+                exit 1
+              fi
             fi
-          fi
+          done
 
           expected_changelog="changelog/$head_version.md"
           mapfile -t added_changelogs < <(
@@ -167,3 +169,56 @@ jobs:
           EXPECTED_VERSION="$expected_version" node --input-type=module -e "import('okf-parser').then(({ capabilityManifest }) => { if (capabilityManifest.protocol_version !== process.env.EXPECTED_VERSION) process.exit(1) })"
           ./node_modules/.bin/okf-parser-ts --help >/dev/null
           node "$GITHUB_WORKSPACE/typescript/scripts/smoke-mcp-stdio.mjs" ./node_modules/.bin/okf-parser-ts-mcp
+
+  typescript-duckdb-quality:
+    name: TypeScript DuckDB / Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: |
+            typescript/package-lock.json
+            typescript-duckdb/package-lock.json
+
+      - name: Build the parser package
+        run: |
+          npm ci --prefix typescript
+          npm run build --prefix typescript
+
+      - name: Install adapter dependencies
+        run: npm ci --prefix typescript-duckdb
+
+      - name: Check adapter TypeScript
+        run: npm run check --prefix typescript-duckdb
+
+      - name: Run adapter integration tests
+        run: npm test --prefix typescript-duckdb
+
+      - name: Build adapter ESM and declarations
+        run: npm run build --prefix typescript-duckdb
+
+      - name: Pack both packages and install into a clean project
+        shell: bash
+        run: |
+          set -euo pipefail
+          parser_tarball=$(cd typescript && npm pack --pack-destination "$RUNNER_TEMP" --silent)
+          adapter_tarball=$(cd typescript-duckdb && npm pack --pack-destination "$RUNNER_TEMP" --silent)
+          mkdir "$RUNNER_TEMP/duckdb-consumer"
+          cd "$RUNNER_TEMP/duckdb-consumer"
+          npm init -y >/dev/null
+          npm install --ignore-scripts "$RUNNER_TEMP/$parser_tarball" >/dev/null
+          npm install --ignore-scripts "$RUNNER_TEMP/$adapter_tarball" >/dev/null
+          mkdir knowledge
+          printf '%s\n' '---' 'type: Node' '---' '# Node' > knowledge/node.md
+          ./node_modules/.bin/okf-parser-ts-duckdb knowledge --database bundle.duckdb > report.json
+          node --input-type=module -e "import('okf-parser-duckdb').then(async ({ exportDuckDb }) => { const result = await exportDuckDb('knowledge', { database: 'second.duckdb' }); if (result.concept_count !== 1) process.exit(1) })"
