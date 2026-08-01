@@ -1,0 +1,154 @@
+name: Refine TypeScript contract
+
+on:
+  push:
+    branches:
+      - feat/typescript-core
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/typescript-core
+
+      - name: Apply locale-independent ordering and lexical inference
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          core_path = Path("typescript/src/core.ts")
+          core = core_path.read_text(encoding="utf-8")
+          core = core.replace(
+              'import { parseDocument as parseYamlDocument } from "yaml";\n',
+              'import { parseDocument as parseYamlDocument } from "yaml";\n\n'
+              'import { isIsoDateLexeme } from "./lexemes.js";\n'
+              'import { compareText, compareTextTuple } from "./ordering.js";\n',
+          )
+          core = core.replace(
+              '.sort(([left], [right]) => left.localeCompare(right, "en"))',
+              '.sort(([left], [right]) => compareText(left, right))',
+          )
+          core = core.replace(
+              'entries.sort((left, right) => left.name.localeCompare(right.name, "en"));',
+              'entries.sort((left, right) => compareText(left.name, right.name));',
+          )
+          core = core.replace(
+              'output.sort((left, right) => left.localeCompare(right, "en"))',
+              'output.sort(compareText)',
+          )
+          core = core.replace(
+              '''  diagnostics.sort((left, right) =>
+            [left.path, left.severity, left.code, left.message]
+              .join("\\u0000")
+              .localeCompare([right.path, right.severity, right.code, right.message].join("\\u0000"), "en"),
+          );''',
+              '''  diagnostics.sort((left, right) =>
+            compareTextTuple(
+              [left.path, left.severity, left.code, left.message],
+              [right.path, right.severity, right.code, right.message],
+            ),
+          );''',
+          )
+          core = core.replace(
+              'for (const targets of result.values()) targets.sort((left, right) => left.localeCompare(right, "en"));',
+              'for (const targets of result.values()) targets.sort(compareText);',
+          )
+          core, removed = re.subn(
+              r'function isRealIsoDate\(value: string\): boolean \{.*?\n\}\n\n(?=function validateIndex)',
+              '',
+              core,
+              flags=re.S,
+          )
+          if removed != 1:
+              raise SystemExit(f"expected one legacy date validator, found {removed}")
+          core = core.replace('!isRealIsoDate(heading)', '!isIsoDateLexeme(heading)')
+          if "localeCompare" in core or "isRealIsoDate" in core:
+              raise SystemExit("legacy locale/date logic remains in core.ts")
+          core_path.write_text(core, encoding="utf-8")
+
+          schema_path = Path("typescript/src/schema.ts")
+          schema = schema_path.read_text(encoding="utf-8")
+          schema = schema.replace(
+              '''import {
+            type Bundle,
+            type FrontmatterValue,
+            type LoadOptions,
+            OkfParserError,
+            loadBundle,
+          } from "./core.js";
+
+          export type CastKind = "string" | "boolean" | "integer" | "number" | "date" | "datetime";''',
+              '''import {
+            type Bundle,
+            type FrontmatterValue,
+            type LoadOptions,
+            OkfParserError,
+            loadBundle,
+          } from "./core.js";
+          import {
+            type LexemeKind,
+            canClassifyAs,
+            classifyLexemes,
+          } from "./lexemes.js";
+          import { compareText } from "./ordering.js";
+
+          export type CastKind = LexemeKind;''',
+          )
+          for line in (
+              'const INTEGER_RE = /^[+-]?\\d+$/u;\n',
+              'const NUMBER_RE = /^[+-]?(?:(?:\\d+(?:\\.\\d*)?)|(?:\\.\\d+))(?:[eE][+-]?\\d+)?$/u;\n',
+              'const DATE_RE = /^(\\d{4})-(\\d{2})-(\\d{2})$/u;\n',
+              'const DATETIME_RE = /^\\d{4}-\\d{2}-\\d{2}[Tt]\\d{2}:\\d{2}(?::\\d{2}(?:\\.\\d+)?)?(?:[Zz]|[+-]\\d{2}:\\d{2})?$/u;\n',
+          ):
+              schema = schema.replace(line, '')
+          schema, removed = re.subn(
+              r'function realDate\(value: string\): boolean \{.*?\n\}\n\n(?=function scalarContract)',
+              '',
+              schema,
+              flags=re.S,
+          )
+          if removed != 1:
+              raise SystemExit(f"expected one legacy inference block, found {removed}")
+          schema = schema.replace('canCast(values, explicit)', 'canClassifyAs(values, explicit)')
+          schema = schema.replace('canCast([value], explicit)', 'canClassifyAs([value], explicit)')
+          schema = schema.replace('classify(values)', 'classifyLexemes(values)')
+          schema = schema.replace(
+              '.sort((left, right) => left.localeCompare(right, "en"))',
+              '.sort(compareText)',
+          )
+          schema = schema.replace(
+              '.sort(([left], [right]) => left.localeCompare(right, "en"))',
+              '.sort(([left], [right]) => compareText(left, right))',
+          )
+          schema = schema.replace(
+              '''function titleFor(name: string): string {
+            return name.length === 0 ? name : `${name[0]?.toUpperCase() ?? ""}${name.slice(1)}`;
+          }''',
+              '''function titleFor(name: string): string {
+            return name
+              .replaceAll("_", " ")
+              .replace(/(^|\\s)(\\p{L})/gu, (_, prefix: string, letter: string) =>
+                `${prefix}${letter.toUpperCase()}`,
+              );
+          }''',
+          )
+          forbidden = ("localeCompare", "Date.parse", "Number.isFinite", "function classify(", "function canCast(")
+          if any(item in schema for item in forbidden):
+              raise SystemExit("legacy inference or locale logic remains in schema.ts")
+          schema_path.write_text(schema, encoding="utf-8")
+          PY
+
+          rm .github/workflows/refine-typescript-contract.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add typescript/src/core.ts typescript/src/schema.ts .github/workflows/refine-typescript-contract.yml
+          git commit -m "refactor(ts): make ordering and inference deterministic"
+          git push origin HEAD:feat/typescript-core
