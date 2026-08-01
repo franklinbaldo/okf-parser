@@ -10,6 +10,7 @@ on:
       - "rfcs/0003-resumable-multi-registry-release.md"
       - "scripts/**"
       - "tests/test_release_contract.py"
+      - "tests/test_registry_state.py"
       - "typescript/package.json"
       - "typescript/package-lock.json"
       - "typescript/src/version.ts"
@@ -164,6 +165,9 @@ jobs:
       - name: Re-verify exact artifact bytes
         run: python scripts/release_contract.py verify-local --manifest release/manifest.json
 
+      - name: Inspect public registry state
+        run: python -m scripts.registry_state --manifest release/manifest.json --output release/registry-state.json
+
       - name: Write release summary
         shell: bash
         run: |
@@ -172,6 +176,7 @@ jobs:
           from pathlib import Path
 
           manifest = json.loads(Path("release/manifest.json").read_text(encoding="utf-8"))
+          registry = json.loads(Path("release/registry-state.json").read_text(encoding="utf-8"))
           print(f"## Release dry run {manifest['version']}")
           print()
           print(f"Source: `{manifest['repository']}@{manifest['commit']}`")
@@ -180,6 +185,21 @@ jobs:
           print("|---|---:|---|")
           for artifact in manifest["artifacts"]:
               print(f"| `{artifact['path']}` | {artifact['size']} | `{artifact['sha256']}` |")
+          print()
+          print("## Public registry preflight")
+          print()
+          print("| Registry | Package | State | Package exists | Action |")
+          print("|---|---|---|---|---|")
+          actions = {
+              (item["registry"], item["package"]): item["action"]
+              for item in registry["plan"]
+          }
+          for entry in registry["entries"]:
+              action = actions[(entry["registry"], entry["package"])]
+              print(
+                  f"| {entry['registry']} | `{entry['package']}` | "
+                  f"`{entry['state']}` | `{entry['package_exists']}` | `{action}` |"
+              )
           PY
 
       - name: Upload tested release set
