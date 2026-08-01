@@ -1,3 +1,9 @@
+---
+type: Documentation
+title: okf-parser for TypeScript
+description: Native TypeScript package usage and capability scope
+---
+
 # okf-parser for TypeScript
 
 Native ESM implementation of the OKF parser and validator. It follows the same
