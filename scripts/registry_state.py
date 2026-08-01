@@ -2,27 +2,24 @@
 
 from __future__ import annotations
 
+import argparse
 import json
+import sys
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, BinaryIO, Callable, Final, Literal, Never, cast
-from urllib.error import HTTPError, URLError
+from pathlib import Path
+from typing import BinaryIO, Final, Never, cast
+from urllib.error import HTTPError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 MAX_RESPONSE_BYTES: Final = 2 * 1024 * 1024
 USER_AGENT: Final = "okf-parser-release-contract/1"
 PYPI_BASE: Final = "https://pypi.org/pypi"
 NPM_BASE: Final = "https://registry.npmjs.org"
+HTTP_OK: Final = 200
+HTTP_NOT_FOUND: Final = 404
 
-RegistryStatus = Literal[
-    "absent",
-    "present_expected",
-    "present_conflict",
-    "unverifiable",
-]
 Artifact = dict[str, object]
 RegistryEntry = dict[str, object]
 RegistryReport = dict[str, object]
@@ -39,6 +36,17 @@ class HttpResult:
     status: int
     body: bytes
     url: str
+
+
+@dataclass(frozen=True)
+class RegistryTarget:
+    """One registry package/version endpoint pair."""
+
+    registry: str
+    package: str
+    version: str
+    version_url: str
+    package_url: str
 
 
 Fetch = Callable[[str, float], HttpResult]
@@ -59,9 +67,10 @@ def fetch_https(url: str, timeout: float) -> HttpResult:
     """Fetch one public HTTPS registry document with a strict size limit."""
     if not url.startswith("https://"):
         _fail(f"registry URL must use HTTPS: {url!r}")
-    request = Request(url, headers={"Accept": "application/json", "User-Agent": USER_AGENT})
+    request = Request(  # noqa: S310 -- HTTPS is enforced immediately above.
+        url, headers={"Accept": "application/json", "User-Agent": USER_AGENT}
+    )
     try:
-        # The scheme is validated above; S310 cannot infer that guard.
         with urlopen(request, timeout=timeout) as response:  # noqa: S310
             return HttpResult(
                 status=response.status,
@@ -74,8 +83,9 @@ def fetch_https(url: str, timeout: float) -> HttpResult:
             body=_read_bounded(cast("BinaryIO", exc)),
             url=url,
         )
-    except (OSError, TimeoutError, URLError) as exc:
-        raise RegistryStateError(f"cannot fetch {url}: {exc}") from exc
+    except OSError as exc:
+        message = f"cannot fetch {url}: {exc}"
+        raise RegistryStateError(message) from exc
 
 
 def _json_object(result: HttpResult) -> dict[str, object]:
@@ -126,31 +136,22 @@ def _probe_package(url: str, fetch: Fetch, timeout: float) -> tuple[bool | None,
         result = fetch(url, timeout)
     except RegistryStateError as exc:
         return None, str(exc)
-    if result.status == 404:
+    if result.status == HTTP_NOT_FOUND:
         return False, "package name is currently unregistered"
-    if result.status == 200:
+    if result.status == HTTP_OK:
         return True, "package already exists"
     return None, f"package lookup returned HTTP {result.status}"
 
 
-def _absent_entry(
-    *,
-    registry: str,
-    package: str,
-    version: str,
-    version_url: str,
-    package_url: str,
-    fetch: Fetch,
-    timeout: float,
-) -> RegistryEntry:
-    package_exists, bootstrap_reason = _probe_package(package_url, fetch, timeout)
+def _absent_entry(target: RegistryTarget, fetch: Fetch, timeout: float) -> RegistryEntry:
+    package_exists, bootstrap_reason = _probe_package(target.package_url, fetch, timeout)
     return {
-        "registry": registry,
-        "package": package,
-        "version": version,
+        "registry": target.registry,
+        "package": target.package,
+        "version": target.version,
         "state": "absent",
         "reason": "target version is not published",
-        "version_url": version_url,
+        "version_url": target.version_url,
         "package_exists": package_exists,
         "bootstrap_reason": bootstrap_reason,
     }
@@ -206,17 +207,10 @@ def _pypi_state(
         return _unverifiable_entry(
             registry="pypi", package=package, version=version, url=version_url, reason=str(exc)
         )
-    if result.status == 404:
-        return _absent_entry(
-            registry="pypi",
-            package=package,
-            version=version,
-            version_url=version_url,
-            package_url=package_url,
-            fetch=fetch,
-            timeout=timeout,
-        )
-    if result.status != 200:
+    if result.status == HTTP_NOT_FOUND:
+        target = RegistryTarget("pypi", package, version, version_url, package_url)
+        return _absent_entry(target, fetch, timeout)
+    if result.status != HTTP_OK:
         return _unverifiable_entry(
             registry="pypi",
             package=package,
@@ -275,17 +269,10 @@ def _npm_state(
         return _unverifiable_entry(
             registry="npm", package=package, version=version, url=version_url, reason=str(exc)
         )
-    if result.status == 404:
-        return _absent_entry(
-            registry="npm",
-            package=package,
-            version=version,
-            version_url=version_url,
-            package_url=package_url,
-            fetch=fetch,
-            timeout=timeout,
-        )
-    if result.status != 200:
+    if result.status == HTTP_NOT_FOUND:
+        target = RegistryTarget("npm", package, version, version_url, package_url)
+        return _absent_entry(target, fetch, timeout)
+    if result.status != HTTP_OK:
         return _unverifiable_entry(
             registry="npm",
             package=package,
@@ -373,3 +360,41 @@ def write_registry_report(path: Path, report: RegistryReport) -> None:
     """Write one deterministic registry-state report."""
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _read_manifest(path: Path) -> dict[str, object]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        _fail(f"cannot read manifest {path}: {exc}")
+    if not isinstance(value, dict):
+        _fail(f"manifest {path} is not a JSON object")
+    return cast("dict[str, object]", value)
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--manifest", type=Path, default=Path("release/manifest.json"))
+    parser.add_argument("--output", type=Path, default=Path("release/registry-state.json"))
+    parser.add_argument("--timeout", type=float, default=15.0)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the read-only registry preflight CLI."""
+    arguments = _parser().parse_args(argv)
+    try:
+        report = inspect_registry_state(
+            _read_manifest(arguments.manifest.resolve()),
+            timeout=arguments.timeout,
+        )
+        write_registry_report(arguments.output.resolve(), report)
+    except RegistryStateError as exc:
+        sys.stderr.write(f"registry preflight error: {exc}\n")
+        return 2
+    sys.stdout.write(json.dumps(report, indent=2, sort_keys=True) + "\n")
+    return 0 if report["safe_to_publish"] is True else 3
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
