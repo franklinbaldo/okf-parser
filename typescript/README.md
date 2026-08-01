@@ -23,6 +23,7 @@ const report = await checkBundle("./knowledge");
 const zod = await exportZod("./knowledge", { inferTypes: true });
 ```
 
-The package currently exposes parsing, validation, inventory, graph summaries,
-JSON Schema and Zod generation. Formatter, DuckDB and MCP support remain
+Parsing, validation, inventory and graph summaries are stable. JSON Schema and
+Zod generation are available as experimental capabilities while their complete
+cross-runtime corpus is established. Formatter, DuckDB and MCP support remain
 explicitly marked `not_implemented` in the exported capability manifest.
