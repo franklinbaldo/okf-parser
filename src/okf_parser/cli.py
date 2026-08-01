@@ -86,7 +86,7 @@ def graph(path: str, *, exclude: RepeatableStrings = None) -> CliResult[JsonPayl
 
 
 @app.command
-def schema(
+def schema(  # noqa: PLR0913 - each argument is an independent public CLI flag.
     path: str,
     *,
     schema_format: CliSchemaFormat = "json",
@@ -130,7 +130,7 @@ def duckdb_command(
     overwrite: bool = False,
     exclude: RepeatableStrings = None,
 ) -> CliResult[JsonPayload]:
-    """Materialize bundle relations into a DuckDB database file."""
+    """Materialize an OKF bundle into a DuckDB database file."""
     try:
         return CliResult(
             export_duckdb(path, database, schema, overwrite=overwrite, exclude=exclude or ())
@@ -178,7 +178,7 @@ def mcp_graph(path: str, exclude: RepeatableStrings = None) -> dict[str, object]
 
 
 @mcp.tool(name="schema")
-def mcp_schema(
+def mcp_schema(  # noqa: PLR0913 - MCP exposes the same independent schema flags.
     path: str,
     *,
     schema_format: Annotated[SchemaFormat, Field(alias="format")] = "json",
