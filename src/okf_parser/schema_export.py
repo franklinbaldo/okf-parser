@@ -27,10 +27,11 @@ from okf_parser.schema_contract import (
     model_name,
     render_zod,
 )
-from okf_parser.schema_lexemes import CastKind
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Sequence
+
+    from okf_parser.schema_lexemes import CastKind
 
 type FieldDefinition = tuple[Any, Any]
 
