@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 type CastKind = Literal["string", "boolean", "integer", "number", "date", "datetime"]
 
+_MONTHS_PER_YEAR = 12
+_MAX_HOUR = 23
+_MAX_MINUTE_OR_SECOND = 59
 _INTEGER_RE = re.compile(r"^[+-]?\d+$")
 _NUMBER_RE = re.compile(r"^[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?$")
 _DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
@@ -22,7 +27,7 @@ def _is_leap_year(year: int) -> bool:
 
 
 def _is_calendar_date(year: int, month: int, day: int) -> bool:
-    if year < 1 or month < 1 or month > 12 or day < 1:
+    if year < 1 or month < 1 or month > _MONTHS_PER_YEAR or day < 1:
         return False
     days = (31, 29 if _is_leap_year(year) else 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31)
     return day <= days[month - 1]
@@ -52,29 +57,29 @@ def is_iso_datetime_lexeme(value: str) -> bool:
     ):
         return False
     return (
-        int(match.group(4)) <= 23
-        and int(match.group(5)) <= 59
-        and int(match.group(6) or "0") <= 59
-        and int(match.group(8) or "0") <= 23
-        and int(match.group(9) or "0") <= 59
+        int(match.group(4)) <= _MAX_HOUR
+        and int(match.group(5)) <= _MAX_MINUTE_OR_SECOND
+        and int(match.group(6) or "0") <= _MAX_MINUTE_OR_SECOND
+        and int(match.group(8) or "0") <= _MAX_HOUR
+        and int(match.group(9) or "0") <= _MAX_MINUTE_OR_SECOND
     )
 
 
 def classify_lexemes(values: Sequence[str]) -> CastKind:
     """Classify an aggregate only when every observed spelling supports one kind."""
-    if not values:
-        return "string"
-    if all(value.casefold() in {"true", "false"} for value in values):
-        return "boolean"
-    if all(_INTEGER_RE.fullmatch(value) is not None for value in values):
-        return "integer"
-    if all(_NUMBER_RE.fullmatch(value) is not None for value in values):
-        return "number"
-    if all(is_iso_date_lexeme(value) for value in values):
-        return "date"
-    if all(is_iso_datetime_lexeme(value) for value in values):
-        return "datetime"
-    return "string"
+    kind: CastKind = "string"
+    if values:
+        if all(value.casefold() in {"true", "false"} for value in values):
+            kind = "boolean"
+        elif all(_INTEGER_RE.fullmatch(value) is not None for value in values):
+            kind = "integer"
+        elif all(_NUMBER_RE.fullmatch(value) is not None for value in values):
+            kind = "number"
+        elif all(is_iso_date_lexeme(value) for value in values):
+            kind = "date"
+        elif all(is_iso_datetime_lexeme(value) for value in values):
+            kind = "datetime"
+    return kind
 
 
 def can_classify_as(values: Sequence[str], kind: CastKind) -> bool:
