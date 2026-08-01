@@ -55,6 +55,14 @@ jobs:
             exit 1
           fi
 
+          if [[ -f typescript/package.json ]]; then
+            typescript_version=$(sed -n 's/^[[:space:]]*"version": "\([^"]*\)",$/\1/p' typescript/package.json)
+            if [[ "$typescript_version" != "$head_version" ]]; then
+              echo "::error file=typescript/package.json::A versão npm $typescript_version difere da versão Python $head_version."
+              exit 1
+            fi
+          fi
+
           expected_changelog="changelog/$head_version.md"
           mapfile -t added_changelogs < <(
             git diff --diff-filter=A --name-only "origin/$BASE...HEAD" -- "changelog/*.md"
@@ -109,3 +117,48 @@ jobs:
 
       - name: Build distributions
         run: uv build
+
+  typescript-quality:
+    name: TypeScript / Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci --prefix typescript
+
+      - name: Check TypeScript
+        run: npm run check --prefix typescript
+
+      - name: Run TypeScript and shared conformance tests
+        run: npm test --prefix typescript
+
+      - name: Build ESM and declarations
+        run: npm run build --prefix typescript
+
+      - name: Dogfood the TypeScript CLI
+        run: node typescript/dist/cli.js check . > "$RUNNER_TEMP/okf-check.json"
+
+      - name: Pack and install into a clean project
+        shell: bash
+        run: |
+          set -euo pipefail
+          tarball=$(npm pack --prefix typescript --pack-destination "$RUNNER_TEMP" --silent)
+          mkdir "$RUNNER_TEMP/consumer"
+          cd "$RUNNER_TEMP/consumer"
+          npm init -y >/dev/null
+          npm install --ignore-scripts "$RUNNER_TEMP/$tarball" >/dev/null
+          node --input-type=module -e "import('okf-parser').then(({ capabilityManifest }) => { if (capabilityManifest.protocol_version !== '0.6.0') process.exit(1) })"
+          ./node_modules/.bin/okf-parser-ts --help >/dev/null
