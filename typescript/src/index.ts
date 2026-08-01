@@ -42,6 +42,7 @@ export {
   isIsoDateTimeLexeme,
 } from "./lexemes.js";
 export type { LexemeKind } from "./lexemes.js";
+export { createMcpServer } from "./mcp.js";
 export {
   SchemaCastError,
   SchemaExportError,
@@ -57,9 +58,11 @@ export type {
   ZodImport,
   ZodOptions,
 } from "./schema.js";
+export { PROTOCOL_VERSION } from "./version.js";
+import { PROTOCOL_VERSION } from "./version.js";
 
 export const capabilityManifest = Object.freeze({
-  protocol_version: "0.8.0",
+  protocol_version: PROTOCOL_VERSION,
   capabilities: Object.freeze({
     check: "stable",
     inventory: "stable",
@@ -68,6 +71,6 @@ export const capabilityManifest = Object.freeze({
     schema_zod: "stable",
     format: "not_implemented",
     duckdb: "not_implemented",
-    mcp: "not_implemented",
+    mcp: "stable",
   }),
 });

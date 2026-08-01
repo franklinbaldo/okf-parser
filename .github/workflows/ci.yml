@@ -151,6 +151,9 @@ jobs:
       - name: Dogfood the TypeScript CLI
         run: node typescript/dist/cli.js check . > "$RUNNER_TEMP/okf-check.json"
 
+      - name: Exercise the MCP stdio binary
+        run: node typescript/scripts/smoke-mcp-stdio.mjs
+
       - name: Pack and install into a clean project
         shell: bash
         run: |
@@ -163,3 +166,4 @@ jobs:
           npm install --ignore-scripts "$RUNNER_TEMP/$tarball" >/dev/null
           EXPECTED_VERSION="$expected_version" node --input-type=module -e "import('okf-parser').then(({ capabilityManifest }) => { if (capabilityManifest.protocol_version !== process.env.EXPECTED_VERSION) process.exit(1) })"
           ./node_modules/.bin/okf-parser-ts --help >/dev/null
+          node "$GITHUB_WORKSPACE/typescript/scripts/smoke-mcp-stdio.mjs" ./node_modules/.bin/okf-parser-ts-mcp
