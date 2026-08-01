@@ -1,0 +1,41 @@
+name: Diagnose Release Contract
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --frozen --all-groups
+
+      - name: Format ephemeral copy and show diff
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run ruff format .
+          git diff -- scripts/release_contract.py tests/test_release_contract.py
+
+      - name: Run remaining Python gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run ruff check .
+          uv run ty check src tests scripts
+          uv run pytest
+          python scripts/release_contract.py verify-source
+          uv run okf-parser check .
