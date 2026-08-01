@@ -74,6 +74,7 @@ jobs:
         run: |
           set -euo pipefail
           rm .github/workflows/finalize-typescript-mcp.yml
+          rm .github/workflows/diagnose-typescript-mcp.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add \
@@ -90,6 +91,8 @@ jobs:
             typescript/src/version.ts \
             typescript/test/mcp.test.ts \
             uv.lock
-          git add -u .github/workflows/finalize-typescript-mcp.yml
+          git add -u \
+            .github/workflows/finalize-typescript-mcp.yml \
+            .github/workflows/diagnose-typescript-mcp.yml
           git commit -m "feat(ts): add native MCP server"
           git push origin HEAD:feat/typescript-mcp
