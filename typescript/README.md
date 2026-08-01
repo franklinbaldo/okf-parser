@@ -28,7 +28,7 @@ const zod = await exportZod("./knowledge", { inferTypes: true });
 The package includes a read-only stdio MCP server:
 
 ```bash
-npx okf-parser-ts-mcp
+npx --package okf-parser okf-parser-ts-mcp
 ```
 
 A typical host configuration is:
@@ -39,7 +39,7 @@ A typical host configuration is:
     "okf-parser": {
       "type": "stdio",
       "command": "npx",
-      "args": ["-y", "okf-parser", "okf-parser-ts-mcp"]
+      "args": ["-y", "--package", "okf-parser", "okf-parser-ts-mcp"]
     }
   }
 }
