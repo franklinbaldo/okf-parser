@@ -145,9 +145,7 @@ def export_json_schema(
         infer_types=infer_types,
         casts=casts,
     )
-    schemas = {
-        contract.concept_type: contract_json_schema(contract) for contract in contracts
-    }
+    schemas = {contract.concept_type: contract_json_schema(contract) for contract in contracts}
     return {
         "root": str(Path(path).resolve()),
         "total_types": len(schemas),

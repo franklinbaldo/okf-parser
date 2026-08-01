@@ -285,9 +285,7 @@ def node_json_schema(node: ContractNode) -> dict[str, object]:
     for field_contract in node.fields:
         base = node_json_schema(field_contract.value)
         property_schema: dict[str, object] = (
-            {"anyOf": [base, {"type": "null"}]}
-            if field_contract.nullable
-            else dict(base)
+            {"anyOf": [base, {"type": "null"}]} if field_contract.nullable else dict(base)
         )
         property_schema["title"] = _title_for(field_contract.name)
         properties[field_contract.name] = property_schema

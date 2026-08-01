@@ -39,10 +39,9 @@ def test_shared_schema_output_corpus(tmp_path: Path) -> None:
         assert report["total_types"] == len(cast("dict[str, object]", case["schemas"]))
         assert report["inferred_types"] is infer_types
         assert report["casts"] == casts
-        assert (
-            export_zod_schema(str(root), infer_types=infer_types, casts=casts)
-            == case["zod"]
-        ), case["id"]
+        assert export_zod_schema(str(root), infer_types=infer_types, casts=casts) == case["zod"], (
+            case["id"]
+        )
 
 
 def test_astro_mode_changes_only_the_import(tmp_path: Path) -> None:
