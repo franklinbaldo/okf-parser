@@ -5,6 +5,7 @@ __pycache__/
 *.py[cod]
 dist/
 build/
+release/
 
 # JavaScript dependencies
 node_modules/
