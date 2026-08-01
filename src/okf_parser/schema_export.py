@@ -3,26 +3,23 @@
 from __future__ import annotations
 
 import json
-import re
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
 
-import pandas as pd
 from pydantic import BaseModel, create_model
 
 from okf_parser.bundle import load_bundle
+from okf_parser.schema_lexemes import CastKind, can_classify_as, classify_lexemes
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
-CastKind = Literal["string", "boolean", "integer", "number", "date", "datetime"]
 type FieldDefinition = tuple[Any, Any]
 
 _CAST_KINDS = frozenset({"string", "boolean", "integer", "number", "date", "datetime"})
-_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _MISSING = object()
 _SIMPLE_ZOD = {
     "boolean": "z.boolean()",
@@ -100,57 +97,6 @@ def _unique_model_names(values: Sequence[str], suffix: str) -> dict[str, str]:
     return names
 
 
-def _series(values: Sequence[str]) -> pd.Series:
-    return pd.Series(values, dtype="string")
-
-
-def _boolean_values(values: Sequence[str]) -> bool:
-    return bool(values) and bool(_series(values).str.lower().isin(("true", "false")).all())
-
-
-def _numeric_kind(values: Sequence[str]) -> CastKind | None:
-    if not values:
-        return None
-    converted = pd.to_numeric(_series(values), errors="coerce")
-    if converted.isna().any():
-        return None
-    return "integer" if converted.mod(1).eq(0).all() else "number"
-
-
-def _temporal_kind(values: Sequence[str]) -> CastKind | None:
-    if not values:
-        return None
-    converted = pd.to_datetime(_series(values), errors="coerce", format="mixed")
-    if converted.isna().any():
-        return None
-    return "date" if all(_DATE_RE.fullmatch(value) for value in values) else "datetime"
-
-
-def _can_cast(values: Sequence[str], kind: CastKind) -> bool:
-    if not values or kind == "string":
-        return True
-    if kind == "boolean":
-        return _boolean_values(values)
-    if kind == "integer":
-        return _numeric_kind(values) == "integer"
-    if kind == "number":
-        return _numeric_kind(values) in {"integer", "number"}
-    if kind == "date":
-        return _temporal_kind(values) == "date"
-    return _temporal_kind(values) in {"date", "datetime"}
-
-
-def _infer_kind(values: Sequence[str]) -> CastKind:
-    """Use pandas conversions as best-effort heuristics, falling back to string."""
-    if _boolean_values(values):
-        return "boolean"
-    numeric = _numeric_kind(values)
-    if numeric is not None:
-        return numeric
-    temporal = _temporal_kind(values)
-    return temporal or "string"
-
-
 def _python_type(kind: CastKind) -> type:
     return {
         "string": str,
@@ -166,15 +112,15 @@ def _scalar_annotation(values: Sequence[str], path: str, options: _SchemaOptions
     explicit = options.casts.get(path)
     if explicit is not None:
         options.used_casts.add(path)
-        if not _can_cast(values, explicit):
+        if not can_classify_as(values, explicit):
             sample = next(
-                (value for value in values if not _can_cast((value,), explicit)),
+                (value for value in values if not can_classify_as((value,), explicit)),
                 values[0],
             )
             message = f"cannot cast {path!r} to {explicit}: {sample!r} is incompatible"
             raise SchemaCastError(message)
         return _python_type(explicit)
-    return _python_type(_infer_kind(values) if options.infer_types else "string")
+    return _python_type(classify_lexemes(values) if options.infer_types else "string")
 
 
 def _field_annotation(
