@@ -1,3 +1,9 @@
+---
+type: Documentation
+title: Releasing okf-parser
+description: Build, verify and bootstrap synchronized Python and TypeScript releases
+---
+
 # Releasing okf-parser
 
 The repository publishes one synchronized protocol version as three packages:
