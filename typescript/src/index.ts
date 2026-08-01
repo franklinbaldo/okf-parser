@@ -1,0 +1,66 @@
+export {
+  DocumentParseError,
+  ExclusionFileError,
+  ExclusionRules,
+  OkfParserError,
+  checkBundle,
+  conceptId,
+  discoverMarkdown,
+  graphBundle,
+  hasMarkdownSuffix,
+  inventoryBundle,
+  isMarkdownFilename,
+  isReservedDocument,
+  iterHeadings,
+  iterMarkdownLinks,
+  loadBundle,
+  looksLikeFrontmatterLink,
+  parseDocument,
+  parseDocumentContent,
+  resolveLocalTarget,
+  splitOptionalFrontmatter,
+} from "./core.js";
+export type {
+  Bundle,
+  CheckReport,
+  ConceptRecord,
+  Diagnostic,
+  FrontmatterValue,
+  GraphReport,
+  InventoryReport,
+  JsonValue,
+  LinkRecord,
+  LoadOptions,
+  ParsedDocument,
+  ReservedRecord,
+  Severity,
+} from "./core.js";
+export {
+  SchemaCastError,
+  SchemaExportError,
+  SchemaNameCollisionError,
+  exportJsonSchema,
+  exportZod,
+} from "./schema.js";
+export type {
+  CastKind,
+  JsonSchema,
+  SchemaOptions,
+  SchemaReport,
+  ZodImport,
+  ZodOptions,
+} from "./schema.js";
+
+export const capabilityManifest = Object.freeze({
+  protocol_version: "0.6.0",
+  capabilities: Object.freeze({
+    check: "stable",
+    inventory: "stable",
+    graph: "stable",
+    schema_json: "stable",
+    schema_zod: "stable",
+    format: "not_implemented",
+    duckdb: "not_implemented",
+    mcp: "not_implemented",
+  }),
+});
