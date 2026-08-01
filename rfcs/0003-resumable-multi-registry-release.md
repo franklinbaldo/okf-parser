@@ -1,7 +1,7 @@
 ---
 type: RFC
 title: Resumable multi-registry release pipeline
-status: proposed
+status: accepted
 description: Publish synchronized Python and TypeScript artifacts with OIDC, provenance and deterministic recovery from partial releases
 ---
 
