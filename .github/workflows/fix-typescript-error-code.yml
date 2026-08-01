@@ -1,0 +1,64 @@
+name: Fix TypeScript error-code narrowing
+
+on:
+  push:
+    branches:
+      - feat/typescript-core
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/typescript-core
+
+      - name: Separate Node errors from frontmatter records
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("typescript/src/core.ts")
+          text = path.read_text(encoding="utf-8")
+          before = text
+          text = text.replace(
+              '''function messageOf(error: unknown): string {
+            return error instanceof Error ? error.message : String(error);
+          }
+
+          async function readUtf8''',
+              '''function messageOf(error: unknown): string {
+            return error instanceof Error ? error.message : String(error);
+          }
+
+          function errorCode(error: unknown): string | null {
+            if (typeof error !== "object" || error === null || !("code" in error)) return null;
+            return typeof error.code === "string" ? error.code : null;
+          }
+
+          async function readUtf8''',
+          )
+          text = text.replace(
+              '''    } catch (error) {
+                const code = isRecord(error) && typeof error.code === "string" ? error.code : null;
+                if (code !== "ENOENT") throw new ExclusionFileError(exclusionPath, error);
+              }''',
+              '''    } catch (error) {
+                if (errorCode(error) !== "ENOENT") throw new ExclusionFileError(exclusionPath, error);
+              }''',
+          )
+          if text == before:
+              raise SystemExit("expected source fragments were not found")
+          path.write_text(text, encoding="utf-8")
+          PY
+          rm .github/workflows/fix-typescript-error-code.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add typescript/src/core.ts .github/workflows/fix-typescript-error-code.yml
+          git commit -m "fix(ts): recognize absent exclusion files"
+          git push origin HEAD:feat/typescript-core
