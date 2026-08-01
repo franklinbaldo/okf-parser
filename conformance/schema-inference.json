@@ -1,0 +1,124 @@
+{
+  "version": 1,
+  "classification": [
+    {
+      "id": "empty-observation",
+      "values": [],
+      "kind": "string"
+    },
+    {
+      "id": "boolean-case-insensitive",
+      "values": ["true", "FALSE", "False"],
+      "kind": "boolean"
+    },
+    {
+      "id": "integer-signs-and-leading-zeroes",
+      "values": ["0012", "-07", "+5"],
+      "kind": "integer"
+    },
+    {
+      "id": "non-ascii-digits-are-not-integers",
+      "values": ["١٢"],
+      "kind": "string"
+    },
+    {
+      "id": "decimal-and-exponent",
+      "values": ["1.5", "2e3", "-0.25"],
+      "kind": "number"
+    },
+    {
+      "id": "huge-exponent-remains-lexically-numeric",
+      "values": ["1e9999", "-2e-9999"],
+      "kind": "number"
+    },
+    {
+      "id": "non-finite-spellings-are-not-numbers",
+      "values": ["NaN", "Infinity"],
+      "kind": "string"
+    },
+    {
+      "id": "real-leap-day",
+      "values": ["2024-02-29"],
+      "kind": "date"
+    },
+    {
+      "id": "impossible-calendar-date",
+      "values": ["2023-02-29"],
+      "kind": "string"
+    },
+    {
+      "id": "non-ascii-date-digits-are-not-dates",
+      "values": ["٢٠٢٤-٠١-٠١"],
+      "kind": "string"
+    },
+    {
+      "id": "utc-datetime",
+      "values": ["2024-01-02T03:04:05Z"],
+      "kind": "datetime"
+    },
+    {
+      "id": "local-datetime-without-seconds",
+      "values": ["2024-01-02T03:04"],
+      "kind": "datetime"
+    },
+    {
+      "id": "offset-datetime-with-fraction",
+      "values": ["2024-01-02T03:04:05.123-04:00"],
+      "kind": "datetime"
+    },
+    {
+      "id": "invalid-datetime-hour",
+      "values": ["2024-01-02T24:00"],
+      "kind": "string"
+    },
+    {
+      "id": "mixed-observations-fall-back",
+      "values": ["1", "not-a-number"],
+      "kind": "string"
+    }
+  ],
+  "casts": [
+    {
+      "id": "integer-as-number",
+      "values": ["1", "-2"],
+      "kind": "number",
+      "valid": true
+    },
+    {
+      "id": "date-as-datetime",
+      "values": ["2024-01-01"],
+      "kind": "datetime",
+      "valid": true
+    },
+    {
+      "id": "decimal-not-integer",
+      "values": ["1.5"],
+      "kind": "integer",
+      "valid": false
+    },
+    {
+      "id": "datetime-not-date",
+      "values": ["2024-01-01T12:00Z"],
+      "kind": "date",
+      "valid": false
+    },
+    {
+      "id": "yaml-ish-yes-not-boolean",
+      "values": ["yes"],
+      "kind": "boolean",
+      "valid": false
+    },
+    {
+      "id": "nan-not-number",
+      "values": ["NaN"],
+      "kind": "number",
+      "valid": false
+    },
+    {
+      "id": "non-ascii-digits-not-number",
+      "values": ["١٢"],
+      "kind": "number",
+      "valid": false
+    }
+  ]
+}

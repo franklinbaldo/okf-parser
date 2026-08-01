@@ -155,10 +155,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          expected_version=$(node -p "require('./typescript/package.json').version")
           tarball=$(cd typescript && npm pack --pack-destination "$RUNNER_TEMP" --silent)
           mkdir "$RUNNER_TEMP/consumer"
           cd "$RUNNER_TEMP/consumer"
           npm init -y >/dev/null
           npm install --ignore-scripts "$RUNNER_TEMP/$tarball" >/dev/null
-          node --input-type=module -e "import('okf-parser').then(({ capabilityManifest }) => { if (capabilityManifest.protocol_version !== '0.6.0') process.exit(1) })"
+          EXPECTED_VERSION="$expected_version" node --input-type=module -e "import('okf-parser').then(({ capabilityManifest }) => { if (capabilityManifest.protocol_version !== process.env.EXPECTED_VERSION) process.exit(1) })"
           ./node_modules/.bin/okf-parser-ts --help >/dev/null

@@ -36,6 +36,13 @@ export type {
   Severity,
 } from "./core.js";
 export {
+  canClassifyAs,
+  classifyLexemes,
+  isIsoDateLexeme,
+  isIsoDateTimeLexeme,
+} from "./lexemes.js";
+export type { LexemeKind } from "./lexemes.js";
+export {
   SchemaCastError,
   SchemaExportError,
   SchemaNameCollisionError,
@@ -52,7 +59,7 @@ export type {
 } from "./schema.js";
 
 export const capabilityManifest = Object.freeze({
-  protocol_version: "0.6.0",
+  protocol_version: "0.7.0",
   capabilities: Object.freeze({
     check: "stable",
     inventory: "stable",

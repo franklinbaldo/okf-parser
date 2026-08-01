@@ -7,8 +7,13 @@ import {
   OkfParserError,
   loadBundle,
 } from "./core.js";
+import {
+  type LexemeKind,
+  canClassifyAs,
+  classifyLexemes,
+} from "./lexemes.js";
 
-export type CastKind = "string" | "boolean" | "integer" | "number" | "date" | "datetime";
+export type CastKind = LexemeKind;
 export type ZodImport = "zod" | "astro";
 
 export interface SchemaOptions extends LoadOptions {
@@ -66,10 +71,6 @@ const CAST_KINDS = new Set<CastKind>([
   "date",
   "datetime",
 ]);
-const INTEGER_RE = /^[+-]?\d+$/u;
-const NUMBER_RE = /^[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?$/u;
-const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/u;
-const DATETIME_RE = /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:[Zz]|[+-]\d{2}:\d{2})?$/u;
 const IDENTIFIER_RE = /^[$_\p{ID_Start}][$\u200C\u200D_\p{ID_Continue}]*$/u;
 
 export class SchemaExportError extends OkfParserError {
@@ -119,46 +120,19 @@ function isRecord(value: FrontmatterValue): value is Readonly<Record<string, Fro
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function realDate(value: string): boolean {
-  const match = DATE_RE.exec(value);
-  if (match === null) return false;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  return year >= 1 && month >= 1 && month <= 12 && day >= 1 && day <= new Date(Date.UTC(year, month, 0)).getUTCDate();
-}
-
-function classify(values: readonly string[]): ScalarKind {
-  if (values.length === 0) return "string";
-  if (values.every((value) => /^(?:true|false)$/iu.test(value))) return "boolean";
-  if (values.every((value) => INTEGER_RE.test(value))) return "integer";
-  if (values.every((value) => NUMBER_RE.test(value) && Number.isFinite(Number(value)))) return "number";
-  if (values.every(realDate)) return "date";
-  if (values.every((value) => DATETIME_RE.test(value) && !Number.isNaN(Date.parse(value)))) return "datetime";
-  return "string";
-}
-
-function canCast(values: readonly string[], kind: CastKind): boolean {
-  if (values.length === 0 || kind === "string") return true;
-  const inferred = classify(values);
-  if (kind === "number") return inferred === "integer" || inferred === "number";
-  if (kind === "datetime") return inferred === "date" || inferred === "datetime";
-  return inferred === kind;
-}
-
 function scalarContract(values: readonly string[], fieldPath: string, options: CompileOptions): ContractNode {
   const explicit = options.casts.get(fieldPath);
   if (explicit !== undefined) {
     options.usedCasts.add(fieldPath);
-    if (!canCast(values, explicit)) {
-      const sample = values.find((value) => !canCast([value], explicit)) ?? values[0] ?? "";
+    if (!canClassifyAs(values, explicit)) {
+      const sample = values.find((value) => !canClassifyAs([value], explicit)) ?? values[0] ?? "";
       throw new SchemaCastError(
         `cannot cast ${JSON.stringify(fieldPath)} to ${explicit}: ${JSON.stringify(sample)} is incompatible`,
       );
     }
     return { kind: "scalar", scalar: explicit };
   }
-  return { kind: "scalar", scalar: options.inferTypes ? classify(values) : "string" };
+  return { kind: "scalar", scalar: options.inferTypes ? classifyLexemes(values) : "string" };
 }
 
 function compileValue(
