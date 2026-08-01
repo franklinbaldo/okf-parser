@@ -1,13 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod/v4";
 
-import {
-  checkBundle,
-  exportJsonSchema,
-  exportZod,
-  graphBundle,
-  inventoryBundle,
-} from "./index.js";
+import { checkBundle, graphBundle, inventoryBundle } from "./core.js";
+import { exportJsonSchema, exportZod } from "./schema.js";
 import { PROTOCOL_VERSION } from "./version.js";
 
 const pathSchema = z.string().min(1).describe("Path to the OKF bundle root");
