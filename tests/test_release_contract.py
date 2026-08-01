@@ -132,7 +132,8 @@ def test_verify_local_rejects_tampering(tmp_path: Path) -> None:
     assert isinstance(artifacts, list)
     first = artifacts[0]
     assert isinstance(first, dict)
-    target = tmp_path / "release" / str(first["path"])
+    artifact = cast("dict[str, object]", first)
+    target = tmp_path / "release" / str(artifact["path"])
     target.write_bytes(target.read_bytes() + b"tampered")
     with pytest.raises(ContractError, match="size mismatch"):
         verify_local(tmp_path, tmp_path / "release" / "manifest.json")
@@ -157,7 +158,8 @@ def test_verify_local_rejects_path_traversal(tmp_path: Path) -> None:
     assert isinstance(artifacts, list)
     first = artifacts[0]
     assert isinstance(first, dict)
-    first["path"] = "../escape.whl"
+    artifact = cast("dict[str, object]", first)
+    artifact["path"] = "../escape.whl"
     path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ContractError, match="unsafe"):
         verify_local(tmp_path, path)

@@ -404,7 +404,7 @@ def _entry_kind(item: Artifact, seen: set[Kind]) -> Kind:
     raw_kind = _string(item, "kind", "manifest artifact")
     if raw_kind not in KINDS:
         _fail(f"unknown artifact kind {raw_kind!r}")
-    kind = cast("Kind", raw_kind)
+    kind = raw_kind
     if kind in seen:
         _fail(f"duplicate artifact kind {kind!r}")
     seen.add(kind)
