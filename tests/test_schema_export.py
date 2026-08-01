@@ -36,7 +36,7 @@ def test_schema_keeps_scalars_as_strings_by_default(tmp_path: Path) -> None:
     assert properties["type"]["const"] == "test_type"
 
 
-def test_schema_infers_types_from_every_observation_with_pandas(tmp_path: Path) -> None:
+def test_schema_infers_types_from_every_observation(tmp_path: Path) -> None:
     _write_concept(
         tmp_path / "one.md",
         "type: test_type\nactive: true\ncount: 42\ncreated: 2026-01-01\n",
@@ -142,7 +142,7 @@ def test_nullability_inside_lists_is_preserved(tmp_path: Path) -> None:
     object_items = schema["properties"]["objects"]["items"]["anyOf"]
 
     assert {item.get("type") for item in scalar_items} == {"integer", "null"}
-    assert any("$ref" in item for item in object_items)
+    assert any(item.get("type") == "object" for item in object_items)
     assert any(item.get("type") == "null" for item in object_items)
 
     zod = export_zod_schema(str(tmp_path), infer_types=True)
@@ -183,5 +183,5 @@ def test_zod_uses_the_same_inferred_schema(tmp_path: Path) -> None:
     assert "export const TestTypeSchema = z.object({" in zod
     assert '"active": z.boolean()' in zod
     assert '"count": z.number().int()' in zod
-    assert '"created": z.string().date()' in zod
+    assert '"created": z.iso.date()' in zod
     assert '"type": z.literal("test_type")' in zod
