@@ -1,14 +1,19 @@
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 
-const command = process.argv[2] ?? process.execPath;
-const args = process.argv[2]
-  ? []
-  : [fileURLToPath(new URL("../dist/mcp-cli.js", import.meta.url))];
+import { PROTOCOL_VERSION } from "../dist/version.js";
+
+const suppliedCommand = process.argv[2];
+const command = suppliedCommand === undefined ? process.execPath : path.resolve(suppliedCommand);
+const args =
+  suppliedCommand === undefined
+    ? [fileURLToPath(new URL("../dist/mcp-cli.js", import.meta.url))]
+    : [];
 const transport = new StdioClientTransport({ command, args, stderr: "pipe" });
-const client = new Client({ name: "okf-parser-smoke", version: "0.9.0" });
+const client = new Client({ name: "okf-parser-smoke", version: PROTOCOL_VERSION });
 
 try {
   await client.connect(transport);
