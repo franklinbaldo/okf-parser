@@ -1,6 +1,6 @@
 {
   "name": "okf-parser",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Native TypeScript parser, validator, graph inspector, and schema exporter for Open Knowledge Format bundles",
   "type": "module",
   "license": "MIT",

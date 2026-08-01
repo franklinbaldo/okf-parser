@@ -16,6 +16,8 @@ from okf_parser.schema_export import export_json_schema, export_zod_schema
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from okf_parser.schema_contract import ZodImport
+
 
 def check_bundle(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
     """Validate every Markdown file below a path."""
@@ -57,21 +59,23 @@ def graph_bundle(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
     }
 
 
-def schema_bundle(
+def schema_bundle(  # noqa: PLR0913 - service mirrors the independent public schema flags.
     path: str,
     fmt: str = "json",
     exclude: Sequence[str] = (),
     *,
     infer_types: bool = False,
     casts: Sequence[str] = (),
+    zod_import: ZodImport = "zod",
 ) -> dict[str, object] | str:
-    """Export string-first JSON Schema or Zod definitions for Astro."""
+    """Export canonical JSON Schema or generic/Astro Zod definitions."""
     if fmt == "zod":
         return export_zod_schema(
             path,
             exclude,
             infer_types=infer_types,
             casts=casts,
+            zod_import=zod_import,
         )
     return export_json_schema(
         path,

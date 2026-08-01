@@ -24,6 +24,7 @@ from okf_parser.service import (
 
 type McpTransport = Literal["stdio", "http", "sse"]
 type SchemaFormat = Literal["json", "zod"]
+type ZodImport = Literal["zod", "astro"]
 type CliSchemaFormat = Annotated[SchemaFormat, Parameter(name="format")]
 type RepeatableStrings = list[str] | None
 type JsonPayload = dict[str, object]
@@ -85,15 +86,16 @@ def graph(path: str, *, exclude: RepeatableStrings = None) -> CliResult[JsonPayl
 
 
 @app.command
-def schema(
+def schema(  # noqa: PLR0913 - each argument is an independent public CLI flag.
     path: str,
     *,
     schema_format: CliSchemaFormat = "json",
     infer_types: bool = False,
     cast: RepeatableStrings = None,
     exclude: RepeatableStrings = None,
+    zod_import: ZodImport = "zod",
 ) -> CliResult[JsonPayload | str]:
-    """Export string-first JSON Schema or Zod, with optional type inference."""
+    """Export canonical JSON Schema or generic/Astro Zod definitions."""
     return CliResult(
         schema_bundle(
             path,
@@ -101,6 +103,7 @@ def schema(
             exclude or (),
             infer_types=infer_types,
             casts=cast or (),
+            zod_import=zod_import,
         )
     )
 
@@ -127,7 +130,7 @@ def duckdb_command(
     overwrite: bool = False,
     exclude: RepeatableStrings = None,
 ) -> CliResult[JsonPayload]:
-    """Materialize bundle relations into a DuckDB database."""
+    """Materialize an OKF bundle into a DuckDB database file."""
     try:
         return CliResult(
             export_duckdb(path, database, schema, overwrite=overwrite, exclude=exclude or ())
@@ -175,21 +178,23 @@ def mcp_graph(path: str, exclude: RepeatableStrings = None) -> dict[str, object]
 
 
 @mcp.tool(name="schema")
-def mcp_schema(
+def mcp_schema(  # noqa: PLR0913 - MCP exposes the same independent schema flags.
     path: str,
     *,
     schema_format: Annotated[SchemaFormat, Field(alias="format")] = "json",
     infer_types: bool = False,
     cast: RepeatableStrings = None,
     exclude: RepeatableStrings = None,
+    zod_import: ZodImport = "zod",
 ) -> dict[str, object] | str:
-    """Export string-first schemas, optionally inferring or declaring scalar types."""
+    """Export canonical schemas, optionally inferring or declaring scalar types."""
     return schema_bundle(
         path,
         schema_format,
         exclude or (),
         infer_types=infer_types,
         casts=cast or (),
+        zod_import=zod_import,
     )
 
 
