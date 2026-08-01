@@ -30,9 +30,7 @@ class FormattingCase(TypedDict):
 _CASES = cast(
     "list[FormattingCase]",
     json.loads(
-        (Path(__file__).parents[1] / "conformance" / "formatting.json").read_text(
-            encoding="utf-8"
-        )
+        (Path(__file__).parents[1] / "conformance" / "formatting.json").read_text(encoding="utf-8")
     ),
 )
 
