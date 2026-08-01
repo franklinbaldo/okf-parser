@@ -1,0 +1,141 @@
+name: Consolidate Release Contract
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: consolidate-release-contract
+  cancel-in-progress: true
+
+jobs:
+  consolidate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/release-contract-dry-run
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+
+      - name: Synchronize metadata and type narrowing
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              Path("pyproject.toml"): [('version = "0.11.1"', 'version = "0.12.0"')],
+              Path("typescript/src/version.ts"): [('"0.11.1"', '"0.12.0"')],
+              Path("rfcs/0003-resumable-multi-registry-release.md"): [
+                  ("status: proposed", "status: accepted")
+              ],
+              Path("scripts/release_contract.py"): [
+                  ('    kind = cast("Kind", raw_kind)\n', "    kind = raw_kind\n")
+              ],
+              Path("tests/test_release_contract.py"): [
+                  (
+                      '    first = artifacts[0]\n    assert isinstance(first, dict)\n    target = tmp_path / "release" / str(first["path"])\n',
+                      '    first = artifacts[0]\n    assert isinstance(first, dict)\n    artifact = cast("dict[str, object]", first)\n    target = tmp_path / "release" / str(artifact["path"])\n',
+                  ),
+                  (
+                      '    first = artifacts[0]\n    assert isinstance(first, dict)\n    first["path"] = "../escape.whl"\n',
+                      '    first = artifacts[0]\n    assert isinstance(first, dict)\n    artifact = cast("dict[str, object]", first)\n    artifact["path"] = "../escape.whl"\n',
+                  ),
+              ],
+          }
+          for path, pairs in replacements.items():
+              text = path.read_text(encoding="utf-8")
+              for old, new in pairs:
+                  if old not in text:
+                      raise SystemExit(f"missing expected text {old!r} in {path}")
+                  text = text.replace(old, new, 1)
+              path.write_text(text, encoding="utf-8")
+          PY
+          npm --prefix typescript version 0.12.0 --no-git-tag-version
+          npm --prefix typescript-duckdb version 0.12.0 --no-git-tag-version
+          npm --prefix typescript-duckdb pkg set 'peerDependencies.okf-parser=^0.12.0'
+          uv lock
+          npm install --prefix typescript --package-lock-only --ignore-scripts
+          npm install --prefix typescript-duckdb --package-lock-only --ignore-scripts
+
+      - name: Verify Python and repository contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv sync --frozen --all-groups
+          uv run ruff format .
+          uv run ruff check .
+          uv run ty check src tests scripts
+          uv run vulture src --min-confidence 90
+          uv run pytest
+          python scripts/release_contract.py verify-source
+          uv run okf-parser check .
+          uv build
+
+      - name: Verify TypeScript packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --prefix typescript
+          npm run check --prefix typescript
+          npm test --prefix typescript
+          npm run build --prefix typescript
+          npm ci --prefix typescript-duckdb
+          npm run check --prefix typescript-duckdb
+          npm test --prefix typescript-duckdb
+          npm run build --prefix typescript-duckdb
+
+      - name: Verify release manifest against real archives
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf release
+          mkdir -p release/python release/npm
+          uv build --out-dir release/python
+          rm -f release/python/.gitignore
+          (cd typescript && npm pack --pack-destination ../release/npm --silent)
+          (cd typescript-duckdb && npm pack --pack-destination ../release/npm --silent)
+          python scripts/release_contract.py build-manifest \
+            --directory release \
+            --repository "$GITHUB_REPOSITORY" \
+            --commit "$(git rev-parse HEAD)" \
+            --ref feat/release-contract-dry-run \
+            --python-version "$(python -c 'import platform; print(platform.python_version())')" \
+            --node-version "$(node --version)" \
+            --npm-version "$(npm --version)" \
+            --uv-version "$(uv --version | awk '{print $2}')"
+          python scripts/release_contract.py verify-local --manifest release/manifest.json
+          rm -rf release dist typescript/dist typescript-duckdb/dist
+
+      - name: Commit verified implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm \
+            .github/workflows/consolidate-release-contract.yml \
+            .github/workflows/diagnose-release-contract.yml \
+            .github/workflows/finalize-release-contract.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "feat(release): add verified dry-run pipeline"
+          git push origin HEAD:feat/release-contract-dry-run
