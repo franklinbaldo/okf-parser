@@ -1,0 +1,208 @@
+name: Consolidate Registry Preflight
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: consolidate-registry-preflight
+  cancel-in-progress: true
+
+jobs:
+  consolidate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/registry-preflight
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            typescript/package-lock.json
+            typescript-duckdb/package-lock.json
+
+      - name: Complete implementation and synchronized metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("scripts/registry_state.py")
+          text = path.read_text(encoding="utf-8")
+          text = text.replace(
+              "import json\nfrom dataclasses import dataclass\nfrom typing import TYPE_CHECKING, BinaryIO, Callable, Final, Literal, Never, cast\n",
+              "import argparse\nimport json\nimport sys\nfrom dataclasses import dataclass\nfrom pathlib import Path\nfrom typing import BinaryIO, Callable, Final, Literal, Never, cast\n",
+              1,
+          )
+          text = text.replace(
+              "\nif TYPE_CHECKING:\n    from pathlib import Path\n",
+              "",
+              1,
+          )
+          text += '''
+
+
+def _read_manifest(path: Path) -> dict[str, object]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        _fail(f"cannot read manifest {path}: {exc}")
+    if not isinstance(value, dict):
+        _fail(f"manifest {path} is not a JSON object")
+    return cast("dict[str, object]", value)
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--manifest", type=Path, default=Path("release/manifest.json"))
+    parser.add_argument("--output", type=Path, default=Path("release/registry-state.json"))
+    parser.add_argument("--timeout", type=float, default=15.0)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the read-only registry preflight CLI."""
+    arguments = _parser().parse_args(argv)
+    try:
+        report = inspect_registry_state(
+            _read_manifest(arguments.manifest.resolve()),
+            timeout=arguments.timeout,
+        )
+        write_registry_report(arguments.output.resolve(), report)
+    except RegistryStateError as exc:
+        sys.stderr.write(f"registry preflight error: {exc}\\n")
+        return 2
+    sys.stdout.write(json.dumps(report, indent=2, sort_keys=True) + "\\n")
+    return 0 if report["safe_to_publish"] is True else 3
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+          path.write_text(text, encoding="utf-8")
+
+          workflow = Path(".github/workflows/release-dry-run.yml")
+          text = workflow.read_text(encoding="utf-8")
+          text = text.replace(
+              '      - "tests/test_release_contract.py"\n',
+              '      - "tests/test_release_contract.py"\n      - "tests/test_registry_state.py"\n',
+              1,
+          )
+          text = text.replace(
+              '      - name: Write release summary\n',
+              '      - name: Inspect public registry state\n        run: python -m scripts.registry_state --manifest release/manifest.json --output release/registry-state.json\n\n      - name: Write release summary\n',
+              1,
+          )
+          text = text.replace(
+              '          manifest = json.loads(Path("release/manifest.json").read_text(encoding="utf-8"))\n',
+              '          manifest = json.loads(Path("release/manifest.json").read_text(encoding="utf-8"))\n          registry = json.loads(Path("release/registry-state.json").read_text(encoding="utf-8"))\n',
+              1,
+          )
+          text = text.replace(
+              '          for artifact in manifest["artifacts"]:\n              print(f"| `{artifact[\'path\']}` | {artifact[\'size\']} | `{artifact[\'sha256\']}` |")\n',
+              '          for artifact in manifest["artifacts"]:\n              print(f"| `{artifact[\'path\']}` | {artifact[\'size\']} | `{artifact[\'sha256\']}` |")\n          print()\n          print("## Public registry preflight")\n          print()\n          print("| Registry | Package | State | Package exists | Action |")\n          print("|---|---|---|---|---|")\n          actions = {(item["registry"], item["package"]): item["action"] for item in registry["plan"]}\n          for entry in registry["entries"]:\n              action = actions[(entry["registry"], entry["package"])]\n              print(f"| {entry[\'registry\']} | `{entry[\'package\']}` | `{entry[\'state\']}` | `{entry[\'package_exists\']}` | `{action}` |")\n',
+              1,
+          )
+          workflow.write_text(text, encoding="utf-8")
+
+          docs = Path("docs/releasing.md")
+          text = docs.read_text(encoding="utf-8")
+          text = text.replace(
+              "## Current capability: dry run only",
+              "## Current capability: dry run and read-only preflight",
+              1,
+          )
+          text = text.replace(
+              "├── manifest.json\n└── SHA256SUMS",
+              "├── manifest.json\n├── registry-state.json\n└── SHA256SUMS",
+              1,
+          )
+          text = text.replace(
+              "python scripts/release_contract.py verify-local --manifest release/manifest.json\n```",
+              "python scripts/release_contract.py verify-local --manifest release/manifest.json\npython -m scripts.registry_state --manifest release/manifest.json \\\n  --output release/registry-state.json\n```",
+              1,
+          )
+          marker = "The manifest command fails on missing, duplicate or unexpected artifacts. The\nverification command rejects path traversal, archive identity drift, changed\nsizes or digests, and a `SHA256SUMS` file that no longer matches the manifest.\n"
+          addition = marker + "\n## Public registry preflight\n\nThe registry command performs HTTPS reads only. It compares the manifest with\nPyPI SHA-256 file digests and npm SRI integrity, then classifies each target as\n`absent`, `present_expected`, `present_conflict` or `unverifiable`. Its plan uses\n`publish`, `skip` or `block`, which is the state machine later consumed by the\nprivileged workflow.\n\nWhen a target version is absent, the report also probes the package root. This\ndistinguishes a genuinely available bootstrap name from a package that already\nexists at another version. Conflicts, incomplete releases and unverifiable\nresponses return a non-zero status; no registry mutation is attempted.\n"
+          if marker not in text:
+              raise SystemExit("documentation insertion marker not found")
+          text = text.replace(marker, addition, 1)
+          text = text.replace(
+              "6. review a second PR that adds idempotent registry-state checks and publication\n   jobs using the already-tested artifact set.",
+              "6. review a privileged PR that consumes the tested registry-state model and adds\n   publication jobs using the already-tested artifact set.",
+              1,
+          )
+          docs.write_text(text, encoding="utf-8")
+
+          pyproject = Path("pyproject.toml")
+          text = pyproject.read_text(encoding="utf-8")
+          if 'version = "0.12.0"' not in text:
+              raise SystemExit("unexpected Python version")
+          pyproject.write_text(text.replace('version = "0.12.0"', 'version = "0.13.0"', 1), encoding="utf-8")
+
+          version_file = Path("typescript/src/version.ts")
+          text = version_file.read_text(encoding="utf-8")
+          if '"0.12.0"' not in text:
+              raise SystemExit("unexpected protocol version")
+          version_file.write_text(text.replace('"0.12.0"', '"0.13.0"', 1), encoding="utf-8")
+          PY
+
+          npm --prefix typescript version 0.13.0 --no-git-tag-version
+          npm --prefix typescript-duckdb version 0.13.0 --no-git-tag-version
+          npm --prefix typescript-duckdb pkg set 'peerDependencies.okf-parser=^0.13.0'
+          uv lock
+          npm install --prefix typescript --package-lock-only --ignore-scripts
+          npm install --prefix typescript-duckdb --package-lock-only --ignore-scripts
+
+      - name: Verify Python implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv sync --frozen --all-groups
+          uv run ruff format .
+          uv run ruff check .
+          uv run ty check src tests scripts
+          uv run pytest
+          python scripts/release_contract.py verify-source
+          uv run okf-parser check .
+
+      - name: Verify TypeScript packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --prefix typescript
+          npm run check --prefix typescript
+          npm test --prefix typescript
+          npm run build --prefix typescript
+          npm ci --prefix typescript-duckdb
+          npm run check --prefix typescript-duckdb
+          npm test --prefix typescript-duckdb
+          npm run build --prefix typescript-duckdb
+
+      - name: Commit verified preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/consolidate-registry-preflight.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "feat(release): add read-only registry preflight"
+          git push origin HEAD:feat/registry-preflight
