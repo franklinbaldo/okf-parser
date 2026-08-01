@@ -1,9 +1,9 @@
 export type LexemeKind = "string" | "boolean" | "integer" | "number" | "date" | "datetime";
 
-const INTEGER_RE = /^[+-]?\d+$/u;
-const NUMBER_RE = /^[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?$/u;
-const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/u;
-const DATETIME_RE = /^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?(?:[Zz]|[+-](\d{2}):(\d{2}))?$/u;
+const INTEGER_RE = /^[+-]?[0-9]+$/u;
+const NUMBER_RE = /^[+-]?(?:(?:[0-9]+(?:\.[0-9]*)?)|(?:\.[0-9]+))(?:[eE][+-]?[0-9]+)?$/u;
+const DATE_RE = /^([0-9]{4})-([0-9]{2})-([0-9]{2})$/u;
+const DATETIME_RE = /^([0-9]{4})-([0-9]{2})-([0-9]{2})[Tt]([0-9]{2}):([0-9]{2})(?::([0-9]{2})(?:\.([0-9]+))?)?(?:[Zz]|[+-]([0-9]{2}):([0-9]{2}))?$/u;
 
 function isLeapYear(year: number): boolean {
   return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
