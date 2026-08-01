@@ -1,3 +1,9 @@
+---
+type: Documentation
+title: okf-parser DuckDB adapter
+description: Optional native DuckDB materialization for the TypeScript parser
+---
+
 # okf-parser-duckdb
 
 Optional DuckDB materialization adapter for the TypeScript `okf-parser` package.
