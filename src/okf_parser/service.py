@@ -59,7 +59,7 @@ def graph_bundle(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
     }
 
 
-def schema_bundle(
+def schema_bundle(  # noqa: PLR0913 - service mirrors the independent public schema flags.
     path: str,
     fmt: str = "json",
     exclude: Sequence[str] = (),
