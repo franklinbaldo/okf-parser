@@ -1,0 +1,97 @@
+name: Finalize shared schema output
+
+on:
+  push:
+    branches:
+      - feat/shared-schema-output
+
+permissions:
+  contents: write
+
+concurrency:
+  group: finalize-shared-schema-output
+  cancel-in-progress: true
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/shared-schema-output
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+
+      - name: Refresh synchronized versions and lockfiles
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("pyproject.toml")
+          text = path.read_text(encoding="utf-8")
+          text = text.replace('version = "0.7.0"', 'version = "0.8.0"', 1)
+          path.write_text(text, encoding="utf-8")
+          PY
+          npm --prefix typescript version 0.8.0 --no-git-tag-version
+          uv lock
+
+      - name: Verify Python
+        run: |
+          set -euo pipefail
+          uv sync --frozen --all-groups
+          uv run ruff format src tests
+          uv run ruff check .
+          uv run ty check src tests
+          uv run vulture src --min-confidence 90
+          uv run pytest
+          uv run okf-parser check .
+          uv build
+
+      - name: Verify TypeScript
+        run: |
+          set -euo pipefail
+          npm ci --prefix typescript
+          npm run check --prefix typescript
+          npm test --prefix typescript
+          npm run build --prefix typescript
+          node typescript/dist/cli.js schema . --format json > "$RUNNER_TEMP/schema.json"
+
+      - name: Commit only verified source and generated metadata
+        run: |
+          set -euo pipefail
+          rm .github/workflows/finalize-shared-schema-output.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            changelog/0.8.0.md \
+            conformance/schema-output.json \
+            pyproject.toml \
+            src/okf_parser/cli.py \
+            src/okf_parser/schema_contract.py \
+            src/okf_parser/schema_export.py \
+            src/okf_parser/service.py \
+            tests/test_schema_export.py \
+            tests/test_schema_output_conformance.py \
+            typescript/README.md \
+            typescript/package.json \
+            typescript/package-lock.json \
+            typescript/src/index.ts \
+            typescript/test/schema-output-conformance.test.ts \
+            uv.lock
+          git add -u .github/workflows/finalize-shared-schema-output.yml
+          git commit -m "feat(schema): stabilize canonical exporter output"
+          git push origin HEAD:feat/shared-schema-output
