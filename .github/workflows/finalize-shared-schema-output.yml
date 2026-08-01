@@ -74,6 +74,7 @@ jobs:
         run: |
           set -euo pipefail
           rm .github/workflows/finalize-shared-schema-output.yml
+          rm .github/workflows/diagnose-shared-schema-output.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add \
@@ -92,6 +93,8 @@ jobs:
             typescript/src/index.ts \
             typescript/test/schema-output-conformance.test.ts \
             uv.lock
-          git add -u .github/workflows/finalize-shared-schema-output.yml
+          git add -u \
+            .github/workflows/finalize-shared-schema-output.yml \
+            .github/workflows/diagnose-shared-schema-output.yml
           git commit -m "feat(schema): stabilize canonical exporter output"
           git push origin HEAD:feat/shared-schema-output
