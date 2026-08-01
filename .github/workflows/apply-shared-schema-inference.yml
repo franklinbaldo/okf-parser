@@ -4,12 +4,13 @@ on:
   push:
     branches:
       - feat/shared-schema-inference
-  pull_request:
-    branches:
-      - main
 
 permissions:
   contents: write
+
+concurrency:
+  group: apply-shared-schema-inference
+  cancel-in-progress: true
 
 jobs:
   apply:
@@ -66,6 +67,22 @@ jobs:
           rm scripts/apply_shared_schema_inference.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add .
+          git add \
+            pyproject.toml \
+            uv.lock \
+            changelog/0.7.0.md \
+            conformance/schema-inference.json \
+            src/okf_parser/schema_export.py \
+            src/okf_parser/schema_lexemes.py \
+            tests/test_schema_inference_conformance.py \
+            typescript/package.json \
+            typescript/package-lock.json \
+            typescript/src/index.ts \
+            typescript/src/lexemes.ts \
+            typescript/src/schema.ts \
+            typescript/test/schema-inference-conformance.test.ts
+          git add -u \
+            .github/workflows/apply-shared-schema-inference.yml \
+            scripts/apply_shared_schema_inference.py
           git commit -m "feat(schema): share exact lexical inference"
           git push origin HEAD:feat/shared-schema-inference
