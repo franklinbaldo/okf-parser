@@ -1,0 +1,32 @@
+name: Sync TypeScript branch with main
+
+on:
+  push:
+    branches:
+      - feat/typescript-core
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out implementation branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/typescript-core
+          fetch-depth: 0
+
+      - name: Merge main and remove this one-shot workflow
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git fetch origin main
+          git merge --no-edit origin/main
+          rm .github/workflows/sync-typescript-main.yml
+          git add .github/workflows/sync-typescript-main.yml
+          git commit -m "chore: remove TypeScript branch sync workflow"
+          git push origin HEAD:feat/typescript-core
