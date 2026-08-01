@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { expect, test } from "vitest";
 
-import { checkBundle, graphBundle, inventoryBundle } from "../src/index.js";
+import { checkBundle, discoverMarkdown, graphBundle, inventoryBundle } from "../src/index.js";
 
 async function bundle(): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "okf-parser-ts-"));
@@ -16,6 +16,12 @@ async function bundle(): Promise<string> {
   await writeFile(path.join(root, "two.md"), "---\ntype: Reference\ntitle: Two\n---\n# Two\n");
   return root;
 }
+
+test("an absent .okfignore is the ordinary unfiltered case", async () => {
+  const root = await bundle();
+
+  await expect(discoverMarkdown(root)).resolves.toHaveLength(3);
+});
 
 test("validates, inventories, and projects the graph", async () => {
   const root = await bundle();
