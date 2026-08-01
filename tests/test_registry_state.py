@@ -73,13 +73,16 @@ def _result(url: str, status: int, payload: object | None = None) -> HttpResult:
     return HttpResult(status=status, body=body, url=url)
 
 
-def _fetcher(routes: dict[str, HttpResult], failures: set[str] | None = None):
+def _fetcher(
+    routes: dict[str, HttpResult], failures: set[str] | None = None
+) -> Callable[[str, float], HttpResult]:
     failed = failures or set()
 
     def fetch(url: str, timeout: float) -> HttpResult:
         assert timeout > 0
         if url in failed:
-            raise RegistryStateError(f"network failure for {url}")
+            message = f"network failure for {url}"
+            raise RegistryStateError(message)
         return routes[url]
 
     return fetch
