@@ -57,6 +57,22 @@ const server = createMcpServer();
 The MCP adapter exposes `check`, `inventory`, `graph` and `schema`. All tools are
 read-only and reuse the same core functions as the CLI and package API.
 
+## Optional DuckDB adapter
+
+DuckDB support is published separately so native database bindings are never
+installed for parser-only consumers:
+
+```bash
+npm install okf-parser okf-parser-duckdb
+```
+
+```ts
+import { exportDuckDb } from "okf-parser-duckdb";
+
+await exportDuckDb("./knowledge", { database: "knowledge.duckdb" });
+```
+
 Parsing, validation, inventory, graph summaries, JSON Schema, Zod generation and
-MCP are stable capabilities. Formatter and DuckDB support remain explicitly
-marked `not_implemented` in the exported capability manifest.
+MCP are stable capabilities in this package. DuckDB materialization is provided
+by the optional `okf-parser-duckdb` sibling package. Formatter support remains
+`not_implemented` in TypeScript.
