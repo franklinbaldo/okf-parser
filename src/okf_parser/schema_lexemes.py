@@ -13,12 +13,14 @@ type CastKind = Literal["string", "boolean", "integer", "number", "date", "datet
 _MONTHS_PER_YEAR = 12
 _MAX_HOUR = 23
 _MAX_MINUTE_OR_SECOND = 59
-_INTEGER_RE = re.compile(r"^[+-]?\d+$")
-_NUMBER_RE = re.compile(r"^[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?$")
-_DATE_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+_INTEGER_RE = re.compile(r"^[+-]?[0-9]+$")
+_NUMBER_RE = re.compile(
+    r"^[+-]?(?:(?:[0-9]+(?:\.[0-9]*)?)|(?:\.[0-9]+))(?:[eE][+-]?[0-9]+)?$"
+)
+_DATE_RE = re.compile(r"^([0-9]{4})-([0-9]{2})-([0-9]{2})$")
 _DATETIME_RE = re.compile(
-    r"^(\d{4})-(\d{2})-(\d{2})[Tt](\d{2}):(\d{2})"
-    r"(?::(\d{2})(?:\.(\d+))?)?(?:[Zz]|[+-](\d{2}):(\d{2}))?$"
+    r"^([0-9]{4})-([0-9]{2})-([0-9]{2})[Tt]([0-9]{2}):([0-9]{2})"
+    r"(?::([0-9]{2})(?:\.([0-9]+))?)?(?:[Zz]|[+-]([0-9]{2}):([0-9]{2}))?$"
 )
 
 
