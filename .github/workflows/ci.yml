@@ -47,7 +47,7 @@ jobs:
           path = Path("scripts/registry_state.py")
           text = path.read_text(encoding="utf-8")
           old = "import json\nfrom dataclasses import dataclass\nfrom typing import TYPE_CHECKING, BinaryIO, Callable, Final, Literal, Never, cast\nfrom urllib.error import HTTPError, URLError\n"
-          new = "import argparse\nimport json\nimport sys\nfrom dataclasses import dataclass\nfrom pathlib import Path\nfrom typing import BinaryIO, Callable, Final, Never, cast\nfrom urllib.error import HTTPError\n"
+          new = "import argparse\nimport json\nimport sys\nfrom collections.abc import Callable\nfrom dataclasses import dataclass\nfrom pathlib import Path\nfrom typing import BinaryIO, Final, Never, cast\nfrom urllib.error import HTTPError\n"
           if old not in text:
               raise SystemExit("unexpected registry-state imports")
           text = text.replace(old, new, 1)
@@ -57,18 +57,56 @@ jobs:
               raise SystemExit("registry status alias not found")
           text = text.replace(alias, "", 1)
           text = text.replace(
-              "    except (OSError, TimeoutError, URLError) as exc:\n",
-              "    except OSError as exc:\n",
+              'NPM_BASE: Final = "https://registry.npmjs.org"\n',
+              'NPM_BASE: Final = "https://registry.npmjs.org"\nHTTP_OK: Final = 200\nHTTP_NOT_FOUND: Final = 404\n',
               1,
           )
+          target_class = "\n\n@dataclass(frozen=True)\nclass RegistryTarget:\n    \"\"\"One registry package/version endpoint pair.\"\"\"\n\n    registry: str\n    package: str\n    version: str\n    version_url: str\n    package_url: str\n"
+          marker = "\n\nFetch = Callable[[str, float], HttpResult]\n"
+          if marker not in text:
+              raise SystemExit("fetch alias marker not found")
+          text = text.replace(marker, target_class + marker, 1)
+          text = text.replace(
+              '    request = Request(url, headers={"Accept": "application/json", "User-Agent": USER_AGENT})\n',
+              '    request = Request(  # noqa: S310 -- HTTPS is enforced immediately above.\n        url, headers={"Accept": "application/json", "User-Agent": USER_AGENT}\n    )\n',
+              1,
+          )
+          text = text.replace(
+              "    except (OSError, TimeoutError, URLError) as exc:\n        raise RegistryStateError(f\"cannot fetch {url}: {exc}\") from exc\n",
+              "    except OSError as exc:\n        message = f\"cannot fetch {url}: {exc}\"\n        raise RegistryStateError(message) from exc\n",
+              1,
+          )
+          text = text.replace("result.status == 404", "result.status == HTTP_NOT_FOUND")
+          text = text.replace("result.status == 200", "result.status == HTTP_OK")
+          text = text.replace("result.status != 200", "result.status != HTTP_OK")
+          old_absent = "def _absent_entry(\n    *,\n    registry: str,\n    package: str,\n    version: str,\n    version_url: str,\n    package_url: str,\n    fetch: Fetch,\n    timeout: float,\n) -> RegistryEntry:\n    package_exists, bootstrap_reason = _probe_package(package_url, fetch, timeout)\n    return {\n        \"registry\": registry,\n        \"package\": package,\n        \"version\": version,\n        \"state\": \"absent\",\n        \"reason\": \"target version is not published\",\n        \"version_url\": version_url,\n        \"package_exists\": package_exists,\n        \"bootstrap_reason\": bootstrap_reason,\n    }\n"
+          new_absent = "def _absent_entry(target: RegistryTarget, fetch: Fetch, timeout: float) -> RegistryEntry:\n    package_exists, bootstrap_reason = _probe_package(target.package_url, fetch, timeout)\n    return {\n        \"registry\": target.registry,\n        \"package\": target.package,\n        \"version\": target.version,\n        \"state\": \"absent\",\n        \"reason\": \"target version is not published\",\n        \"version_url\": target.version_url,\n        \"package_exists\": package_exists,\n        \"bootstrap_reason\": bootstrap_reason,\n    }\n"
+          if old_absent not in text:
+              raise SystemExit("absent entry function not found")
+          text = text.replace(old_absent, new_absent, 1)
+          old_pypi = "        return _absent_entry(\n            registry=\"pypi\",\n            package=package,\n            version=version,\n            version_url=version_url,\n            package_url=package_url,\n            fetch=fetch,\n            timeout=timeout,\n        )\n"
+          new_pypi = "        target = RegistryTarget(\"pypi\", package, version, version_url, package_url)\n        return _absent_entry(target, fetch, timeout)\n"
+          if old_pypi not in text:
+              raise SystemExit("PyPI absent call not found")
+          text = text.replace(old_pypi, new_pypi, 1)
+          old_npm = "        return _absent_entry(\n            registry=\"npm\",\n            package=package,\n            version=version,\n            version_url=version_url,\n            package_url=package_url,\n            fetch=fetch,\n            timeout=timeout,\n        )\n"
+          new_npm = "        target = RegistryTarget(\"npm\", package, version, version_url, package_url)\n        return _absent_entry(target, fetch, timeout)\n"
+          if old_npm not in text:
+              raise SystemExit("npm absent call not found")
+          text = text.replace(old_npm, new_npm, 1)
           path.write_text(text, encoding="utf-8")
 
           tests = Path("tests/test_registry_state.py")
           text = tests.read_text(encoding="utf-8")
-          text = text.replace("from typing import cast\n", "from typing import Callable, cast\n", 1)
+          text = text.replace("from typing import cast\n", "from collections.abc import Callable\nfrom typing import cast\n", 1)
           text = text.replace(
               "def _fetcher(routes: dict[str, HttpResult], failures: set[str] | None = None):\n",
               "def _fetcher(\n    routes: dict[str, HttpResult], failures: set[str] | None = None\n) -> Callable[[str, float], HttpResult]:\n",
+              1,
+          )
+          text = text.replace(
+              '            raise RegistryStateError(f"network failure for {url}")\n',
+              '            message = f"network failure for {url}"\n            raise RegistryStateError(message)\n',
               1,
           )
           tests.write_text(text, encoding="utf-8")
@@ -82,11 +120,11 @@ jobs:
               "python scripts/release_contract.py verify-local --manifest release/manifest.json\npython -m scripts.registry_state --manifest release/manifest.json \\\n  --output release/registry-state.json\n```",
               1,
           )
-          marker = "The manifest command fails on missing, duplicate or unexpected artifacts. The\nverification command rejects path traversal, archive identity drift, changed\nsizes or digests, and a `SHA256SUMS` file that no longer matches the manifest.\n"
+          doc_marker = "The manifest command fails on missing, duplicate or unexpected artifacts. The\nverification command rejects path traversal, archive identity drift, changed\nsizes or digests, and a `SHA256SUMS` file that no longer matches the manifest.\n"
           section = "\n## Public registry preflight\n\nThe registry command performs anonymous HTTPS reads only. It compares the\nmanifest with PyPI SHA-256 file digests and npm SRI integrity, then classifies\neach target as `absent`, `present_expected`, `present_conflict` or\n`unverifiable`. Its plan uses `publish`, `skip` or `block`, which is the state\nmachine later consumed by the privileged workflow.\n\nWhen a target version is absent, the report also probes the package root. This\ndistinguishes a genuinely available bootstrap name from a package that already\nexists at another version. Conflicts, incomplete releases and unverifiable\nresponses return a non-zero status; no registry mutation is attempted.\n"
-          if marker not in text:
+          if doc_marker not in text:
               raise SystemExit("documentation insertion marker not found")
-          text = text.replace(marker, marker + section, 1)
+          text = text.replace(doc_marker, doc_marker + section, 1)
           text = text.replace(
               "6. review a second PR that adds idempotent registry-state checks and publication\n   jobs using the already-tested artifact set.",
               "6. review a privileged PR that consumes the tested registry-state model and adds\n   publication jobs using the already-tested artifact set.",
