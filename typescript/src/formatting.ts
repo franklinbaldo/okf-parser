@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
+import { fileURLToPath } from "node:url";
 
 import type { Node, Parent } from "unist";
 import { frontmatterFromMarkdown, frontmatterToMarkdown } from "mdast-util-frontmatter";
@@ -10,7 +11,7 @@ import { toMarkdown } from "mdast-util-to-markdown";
 import { frontmatter } from "micromark-extension-frontmatter";
 import { gfm } from "micromark-extension-gfm";
 
-import { ExclusionRules, discoverMarkdown } from "./core.js";
+import { discoverMarkdown } from "./core.js";
 
 const BLOCK_CONTAINERS = new Set([
   "root",
@@ -188,9 +189,11 @@ export async function formatPath(
   input: string | URL,
   options: FormatOptions = {},
 ): Promise<FormatReport> {
-  const root = path.resolve(input instanceof URL ? input.pathname : input);
-  const exclusions = await ExclusionRules.read(root, options.exclude ?? []);
-  const paths = await discoverMarkdown(root, exclusions, options.signal);
+  const root = path.resolve(input instanceof URL ? fileURLToPath(input) : input);
+  const paths = await discoverMarkdown(root, {
+    ...(options.exclude === undefined ? {} : { exclude: options.exclude }),
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+  });
   const changedPaths: string[] = [];
   const skippedPaths: string[] = [];
   const pending: Array<readonly [string, string]> = [];
