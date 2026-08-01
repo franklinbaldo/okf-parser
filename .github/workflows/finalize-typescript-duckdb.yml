@@ -1,0 +1,105 @@
+name: Finalize TypeScript DuckDB
+
+on:
+  push:
+    branches:
+      - feat/typescript-duckdb
+
+permissions:
+  contents: write
+
+concurrency:
+  group: finalize-typescript-duckdb
+  cancel-in-progress: true
+
+jobs:
+  finalize:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out feature branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/typescript-duckdb
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+
+      - name: Refresh synchronized versions and lockfiles
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          pyproject = Path("pyproject.toml")
+          text = pyproject.read_text(encoding="utf-8")
+          text = text.replace('version = "0.9.0"', 'version = "0.10.0"', 1)
+          pyproject.write_text(text, encoding="utf-8")
+
+          version = Path("typescript/src/version.ts")
+          text = version.read_text(encoding="utf-8")
+          text = text.replace('"0.9.0"', '"0.10.0"', 1)
+          version.write_text(text, encoding="utf-8")
+          PY
+          npm --prefix typescript version 0.10.0 --no-git-tag-version
+          uv lock
+          npm install --prefix typescript-duckdb --package-lock-only --ignore-scripts
+
+      - name: Verify Python and parser
+        run: |
+          set -euo pipefail
+          uv sync --frozen --all-groups
+          uv run ruff format --check .
+          uv run ruff check .
+          uv run ty check src tests
+          uv run pytest
+          npm ci --prefix typescript
+          npm run check --prefix typescript
+          npm test --prefix typescript
+          npm run build --prefix typescript
+
+      - name: Verify DuckDB adapter
+        run: |
+          set -euo pipefail
+          npm ci --prefix typescript-duckdb
+          npm run check --prefix typescript-duckdb
+          npm test --prefix typescript-duckdb
+          npm run build --prefix typescript-duckdb
+
+      - name: Commit verified adapter
+        run: |
+          set -euo pipefail
+          rm .github/workflows/finalize-typescript-duckdb.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add \
+            .github/workflows/ci.yml \
+            changelog/0.10.0.md \
+            pyproject.toml \
+            typescript/README.md \
+            typescript/package.json \
+            typescript/package-lock.json \
+            typescript/src/version.ts \
+            typescript-duckdb/LICENSE \
+            typescript-duckdb/README.md \
+            typescript-duckdb/package.json \
+            typescript-duckdb/package-lock.json \
+            typescript-duckdb/src/cli.ts \
+            typescript-duckdb/src/index.ts \
+            typescript-duckdb/test/duckdb.test.ts \
+            typescript-duckdb/tsconfig.json \
+            typescript-duckdb/tsconfig.build.json \
+            uv.lock
+          git add -u .github/workflows/finalize-typescript-duckdb.yml
+          git commit -m "feat(ts): add optional DuckDB adapter"
+          git push origin HEAD:feat/typescript-duckdb
