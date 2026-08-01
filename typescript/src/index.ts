@@ -36,6 +36,18 @@ export type {
   Severity,
 } from "./core.js";
 export {
+  formatMarkdown,
+  formatPath,
+  protectedBlockSignature,
+  safeFormatMarkdown,
+} from "./formatting.js";
+export type {
+  FormatOptions,
+  FormatReport,
+  ProtectedAttribute,
+  ProtectedBlockRecord,
+} from "./formatting.js";
+export {
   canClassifyAs,
   classifyLexemes,
   isIsoDateLexeme,
@@ -69,7 +81,7 @@ export const capabilityManifest = Object.freeze({
     graph: "stable",
     schema_json: "stable",
     schema_zod: "stable",
-    format: "not_implemented",
+    format: "stable",
     duckdb: "not_implemented",
     mcp: "stable",
   }),

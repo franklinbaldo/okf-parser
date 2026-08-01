@@ -7,6 +7,7 @@ import {
   checkBundle,
   exportJsonSchema,
   exportZod,
+  formatPath,
   graphBundle,
   inventoryBundle,
 } from "./index.js";
@@ -16,6 +17,7 @@ const USAGE = `Usage:
   okf-parser-ts inventory PATH [--exclude PATTERN ...]
   okf-parser-ts graph PATH [--exclude PATTERN ...]
   okf-parser-ts schema PATH [--format json|zod] [--infer-types] [--cast FIELD=TYPE ...]
+  okf-parser-ts format PATH [--write] [--exclude PATTERN ...]
 
 Options:
   --exclude PATTERN   Exclude an anchored bundle-relative glob (repeatable)
@@ -23,6 +25,7 @@ Options:
   --cast FIELD=TYPE   Apply one strict explicit scalar cast (repeatable)
   --format FORMAT     Schema format: json or zod
   --zod-import MODE   Zod import target: zod or astro
+  --write             Rewrite files; without it, format only checks
   --help              Show this help
 `;
 
@@ -41,6 +44,7 @@ async function main(argv: readonly string[]): Promise<number> {
       cast: { type: "string", multiple: true, default: [] },
       format: { type: "string", default: "json" },
       "zod-import": { type: "string", default: "zod" },
+      write: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
     },
   });
@@ -85,6 +89,11 @@ async function main(argv: readonly string[]): Promise<number> {
     }
     writeJson(await exportJsonSchema(root, schemaOptions));
     return 0;
+  }
+  if (command === "format") {
+    const report = await formatPath(root, { ...common, write: parsed.values.write });
+    writeJson(report);
+    return report.succeeded ? 0 : 1;
   }
   throw new OkfParserError("OKF_CLI_USAGE", `unknown command: ${command}\n\n${USAGE.trimEnd()}`);
 }

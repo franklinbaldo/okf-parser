@@ -1,0 +1,92 @@
+[
+  {
+    "name": "bullet-spacing",
+    "source": "# Heading\n\n-   item\n",
+    "expect_change": true,
+    "ordered_lists": 0,
+    "bullet_lists": 1,
+    "required": ["- item\n"],
+    "forbidden": ["-   item"]
+  },
+  {
+    "name": "ordered-renumbering",
+    "source": "1. first\n1. second\n1. third\n",
+    "expect_change": true,
+    "ordered_lists": 1,
+    "bullet_lists": 0,
+    "required": ["1. first\n2. second\n3. third\n"],
+    "forbidden": ["01."]
+  },
+  {
+    "name": "marker-width-boundary",
+    "source": "1. item1\n2. item2\n3. item3\n4. item4\n5. item5\n6. item6\n7. item7\n8. item8\n9. item9\n10. item10\n",
+    "expect_change": false,
+    "ordered_lists": 1,
+    "bullet_lists": 0,
+    "required": ["1. item1", "10. item10"],
+    "forbidden": ["01. item1"]
+  },
+  {
+    "name": "frontmatter-is-protected",
+    "source": "---\ntype: Reference\ncount: 0012\n---\n\n# Heading\n",
+    "expect_change": false,
+    "ordered_lists": 0,
+    "bullet_lists": 0,
+    "required": ["type: Reference", "count: 0012"],
+    "forbidden": []
+  },
+  {
+    "name": "fenced-code-is-protected",
+    "source": "Text\n\n```py\n01. not a list\n```\n",
+    "expect_change": false,
+    "ordered_lists": 0,
+    "bullet_lists": 0,
+    "required": ["```py", "01. not a list"],
+    "forbidden": []
+  },
+  {
+    "name": "adjacent-ordered-markers-stay-distinct",
+    "source": "1. a\n\n1) b\n",
+    "expect_change": null,
+    "ordered_lists": 2,
+    "bullet_lists": 0,
+    "required": ["1. a", "b"],
+    "forbidden": []
+  },
+  {
+    "name": "adjacent-bullet-markers-stay-distinct",
+    "source": "* a\n\n+ b\n\n- c\n",
+    "expect_change": null,
+    "ordered_lists": 0,
+    "bullet_lists": 3,
+    "required": ["a", "b", "c"],
+    "forbidden": []
+  },
+  {
+    "name": "nested-list-preserves-outer-start",
+    "source": "101. outer\n\n     1. n1\n     2. n2\n     3. n3\n     4. n4\n     5. n5\n     6. n6\n     7. n7\n     8. n8\n     9. n9\n     10. n10\n\n1. next\n",
+    "expect_change": true,
+    "ordered_lists": 2,
+    "bullet_lists": 0,
+    "required": ["101. outer", "102. next", "10. n10"],
+    "forbidden": ["01. n1"]
+  },
+  {
+    "name": "gfm-table-remains-a-table",
+    "source": "| a | b |\n|---|---|\n| 1 | 2 |\n",
+    "expect_change": true,
+    "ordered_lists": 0,
+    "bullet_lists": 0,
+    "required": ["|", "a", "b", "1", "2"],
+    "forbidden": []
+  },
+  {
+    "name": "hard-break-remains-a-break",
+    "source": "line one  \nline two\n",
+    "expect_change": null,
+    "ordered_lists": 0,
+    "bullet_lists": 0,
+    "required": ["line one", "line two"],
+    "forbidden": []
+  }
+]
