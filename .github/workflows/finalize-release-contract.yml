@@ -36,7 +36,7 @@ jobs:
           cache: npm
           cache-dependency-path: typescript/package-lock.json
 
-      - name: Synchronize version metadata
+      - name: Synchronize version metadata and type narrowing
         shell: bash
         run: |
           set -euo pipefail
@@ -48,6 +48,19 @@ jobs:
               Path("typescript/src/version.ts"): [('"0.11.1"', '"0.12.0"')],
               Path("rfcs/0003-resumable-multi-registry-release.md"): [
                   ("status: proposed", "status: accepted")
+              ],
+              Path("scripts/release_contract.py"): [
+                  ('    kind = cast("Kind", raw_kind)\n', "    kind = raw_kind\n")
+              ],
+              Path("tests/test_release_contract.py"): [
+                  (
+                      '    first = artifacts[0]\n    assert isinstance(first, dict)\n    target = tmp_path / "release" / str(first["path"])\n',
+                      '    first = artifacts[0]\n    assert isinstance(first, dict)\n    artifact = cast("dict[str, object]", first)\n    target = tmp_path / "release" / str(artifact["path"])\n',
+                  ),
+                  (
+                      '    first = artifacts[0]\n    assert isinstance(first, dict)\n    first["path"] = "../escape.whl"\n',
+                      '    first = artifacts[0]\n    assert isinstance(first, dict)\n    artifact = cast("dict[str, object]", first)\n    artifact["path"] = "../escape.whl"\n',
+                  ),
               ],
           }
           for path, pairs in replacements.items():
