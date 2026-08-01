@@ -14,9 +14,7 @@ _MONTHS_PER_YEAR = 12
 _MAX_HOUR = 23
 _MAX_MINUTE_OR_SECOND = 59
 _INTEGER_RE = re.compile(r"^[+-]?[0-9]+$")
-_NUMBER_RE = re.compile(
-    r"^[+-]?(?:(?:[0-9]+(?:\.[0-9]*)?)|(?:\.[0-9]+))(?:[eE][+-]?[0-9]+)?$"
-)
+_NUMBER_RE = re.compile(r"^[+-]?(?:(?:[0-9]+(?:\.[0-9]*)?)|(?:\.[0-9]+))(?:[eE][+-]?[0-9]+)?$")
 _DATE_RE = re.compile(r"^([0-9]{4})-([0-9]{2})-([0-9]{2})$")
 _DATETIME_RE = re.compile(
     r"^([0-9]{4})-([0-9]{2})-([0-9]{2})[Tt]([0-9]{2}):([0-9]{2})"
