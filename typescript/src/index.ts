@@ -59,13 +59,13 @@ export type {
 } from "./schema.js";
 
 export const capabilityManifest = Object.freeze({
-  protocol_version: "0.7.0",
+  protocol_version: "0.8.0",
   capabilities: Object.freeze({
     check: "stable",
     inventory: "stable",
     graph: "stable",
-    schema_json: "experimental",
-    schema_zod: "experimental",
+    schema_json: "stable",
+    schema_zod: "stable",
     format: "not_implemented",
     duckdb: "not_implemented",
     mcp: "not_implemented",
