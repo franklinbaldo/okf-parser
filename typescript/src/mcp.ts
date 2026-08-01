@@ -11,6 +11,10 @@ const excludeSchema = z
   .optional()
   .describe("Anchored bundle-relative exclusion patterns");
 
+function loadOptions(exclude: readonly string[] | undefined) {
+  return exclude === undefined ? {} : { exclude };
+}
+
 function structuredResult(value: unknown) {
   const text = JSON.stringify(value, null, 2);
   const structuredContent = JSON.parse(text) as Record<string, unknown>;
@@ -54,7 +58,7 @@ export function createMcpServer(): McpServer {
       description: "Validate every authored Markdown document below an OKF bundle root.",
       inputSchema: z.object({ path: pathSchema, exclude: excludeSchema }),
     },
-    ({ path, exclude }) => toolResult(() => checkBundle(path, { exclude })),
+    ({ path, exclude }) => toolResult(() => checkBundle(path, loadOptions(exclude))),
   );
 
   server.registerTool(
@@ -64,7 +68,7 @@ export function createMcpServer(): McpServer {
       description: "Count parsed concepts by their producer-defined type.",
       inputSchema: z.object({ path: pathSchema, exclude: excludeSchema }),
     },
-    ({ path, exclude }) => toolResult(() => inventoryBundle(path, { exclude })),
+    ({ path, exclude }) => toolResult(() => inventoryBundle(path, loadOptions(exclude))),
   );
 
   server.registerTool(
@@ -74,7 +78,7 @@ export function createMcpServer(): McpServer {
       description: "Summarize resolved concept links and graph connectivity.",
       inputSchema: z.object({ path: pathSchema, exclude: excludeSchema }),
     },
-    ({ path, exclude }) => toolResult(() => graphBundle(path, { exclude })),
+    ({ path, exclude }) => toolResult(() => graphBundle(path, loadOptions(exclude))),
   );
 
   server.registerTool(
@@ -91,21 +95,17 @@ export function createMcpServer(): McpServer {
         zod_import: z.enum(["zod", "astro"]).optional().default("zod"),
       }),
     },
-    ({ path, format, infer_types, cast, exclude, zod_import }) =>
-      toolResult(() =>
-        format === "zod"
-          ? exportZod(path, {
-              exclude,
-              inferTypes: infer_types,
-              casts: cast,
-              zodImport: zod_import,
-            })
-          : exportJsonSchema(path, {
-              exclude,
-              inferTypes: infer_types,
-              casts: cast,
-            }),
-      ),
+    ({ path, format, infer_types, cast, exclude, zod_import }) => {
+      const common = {
+        ...loadOptions(exclude),
+        inferTypes: infer_types,
+        ...(cast === undefined ? {} : { casts: cast }),
+      };
+      if (format === "zod") {
+        return toolResult(() => exportZod(path, { ...common, zodImport: zod_import }));
+      }
+      return toolResult(() => exportJsonSchema(path, common));
+    },
   );
 
   return server;
