@@ -167,6 +167,11 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function errorCode(error: unknown): string | null {
+  if (typeof error !== "object" || error === null || !("code" in error)) return null;
+  return typeof error.code === "string" ? error.code : null;
+}
+
 async function readUtf8(filePath: string): Promise<string> {
   const bytes = await readFile(filePath);
   try {
@@ -434,8 +439,7 @@ export class ExclusionRules {
         if (stripped !== "" && !stripped.startsWith("#")) patterns.push(stripped);
       }
     } catch (error) {
-      const code = isRecord(error) && typeof error.code === "string" ? error.code : null;
-      if (code !== "ENOENT") throw new ExclusionFileError(exclusionPath, error);
+      if (errorCode(error) !== "ENOENT") throw new ExclusionFileError(exclusionPath, error);
     }
     patterns.push(...extra);
     return new ExclusionRules(patterns);
