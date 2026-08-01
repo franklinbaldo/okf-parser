@@ -1,0 +1,44 @@
+name: Align TypeScript package name
+
+on:
+  push:
+    branches:
+      - rfc/typescript-sibling-package
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out RFC branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: rfc/typescript-sibling-package
+
+      - name: Record the unscoped npm identity
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("rfcs/0002-typescript-sibling-package.md")
+          text = path.read_text(encoding="utf-8")
+          old = "The proposed npm package name is `@franklinbaldo/okf-parser`."
+          new = (
+              "The proposed npm package name is `okf-parser`. It is intentionally "
+              "unscoped, so the implementation does not depend on a personal or "
+              "organization npm scope. The first publication must verify and reserve "
+              "the registry name before release artifacts are announced."
+          )
+          if old not in text:
+              raise SystemExit("expected package-name sentence was not found")
+          path.write_text(text.replace(old, new), encoding="utf-8")
+          PY
+          rm .github/workflows/align-typescript-package-name.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add rfcs/0002-typescript-sibling-package.md .github/workflows/align-typescript-package-name.yml
+          git commit -m "docs(rfc): use unscoped npm package name"
+          git push origin HEAD:rfc/typescript-sibling-package
