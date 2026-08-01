@@ -33,8 +33,11 @@ def is_iso_date_lexeme(value: str) -> bool:
     match = _DATE_RE.fullmatch(value)
     if match is None:
         return False
-    year, month, day = (int(part) for part in match.groups())
-    return _is_calendar_date(year, month, day)
+    return _is_calendar_date(
+        int(match.group(1)),
+        int(match.group(2)),
+        int(match.group(3)),
+    )
 
 
 def is_iso_datetime_lexeme(value: str) -> bool:
@@ -42,17 +45,18 @@ def is_iso_datetime_lexeme(value: str) -> bool:
     match = _DATETIME_RE.fullmatch(value)
     if match is None:
         return False
-    year, month, day, hour, minute, second, _fraction, offset_hour, offset_minute = (
-        match.groups()
-    )
-    if not _is_calendar_date(int(year), int(month), int(day)):
+    if not _is_calendar_date(
+        int(match.group(1)),
+        int(match.group(2)),
+        int(match.group(3)),
+    ):
         return False
     return (
-        int(hour) <= 23
-        and int(minute) <= 59
-        and int(second or "0") <= 59
-        and int(offset_hour or "0") <= 23
-        and int(offset_minute or "0") <= 59
+        int(match.group(4)) <= 23
+        and int(match.group(5)) <= 59
+        and int(match.group(6) or "0") <= 59
+        and int(match.group(8) or "0") <= 23
+        and int(match.group(9) or "0") <= 59
     )
 
 
