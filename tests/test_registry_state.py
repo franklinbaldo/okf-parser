@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -14,6 +14,9 @@ from scripts.registry_state import (
     RegistryStateError,
     inspect_registry_state,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 VERSION = "1.2.3"
 PYPI_VERSION_URL = f"{PYPI_BASE}/okf-parser/{VERSION}/json"
