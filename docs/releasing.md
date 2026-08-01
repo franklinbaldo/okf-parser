@@ -16,7 +16,7 @@ RFC 0003 defines the production model. PyPI and npm do not offer a distributed
 transaction, so releases are monotonic, digest-verified and resumable rather
 than falsely described as atomic.
 
-## Current capability: dry run only
+## Current capability: dry run and read-only preflight
 
 The `Release Dry Run` workflow builds the complete release set without registry
 credentials or write permissions. It produces exactly four package artifacts:
@@ -30,6 +30,7 @@ release/
 │   ├── okf-parser-X.Y.Z.tgz
 │   └── okf-parser-duckdb-X.Y.Z.tgz
 ├── manifest.json
+├── registry-state.json
 └── SHA256SUMS
 ```
 
@@ -75,11 +76,26 @@ python scripts/release_contract.py build-manifest \
   --npm-version "$(npm --version)" \
   --uv-version "$(uv --version | awk '{print $2}')"
 python scripts/release_contract.py verify-local --manifest release/manifest.json
+python -m scripts.registry_state --manifest release/manifest.json \
+  --output release/registry-state.json
 ```
 
 The manifest command fails on missing, duplicate or unexpected artifacts. The
 verification command rejects path traversal, archive identity drift, changed
 sizes or digests, and a `SHA256SUMS` file that no longer matches the manifest.
+
+## Public registry preflight
+
+The registry command performs anonymous HTTPS reads only. It compares the
+manifest with PyPI SHA-256 file digests and npm SRI integrity, then classifies
+each target as `absent`, `present_expected`, `present_conflict` or
+`unverifiable`. Its plan uses `publish`, `skip` or `block`, which is the state
+machine later consumed by the privileged workflow.
+
+When a target version is absent, the report also probes the package root. This
+distinguishes a genuinely available bootstrap name from a package that already
+exists at another version. Conflicts, incomplete releases and unverifiable
+responses return a non-zero status; no registry mutation is attempted.
 
 ## Production publication remains disabled
 
@@ -95,8 +111,8 @@ complete the RFC bootstrap:
 3. confirm both unscoped npm names are available;
 4. perform the one-time reviewed npm bootstrap publications with account MFA;
 5. configure npm trusted publishers for both packages;
-6. review a second PR that adds idempotent registry-state checks and publication
-   jobs using the already-tested artifact set.
+6. review a privileged PR that consumes the tested registry-state model and adds
+   publication jobs using the already-tested artifact set.
 
 A GitHub Release will eventually be created only after PyPI and both npm package
 versions verify with the expected digests.
