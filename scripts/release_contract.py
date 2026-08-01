@@ -24,6 +24,7 @@ PROTOCOL_VERSION: Final = re.compile(
 )
 KINDS: Final = ("python-wheel", "python-sdist", "npm-parser", "npm-duckdb")
 Kind = Literal["python-wheel", "python-sdist", "npm-parser", "npm-duckdb"]
+Artifact = dict[str, object]
 
 
 class ContractError(ValueError):
@@ -39,6 +40,16 @@ class SourceContract:
 
 
 @dataclass(frozen=True)
+class BuildContext:
+    """Provenance recorded for one artifact build."""
+
+    repository: str
+    commit: str
+    ref: str
+    tools: dict[str, str]
+
+
+@dataclass(frozen=True)
 class ExpectedArtifact:
     """Expected artifact identity and location."""
 
@@ -49,18 +60,35 @@ class ExpectedArtifact:
     pattern: str | None = None
 
 
+@dataclass(frozen=True)
+class VerificationContext:
+    """Shared state for local artifact verification."""
+
+    release: Path
+    version: str
+    expected: dict[Kind, ExpectedArtifact]
+
+
 def _fail(message: str) -> Never:
     raise ContractError(message)
 
 
+def _decode_json_object(data: str, label: str) -> dict[str, object]:
+    try:
+        value = json.loads(data)
+    except json.JSONDecodeError as exc:
+        _fail(f"cannot decode JSON from {label}: {exc}")
+    if not isinstance(value, dict):
+        _fail(f"expected a JSON object in {label}")
+    return cast("dict[str, object]", value)
+
+
 def _json(path: Path) -> dict[str, object]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        data = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
         _fail(f"cannot read JSON from {path}: {exc}")
-    if not isinstance(value, dict):
-        _fail(f"expected a JSON object in {path}")
-    return cast("dict[str, object]", value)
+    return _decode_json_object(data, str(path))
 
 
 def _mapping(value: object, label: str) -> dict[str, object]:
@@ -96,52 +124,67 @@ def _frontmatter(path: Path) -> dict[str, str]:
     return result
 
 
-def verify_source(root: Path, tag: str | None = None) -> SourceContract:
-    """Verify package names, versions, protocol, peer range and changelog."""
-
+def _project_version(root: Path) -> str:
+    path = root / "pyproject.toml"
     try:
-        pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+        pyproject = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
-        _fail(f"cannot read pyproject.toml: {exc}")
+        _fail(f"cannot read {path}: {exc}")
     project = _mapping(pyproject.get("project"), "project")
     if _string(project, "name", "project") != "okf-parser":
         _fail("Python package name must be 'okf-parser'")
     version = _string(project, "version", "project")
     if STABLE_SEMVER.fullmatch(version) is None:
         _fail(f"version must be stable SemVer, found {version!r}")
+    return version
 
+
+def _verify_npm_manifest(path: Path, package: str, version: str) -> dict[str, object]:
+    manifest = _json(path)
+    if _string(manifest, "name", str(path)) != package:
+        _fail(f"npm package name in {path} must be {package!r}")
+    if _string(manifest, "version", str(path)) != version:
+        _fail(f"npm version in {path} differs from Python version")
+    return manifest
+
+
+def _verify_npm_contract(root: Path, version: str) -> None:
     parser_path = root / "typescript" / "package.json"
-    parser = _json(parser_path)
-    if _string(parser, "name", str(parser_path)) != "okf-parser":
-        _fail("main npm package name must be 'okf-parser'")
-    if _string(parser, "version", str(parser_path)) != version:
-        _fail("main npm version differs from Python version")
-
+    _verify_npm_manifest(parser_path, "okf-parser", version)
     adapter_path = root / "typescript-duckdb" / "package.json"
-    adapter = _json(adapter_path)
-    if _string(adapter, "name", str(adapter_path)) != "okf-parser-duckdb":
-        _fail("adapter npm package name must be 'okf-parser-duckdb'")
-    if _string(adapter, "version", str(adapter_path)) != version:
-        _fail("adapter npm version differs from Python version")
+    adapter = _verify_npm_manifest(adapter_path, "okf-parser-duckdb", version)
     peers = _mapping(adapter.get("peerDependencies"), "peerDependencies")
     if _string(peers, "okf-parser", "peerDependencies") != f"^{version}":
         _fail(f"adapter peer dependency must be ^{version}")
 
-    version_path = root / "typescript" / "src" / "version.ts"
+
+def _verify_protocol(root: Path, version: str) -> None:
+    path = root / "typescript" / "src" / "version.ts"
     try:
-        match = PROTOCOL_VERSION.search(version_path.read_text(encoding="utf-8"))
+        match = PROTOCOL_VERSION.search(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError) as exc:
-        _fail(f"cannot read {version_path}: {exc}")
+        _fail(f"cannot read {path}: {exc}")
     if match is None or match.group("version") != version:
         _fail("TypeScript protocol version differs from package version")
 
-    changelog_path = root / "changelog" / f"{version}.md"
-    metadata = _frontmatter(changelog_path)
+
+def _verify_changelog(root: Path, version: str) -> Path:
+    path = root / "changelog" / f"{version}.md"
+    metadata = _frontmatter(path)
     if metadata.get("type") != "Release" or metadata.get("title") != f"okf-parser {version}":
         _fail(f"changelog metadata does not identify okf-parser {version}")
+    return path
+
+
+def verify_source(root: Path, tag: str | None = None) -> SourceContract:
+    """Verify package names, versions, protocol, peer range and changelog."""
+    version = _project_version(root)
+    _verify_npm_contract(root, version)
+    _verify_protocol(root, version)
+    changelog = _verify_changelog(root, version)
     if tag is not None and tag != f"v{version}":
         _fail(f"tag must be v{version}, found {tag!r}")
-    return SourceContract(version=version, changelog=changelog_path.relative_to(root).as_posix())
+    return SourceContract(version=version, changelog=changelog.relative_to(root).as_posix())
 
 
 def _expected(version: str) -> tuple[ExpectedArtifact, ...]:
@@ -194,17 +237,20 @@ def _metadata_field(text: str, field: str) -> str:
     _fail(f"archive metadata has no {field} field")
 
 
-def _identity(path: Path, kind: Kind) -> tuple[str, str]:
+def _wheel_identity(path: Path) -> tuple[str, str]:
     try:
-        if kind == "python-wheel":
-            with zipfile.ZipFile(path) as archive:
-                names = [
-                    name for name in archive.namelist() if name.endswith(".dist-info/METADATA")
-                ]
-                if len(names) != 1:
-                    _fail(f"wheel {path} must contain one METADATA file")
-                text = archive.read(names[0]).decode("utf-8")
-            return _metadata_field(text, "Name"), _metadata_field(text, "Version")
+        with zipfile.ZipFile(path) as archive:
+            names = [name for name in archive.namelist() if name.endswith(".dist-info/METADATA")]
+            if len(names) != 1:
+                _fail(f"wheel {path} must contain one METADATA file")
+            text = archive.read(names[0]).decode("utf-8")
+    except (OSError, UnicodeError, KeyError, zipfile.BadZipFile) as exc:
+        _fail(f"cannot inspect {path}: {exc}")
+    return _metadata_field(text, "Name"), _metadata_field(text, "Version")
+
+
+def _tar_metadata(path: Path, kind: Kind) -> str:
+    try:
         with tarfile.open(path, mode="r:gz") as archive:
             if kind == "python-sdist":
                 members = [
@@ -218,16 +264,19 @@ def _identity(path: Path, kind: Kind) -> tuple[str, str]:
             file_object = archive.extractfile(member)
             if file_object is None:
                 _fail(f"cannot read package metadata from {path}")
-            data = file_object.read().decode("utf-8")
-    except (OSError, UnicodeError, KeyError, tarfile.TarError, zipfile.BadZipFile) as exc:
+            return file_object.read().decode("utf-8")
+    except (OSError, UnicodeError, KeyError, tarfile.TarError) as exc:
         _fail(f"cannot inspect {path}: {exc}")
+
+
+def _identity(path: Path, kind: Kind) -> tuple[str, str]:
+    if kind == "python-wheel":
+        return _wheel_identity(path)
+    data = _tar_metadata(path, kind)
     if kind == "python-sdist":
         return _metadata_field(data, "Name"), _metadata_field(data, "Version")
-    metadata = json.loads(data)
-    if not isinstance(metadata, dict):
-        _fail(f"npm package metadata in {path} is not an object")
-    typed = cast("dict[str, object]", metadata)
-    return _string(typed, "name", str(path)), _string(typed, "version", str(path))
+    metadata = _decode_json_object(data, str(path))
+    return _string(metadata, "name", str(path)), _string(metadata, "version", str(path))
 
 
 def _hash(path: Path, algorithm: str) -> str:
@@ -245,48 +294,31 @@ def _sri(sha512: str) -> str:
     return "sha512-" + base64.b64encode(bytes.fromhex(sha512)).decode("ascii")
 
 
-def build_manifest(
-    root: Path,
+def _artifact_record(
     release: Path,
-    repository: str,
-    commit: str,
-    ref: str,
-    tools: dict[str, str],
-) -> dict[str, object]:
-    """Inspect release files and write manifest.json plus SHA256SUMS."""
+    path: Path,
+    expected: ExpectedArtifact,
+    version: str,
+) -> Artifact:
+    package, archive_version = _identity(path, expected.kind)
+    if package != expected.package or archive_version != version:
+        _fail(f"archive identity mismatch for {path}")
+    sha256 = _hash(path, "sha256")
+    sha512 = _hash(path, "sha512")
+    return {
+        "kind": expected.kind,
+        "package": package,
+        "version": archive_version,
+        "path": path.relative_to(release).as_posix(),
+        "filename": path.name,
+        "size": path.stat().st_size,
+        "sha256": sha256,
+        "sha512": sha512,
+        "sri": _sri(sha512),
+    }
 
-    contract = verify_source(root)
-    if "/" not in repository:
-        _fail("repository must use owner/name form")
-    if FULL_SHA.fullmatch(commit) is None:
-        _fail("commit must be a lowercase full SHA")
-    if not ref:
-        _fail("ref must not be empty")
 
-    artifacts: list[dict[str, object]] = []
-    expected_paths: set[Path] = set()
-    for expected in _expected(contract.version):
-        path = _find(release, expected)
-        expected_paths.add(path.resolve())
-        package, version = _identity(path, expected.kind)
-        if package != expected.package or version != contract.version:
-            _fail(f"archive identity mismatch for {path}")
-        sha256 = _hash(path, "sha256")
-        sha512 = _hash(path, "sha512")
-        artifacts.append(
-            {
-                "kind": expected.kind,
-                "package": package,
-                "version": version,
-                "path": path.relative_to(release).as_posix(),
-                "filename": path.name,
-                "size": path.stat().st_size,
-                "sha256": sha256,
-                "sha512": sha512,
-                "sri": _sri(sha512),
-            }
-        )
-
+def _reject_unexpected(release: Path, expected_paths: set[Path]) -> None:
     actual_paths = {
         path.resolve()
         for name in ("python", "npm")
@@ -297,26 +329,52 @@ def build_manifest(
     if extra:
         _fail(f"unexpected release artifacts: {', '.join(extra)}")
 
-    artifacts.sort(key=lambda item: cast("str", item["kind"]))
-    manifest: dict[str, object] = {
-        "schema_version": 1,
-        "repository": repository,
-        "commit": commit,
-        "ref": ref,
-        "version": contract.version,
-        "tools": dict(sorted(tools.items())),
-        "artifacts": artifacts,
-    }
+
+def _write_manifest_files(release: Path, manifest: dict[str, object]) -> None:
     release.mkdir(parents=True, exist_ok=True)
     (release / "manifest.json").write_text(
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    artifacts = cast("list[Artifact]", manifest["artifacts"])
     sums = "\n".join(
         f"{item['sha256']}  {item['path']}"
         for item in sorted(artifacts, key=lambda value: cast("str", value["path"]))
     )
     (release / "SHA256SUMS").write_text(sums + "\n", encoding="utf-8")
+
+
+def _verify_build_context(context: BuildContext) -> None:
+    if "/" not in context.repository:
+        _fail("repository must use owner/name form")
+    if FULL_SHA.fullmatch(context.commit) is None:
+        _fail("commit must be a lowercase full SHA")
+    if not context.ref:
+        _fail("ref must not be empty")
+
+
+def build_manifest(root: Path, release: Path, context: BuildContext) -> dict[str, object]:
+    """Inspect release files and write manifest.json plus SHA256SUMS."""
+    contract = verify_source(root)
+    _verify_build_context(context)
+    artifacts: list[Artifact] = []
+    expected_paths: set[Path] = set()
+    for expected in _expected(contract.version):
+        path = _find(release, expected)
+        expected_paths.add(path.resolve())
+        artifacts.append(_artifact_record(release, path, expected, contract.version))
+    _reject_unexpected(release, expected_paths)
+    artifacts.sort(key=lambda item: cast("str", item["kind"]))
+    manifest: dict[str, object] = {
+        "schema_version": 1,
+        "repository": context.repository,
+        "commit": context.commit,
+        "ref": context.ref,
+        "version": contract.version,
+        "tools": dict(sorted(context.tools.items())),
+        "artifacts": artifacts,
+    }
+    _write_manifest_files(release, manifest)
     return manifest
 
 
@@ -330,60 +388,82 @@ def _safe_path(release: Path, raw: str) -> Path:
     return path
 
 
-def verify_local(root: Path, manifest_path: Path) -> dict[str, object]:
-    """Re-read and verify every artifact named by a local manifest."""
-
-    manifest = _json(manifest_path)
-    contract = verify_source(root)
-    if manifest.get("schema_version") != 1 or manifest.get("version") != contract.version:
+def _manifest_artifacts(manifest: dict[str, object], version: str) -> list[Artifact]:
+    if manifest.get("schema_version") != 1 or manifest.get("version") != version:
         _fail("manifest schema or version mismatch")
     commit = manifest.get("commit")
     if not isinstance(commit, str) or FULL_SHA.fullmatch(commit) is None:
         _fail("manifest commit is not a full lowercase SHA")
     raw_artifacts = manifest.get("artifacts")
-    if not isinstance(raw_artifacts, list) or len(raw_artifacts) != 4:
-        _fail("manifest must contain exactly four artifacts")
+    if not isinstance(raw_artifacts, list) or len(raw_artifacts) != len(KINDS):
+        _fail(f"manifest must contain exactly {len(KINDS)} artifacts")
+    return [_mapping(raw, "manifest artifact") for raw in raw_artifacts]
 
-    expected = {item.kind: item for item in _expected(contract.version)}
-    seen: set[str] = set()
-    release = manifest_path.parent
-    for raw in raw_artifacts:
-        item = _mapping(raw, "manifest artifact")
-        kind = _string(item, "kind", "manifest artifact")
-        if kind not in KINDS or kind in seen:
-            _fail(f"unknown or duplicate artifact kind {kind!r}")
-        seen.add(kind)
-        typed_kind = cast("Kind", kind)
-        path = _safe_path(release, _string(item, "path", "manifest artifact"))
-        if not path.is_file() or path.name != _string(item, "filename", "manifest artifact"):
-            _fail(f"manifest file mismatch for {path}")
-        package, version = _identity(path, typed_kind)
-        specification = expected[typed_kind]
-        if package != specification.package or item.get("package") != package:
-            _fail(f"package identity mismatch for {path}")
-        if version != contract.version or item.get("version") != version:
-            _fail(f"version mismatch for {path}")
-        if item.get("size") != path.stat().st_size:
-            _fail(f"size mismatch for {path}")
-        sha256 = _hash(path, "sha256")
-        sha512 = _hash(path, "sha512")
-        if item.get("sha256") != sha256 or item.get("sha512") != sha512:
-            _fail(f"digest mismatch for {path}")
-        if item.get("sri") != _sri(sha512):
-            _fail(f"SRI mismatch for {path}")
 
-    if seen != set(KINDS):
-        _fail("manifest artifact set is incomplete")
-    expected_sums = "\n".join(
-        f"{item['sha256']}  {item['path']}"
-        for item in sorted(raw_artifacts, key=lambda value: cast("str", value["path"]))
-    ) + "\n"
+def _entry_kind(item: Artifact, seen: set[Kind]) -> Kind:
+    raw_kind = _string(item, "kind", "manifest artifact")
+    if raw_kind not in KINDS:
+        _fail(f"unknown artifact kind {raw_kind!r}")
+    kind = cast("Kind", raw_kind)
+    if kind in seen:
+        _fail(f"duplicate artifact kind {kind!r}")
+    seen.add(kind)
+    return kind
+
+
+def _verify_entry(item: Artifact, context: VerificationContext, seen: set[Kind]) -> None:
+    kind = _entry_kind(item, seen)
+    path = _safe_path(context.release, _string(item, "path", "manifest artifact"))
+    if not path.is_file() or path.name != _string(item, "filename", "manifest artifact"):
+        _fail(f"manifest file mismatch for {path}")
+    package, version = _identity(path, kind)
+    specification = context.expected[kind]
+    if package != specification.package or item.get("package") != package:
+        _fail(f"package identity mismatch for {path}")
+    if version != context.version or item.get("version") != version:
+        _fail(f"version mismatch for {path}")
+    if item.get("size") != path.stat().st_size:
+        _fail(f"size mismatch for {path}")
+    sha256 = _hash(path, "sha256")
+    sha512 = _hash(path, "sha512")
+    if item.get("sha256") != sha256 or item.get("sha512") != sha512:
+        _fail(f"digest mismatch for {path}")
+    if item.get("sri") != _sri(sha512):
+        _fail(f"SRI mismatch for {path}")
+
+
+def _verify_sums(release: Path, artifacts: list[Artifact]) -> None:
+    expected = (
+        "\n".join(
+            f"{item['sha256']}  {item['path']}"
+            for item in sorted(artifacts, key=lambda value: cast("str", value["path"]))
+        )
+        + "\n"
+    )
     try:
-        actual_sums = (release / "SHA256SUMS").read_text(encoding="utf-8")
+        actual = (release / "SHA256SUMS").read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
         _fail(f"cannot read SHA256SUMS: {exc}")
-    if actual_sums != expected_sums:
+    if actual != expected:
         _fail("SHA256SUMS does not match manifest.json")
+
+
+def verify_local(root: Path, manifest_path: Path) -> dict[str, object]:
+    """Re-read and verify every artifact named by a local manifest."""
+    manifest = _json(manifest_path)
+    contract = verify_source(root)
+    artifacts = _manifest_artifacts(manifest, contract.version)
+    context = VerificationContext(
+        release=manifest_path.parent,
+        version=contract.version,
+        expected={item.kind: item for item in _expected(contract.version)},
+    )
+    seen: set[Kind] = set()
+    for item in artifacts:
+        _verify_entry(item, context, seen)
+    if seen != set(KINDS):
+        _fail("manifest artifact set is incomplete")
+    _verify_sums(context.release, artifacts)
     return manifest
 
 
@@ -413,29 +493,29 @@ def _required(value: str | None, label: str) -> str:
     return value
 
 
+def _build_context(arguments: argparse.Namespace) -> BuildContext:
+    return BuildContext(
+        repository=_required(arguments.repository, "repository"),
+        commit=_required(arguments.commit, "commit"),
+        ref=_required(arguments.ref, "ref"),
+        tools={
+            "python": arguments.python_version or platform.python_version(),
+            "node": arguments.node_version or "unknown",
+            "npm": arguments.npm_version or "unknown",
+            "uv": arguments.uv_version or "unknown",
+        },
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the release-contract CLI."""
-
     arguments = _parser().parse_args(argv)
     root = arguments.root.resolve()
     try:
         if arguments.command == "verify-source":
             result: object = asdict(verify_source(root, arguments.tag))
         elif arguments.command == "build-manifest":
-            tools = {
-                "python": arguments.python_version or platform.python_version(),
-                "node": arguments.node_version or "unknown",
-                "npm": arguments.npm_version or "unknown",
-                "uv": arguments.uv_version or "unknown",
-            }
-            result = build_manifest(
-                root,
-                arguments.directory.resolve(),
-                _required(arguments.repository, "repository"),
-                _required(arguments.commit, "commit"),
-                _required(arguments.ref, "ref"),
-                tools,
-            )
+            result = build_manifest(root, arguments.directory.resolve(), _build_context(arguments))
         else:
             result = verify_local(root, arguments.manifest.resolve())
     except ContractError as exc:
