@@ -1,26 +1,91 @@
-name: Finalize Registry Preflight
+name: CI
 
 on:
   pull_request:
+  push:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: finalize-registry-preflight
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  finalize:
-    if: github.actor != 'github-actions[bot]'
+  version-bump:
+    name: Version bump and changelog
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
-      - name: Check out implementation branch
+      - name: Check out repository history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: feat/registry-preflight
           fetch-depth: 0
+
+      - name: Require a version bump and matching changelog
+        shell: bash
+        env:
+          BASE: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          read_version() {
+            sed -n 's/^version = "\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)"$/\1/p'
+          }
+
+          git fetch --quiet origin "$BASE"
+          head_version=$(read_version < pyproject.toml)
+          if git cat-file -e "origin/$BASE:pyproject.toml" 2>/dev/null; then
+            base_version=$(git show "origin/$BASE:pyproject.toml" | read_version)
+          else
+            base_version="0.0.0"
+          fi
+
+          if [[ -z "$head_version" ]]; then
+            echo "::error file=pyproject.toml::A versão SemVer não foi encontrada."
+            exit 1
+          fi
+          if [[ "$head_version" == "$base_version" ]]; then
+            echo "::error file=pyproject.toml::A versão continua $head_version; faça o bump."
+            exit 1
+          fi
+          highest=$(printf '%s\n%s\n' "$base_version" "$head_version" | sort -V | tail -1)
+          if [[ "$highest" != "$head_version" ]]; then
+            echo "::error file=pyproject.toml::A versão $head_version não supera $base_version."
+            exit 1
+          fi
+
+          for manifest in typescript/package.json typescript-duckdb/package.json; do
+            if [[ -f "$manifest" ]]; then
+              package_version=$(sed -n 's/^[[:space:]]*"version": "\([^"]*\)",$/\1/p' "$manifest")
+              if [[ "$package_version" != "$head_version" ]]; then
+                echo "::error file=$manifest::A versão npm $package_version difere da versão Python $head_version."
+                exit 1
+              fi
+            fi
+          done
+
+          expected_changelog="changelog/$head_version.md"
+          mapfile -t added_changelogs < <(
+            git diff --diff-filter=A --name-only "origin/$BASE...HEAD" -- "changelog/*.md"
+          )
+          if [[ "${#added_changelogs[@]}" -ne 1 ]]; then
+            echo "::error file=changelog::Cada PR deve adicionar exatamente um changelog."
+            printf 'Encontrado: %s\n' "${added_changelogs[@]}"
+            exit 1
+          fi
+          if [[ "${added_changelogs[0]}" != "$expected_changelog" ]]; then
+            echo "::error file=${added_changelogs[0]}::Esperado $expected_changelog."
+            exit 1
+          fi
+
+          echo "OK: $base_version -> $head_version; $expected_changelog presente."
+
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -28,110 +93,155 @@ jobs:
           version: "0.11.21"
           python-version: "3.12"
 
+      - name: Install locked dependencies
+        run: uv sync --frozen --all-groups
+
+      - name: Check lockfile
+        run: uv lock --check
+
+      - name: Check Python formatting
+        run: uv run ruff format --check .
+
+      - name: Lint Python
+        run: uv run ruff check .
+
+      - name: Check types
+        run: uv run ty check src tests
+
+      - name: Find dead code
+        run: uv run vulture src --min-confidence 90
+
+      - name: Run tests
+        run: uv run pytest
+
+      - name: Validate this repository with okf-parser
+        run: uv run okf-parser check .
+
+      - name: Build distributions
+        run: uv build
+
+  typescript-quality:
+    name: TypeScript / Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - name: Install Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: 24
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci --prefix typescript
+
+      - name: Check TypeScript
+        run: npm run check --prefix typescript
+
+      - name: Run TypeScript and shared conformance tests
+        run: npm test --prefix typescript
+
+      - name: Build ESM and declarations
+        run: npm run build --prefix typescript
+
+      - name: Dogfood the TypeScript CLI
+        run: node typescript/dist/cli.js check . > "$RUNNER_TEMP/okf-check.json"
+
+      - name: Exercise the TypeScript formatter
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/format-fixture"
+          printf '# Heading\n\n-   item\n' > "$RUNNER_TEMP/format-fixture/concept.md"
+          if node typescript/dist/cli.js format "$RUNNER_TEMP/format-fixture" > "$RUNNER_TEMP/format-check.json"; then
+            echo "formatter check unexpectedly succeeded before rewrite"
+            exit 1
+          fi
+          node typescript/dist/cli.js format "$RUNNER_TEMP/format-fixture" --write > "$RUNNER_TEMP/format-write.json"
+          node typescript/dist/cli.js format "$RUNNER_TEMP/format-fixture" > "$RUNNER_TEMP/format-clean.json"
+          grep -qx -- '- item' "$RUNNER_TEMP/format-fixture/concept.md"
+
+      - name: Exercise the MCP stdio binary
+        run: node typescript/scripts/smoke-mcp-stdio.mjs
+
+      - name: Pack and install into a clean project
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_version=$(node -p "require('./typescript/package.json').version")
+          tarball=$(cd typescript && npm pack --pack-destination "$RUNNER_TEMP" --silent)
+          mkdir "$RUNNER_TEMP/consumer"
+          cd "$RUNNER_TEMP/consumer"
+          npm init -y >/dev/null
+          npm install --ignore-scripts "$RUNNER_TEMP/$tarball" >/dev/null
+          EXPECTED_VERSION="$expected_version" node --input-type=module -e "import('okf-parser').then(({ capabilityManifest }) => { if (capabilityManifest.protocol_version !== process.env.EXPECTED_VERSION || capabilityManifest.capabilities.format !== 'stable') process.exit(1) })"
+          ./node_modules/.bin/okf-parser-ts --help >/dev/null
+          mkdir format-fixture
+          printf '# Heading\n\n-   item\n' > format-fixture/concept.md
+          if ./node_modules/.bin/okf-parser-ts format format-fixture >/dev/null; then
+            echo "installed formatter check unexpectedly succeeded before rewrite"
+            exit 1
+          fi
+          ./node_modules/.bin/okf-parser-ts format format-fixture --write >/dev/null
+          ./node_modules/.bin/okf-parser-ts format format-fixture >/dev/null
+          grep -qx -- '- item' format-fixture/concept.md
+          node "$GITHUB_WORKSPACE/typescript/scripts/smoke-mcp-stdio.mjs" ./node_modules/.bin/okf-parser-ts-mcp
+
+  typescript-duckdb-quality:
+    name: TypeScript DuckDB / Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ matrix.node }}
           cache: npm
           cache-dependency-path: |
             typescript/package-lock.json
             typescript-duckdb/package-lock.json
 
-      - name: Synchronize version and lock metadata
-        shell: bash
+      - name: Build the parser package
         run: |
-          set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-
-          replacements = {
-              Path("pyproject.toml"): [('version = "0.12.0"', 'version = "0.13.0"')],
-              Path("typescript/src/version.ts"): [('"0.12.0"', '"0.13.0"')],
-          }
-          for path, pairs in replacements.items():
-              text = path.read_text(encoding="utf-8")
-              for old, new in pairs:
-                  if old not in text:
-                      raise SystemExit(f"missing expected text {old!r} in {path}")
-                  text = text.replace(old, new, 1)
-              path.write_text(text, encoding="utf-8")
-          PY
-          npm --prefix typescript version 0.13.0 --no-git-tag-version
-          npm --prefix typescript-duckdb version 0.13.0 --no-git-tag-version
-          npm --prefix typescript-duckdb pkg set 'peerDependencies.okf-parser=^0.13.0'
-          uv lock
-          npm install --prefix typescript --package-lock-only --ignore-scripts
-          npm install --prefix typescript-duckdb --package-lock-only --ignore-scripts
-
-      - name: Verify Python and repository contract
-        shell: bash
-        run: |
-          set -euo pipefail
-          uv sync --frozen --all-groups
-          uv run ruff format .
-          uv run ruff check .
-          uv run ty check src tests scripts
-          uv run vulture src --min-confidence 90
-          uv run pytest
-          python scripts/release_contract.py verify-source
-          uv run okf-parser check .
-
-      - name: Verify TypeScript packages
-        shell: bash
-        run: |
-          set -euo pipefail
           npm ci --prefix typescript
-          npm run check --prefix typescript
-          npm test --prefix typescript
           npm run build --prefix typescript
-          npm ci --prefix typescript-duckdb
-          npm run check --prefix typescript-duckdb
-          npm test --prefix typescript-duckdb
-          npm run build --prefix typescript-duckdb
 
-      - name: Exercise live read-only registry preflight
+      - name: Install adapter dependencies
+        run: npm ci --prefix typescript-duckdb
+
+      - name: Check adapter TypeScript
+        run: npm run check --prefix typescript-duckdb
+
+      - name: Run adapter integration tests
+        run: npm test --prefix typescript-duckdb
+
+      - name: Build adapter ESM and declarations
+        run: npm run build --prefix typescript-duckdb
+
+      - name: Pack both packages and install into a clean project
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf release
-          mkdir -p release/python release/npm
-          uv build --out-dir release/python
-          rm -f release/python/.gitignore
-          (cd typescript && npm pack --pack-destination ../release/npm --silent)
-          (cd typescript-duckdb && npm pack --pack-destination ../release/npm --silent)
-          python scripts/release_contract.py build-manifest \
-            --directory release \
-            --repository "$GITHUB_REPOSITORY" \
-            --commit "$(git rev-parse HEAD)" \
-            --ref feat/registry-preflight \
-            --python-version "$(python -c 'import platform; print(platform.python_version())')" \
-            --node-version "$(node --version)" \
-            --npm-version "$(npm --version)" \
-            --uv-version "$(uv --version | awk '{print $2}')"
-          python scripts/release_contract.py verify-local --manifest release/manifest.json
-          python -m scripts.registry_state \
-            --manifest release/manifest.json \
-            --output release/registry-state.json
-          cat release/registry-state.json
-          rm -rf release dist typescript/dist typescript-duckdb/dist
-
-      - name: Commit verified non-workflow files
-        shell: bash
-        run: |
-          set -euo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add \
-            changelog/0.13.0.md \
-            docs/releasing.md \
-            pyproject.toml \
-            scripts/registry_state.py \
-            tests/test_registry_state.py \
-            typescript/package.json \
-            typescript/package-lock.json \
-            typescript/src/version.ts \
-            typescript-duckdb/package.json \
-            typescript-duckdb/package-lock.json \
-            uv.lock
-          git commit -m "feat(release): add read-only registry preflight"
-          git push origin HEAD:feat/registry-preflight
+          parser_tarball=$(cd typescript && npm pack --pack-destination "$RUNNER_TEMP" --silent)
+          adapter_tarball=$(cd typescript-duckdb && npm pack --pack-destination "$RUNNER_TEMP" --silent)
+          mkdir "$RUNNER_TEMP/duckdb-consumer"
+          cd "$RUNNER_TEMP/duckdb-consumer"
+          npm init -y >/dev/null
+          npm install --ignore-scripts "$RUNNER_TEMP/$parser_tarball" >/dev/null
+          npm install --ignore-scripts "$RUNNER_TEMP/$adapter_tarball" >/dev/null
+          mkdir knowledge
+          printf '%s\n' '---' 'type: Node' '---' '# Node' > knowledge/node.md
+          ./node_modules/.bin/okf-parser-ts-duckdb knowledge --database bundle.duckdb > report.json
+          node --input-type=module -e "import('okf-parser-duckdb').then(async ({ exportDuckDb }) => { const result = await exportDuckDb('knowledge', { database: 'second.duckdb' }); if (result.concept_count !== 1) process.exit(1) })"
