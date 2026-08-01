@@ -8,7 +8,11 @@ from typing import TypedDict, cast
 
 import pytest
 
-from okf_parser.markdown_style import format_markdown, parse_markdown, protected_block_signature
+from okf_parser.markdown_style import (
+    format_markdown,
+    parse_markdown,
+    protected_block_signature,
+)
 
 
 class FormattingCase(TypedDict):
