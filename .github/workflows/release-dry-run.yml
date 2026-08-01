@@ -1,26 +1,49 @@
-name: Finalize Registry Preflight
+name: Release Dry Run
 
 on:
   pull_request:
-    branches: [main]
+    paths:
+      - ".github/workflows/release-dry-run.yml"
+      - "changelog/**"
+      - "docs/releasing.md"
+      - "pyproject.toml"
+      - "rfcs/0003-resumable-multi-registry-release.md"
+      - "scripts/**"
+      - "tests/test_release_contract.py"
+      - "tests/test_registry_state.py"
+      - "typescript/package.json"
+      - "typescript/package-lock.json"
+      - "typescript/src/version.ts"
+      - "typescript-duckdb/package.json"
+      - "typescript-duckdb/package-lock.json"
+      - "uv.lock"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Existing branch, commit, or stable vX.Y.Z tag to build
+        required: false
+        default: main
+        type: string
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
-  group: finalize-registry-preflight
+  group: release-dry-run-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  finalize:
-    if: github.actor != 'github-actions[bot]'
+  build-release-set:
+    name: Build and verify release set
     runs-on: ubuntu-latest
+    env:
+      DRY_RUN_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref_name }}
     steps:
-      - name: Check out implementation branch
+      - name: Check out immutable source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: feat/registry-preflight
           fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
 
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
@@ -37,177 +60,23 @@ jobs:
             typescript/package-lock.json
             typescript-duckdb/package-lock.json
 
-      - name: Complete implementation and metadata
+      - name: Verify synchronized source contract
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
+          args=()
+          if [[ "$DRY_RUN_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            args+=(--tag "$DRY_RUN_REF")
+          fi
+          python scripts/release_contract.py verify-source "${args[@]}"
 
-          path = Path("scripts/registry_state.py")
-          text = path.read_text(encoding="utf-8")
-          text = text.replace(
-              "import json\nfrom dataclasses import dataclass\nfrom typing import TYPE_CHECKING, BinaryIO, Callable, Final, Literal, Never, cast\nfrom urllib.error import HTTPError, URLError\n",
-              "import argparse\nimport json\nimport sys\nfrom dataclasses import dataclass\nfrom pathlib import Path\nfrom typing import BinaryIO, Callable, Final, Never, cast\nfrom urllib.error import HTTPError\n",
-              1,
-          )
-          text = text.replace(
-              "\nif TYPE_CHECKING:\n    from pathlib import Path\n",
-              "",
-              1,
-          )
-          text = text.replace(
-              '''RegistryStatus = Literal[
-    "absent",
-    "present_expected",
-    "present_conflict",
-    "unverifiable",
-]
-''',
-              "",
-              1,
-          )
-          text = text.replace(
-              "    except (OSError, TimeoutError, URLError) as exc:\n",
-              "    except OSError as exc:\n",
-              1,
-          )
-          text += '''
-
-
-def _read_manifest(path: Path) -> dict[str, object]:
-    try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        _fail(f"cannot read manifest {path}: {exc}")
-    if not isinstance(value, dict):
-        _fail(f"manifest {path} is not a JSON object")
-    return cast("dict[str, object]", value)
-
-
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--manifest", type=Path, default=Path("release/manifest.json"))
-    parser.add_argument("--output", type=Path, default=Path("release/registry-state.json"))
-    parser.add_argument("--timeout", type=float, default=15.0)
-    return parser
-
-
-def main(argv: list[str] | None = None) -> int:
-    """Run the read-only registry preflight CLI."""
-    arguments = _parser().parse_args(argv)
-    try:
-        report = inspect_registry_state(
-            _read_manifest(arguments.manifest.resolve()),
-            timeout=arguments.timeout,
-        )
-        write_registry_report(arguments.output.resolve(), report)
-    except RegistryStateError as exc:
-        sys.stderr.write(f"registry preflight error: {exc}\\n")
-        return 2
-    sys.stdout.write(json.dumps(report, indent=2, sort_keys=True) + "\\n")
-    return 0 if report["safe_to_publish"] is True else 3
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
-'''
-          path.write_text(text, encoding="utf-8")
-
-          tests = Path("tests/test_registry_state.py")
-          text = tests.read_text(encoding="utf-8")
-          text = text.replace("from typing import cast\n", "from typing import Callable, cast\n", 1)
-          text = text.replace(
-              "def _fetcher(routes: dict[str, HttpResult], failures: set[str] | None = None):\n",
-              "def _fetcher(\n    routes: dict[str, HttpResult], failures: set[str] | None = None\n) -> Callable[[str, float], HttpResult]:\n",
-              1,
-          )
-          tests.write_text(text, encoding="utf-8")
-
-          docs = Path("docs/releasing.md")
-          text = docs.read_text(encoding="utf-8")
-          text = text.replace(
-              "## Current capability: dry run only",
-              "## Current capability: dry run and read-only preflight",
-              1,
-          )
-          text = text.replace(
-              "├── manifest.json\n└── SHA256SUMS",
-              "├── manifest.json\n├── registry-state.json\n└── SHA256SUMS",
-              1,
-          )
-          text = text.replace(
-              "python scripts/release_contract.py verify-local --manifest release/manifest.json\n```",
-              "python scripts/release_contract.py verify-local --manifest release/manifest.json\npython -m scripts.registry_state --manifest release/manifest.json \\\n  --output release/registry-state.json\n```",
-              1,
-          )
-          marker = "The manifest command fails on missing, duplicate or unexpected artifacts. The\nverification command rejects path traversal, archive identity drift, changed\nsizes or digests, and a `SHA256SUMS` file that no longer matches the manifest.\n"
-          addition = marker + "\n## Public registry preflight\n\nThe registry command performs anonymous HTTPS reads only. It compares the\nmanifest with PyPI SHA-256 file digests and npm SRI integrity, then classifies\neach target as `absent`, `present_expected`, `present_conflict` or\n`unverifiable`. Its plan uses `publish`, `skip` or `block`, which is the state\nmachine later consumed by the privileged workflow.\n\nWhen a target version is absent, the report also probes the package root. This\ndistinguishes a genuinely available bootstrap name from a package that already\nexists at another version. Conflicts, incomplete releases and unverifiable\nresponses return a non-zero status; no registry mutation is attempted.\n"
-          if marker not in text:
-              raise SystemExit("documentation insertion marker not found")
-          text = text.replace(marker, addition, 1)
-          text = text.replace(
-              "6. review a second PR that adds idempotent registry-state checks and publication\n   jobs using the already-tested artifact set.",
-              "6. review a privileged PR that consumes the tested registry-state model and adds\n   publication jobs using the already-tested artifact set.",
-              1,
-          )
-          docs.write_text(text, encoding="utf-8")
-
-          pyproject = Path("pyproject.toml")
-          text = pyproject.read_text(encoding="utf-8")
-          if 'version = "0.12.0"' not in text:
-              raise SystemExit("unexpected Python version")
-          pyproject.write_text(
-              text.replace('version = "0.12.0"', 'version = "0.13.0"', 1),
-              encoding="utf-8",
-          )
-
-          version_file = Path("typescript/src/version.ts")
-          text = version_file.read_text(encoding="utf-8")
-          if '"0.12.0"' not in text:
-              raise SystemExit("unexpected protocol version")
-          version_file.write_text(
-              text.replace('"0.12.0"', '"0.13.0"', 1),
-              encoding="utf-8",
-          )
-          PY
-
-          npm --prefix typescript version 0.13.0 --no-git-tag-version
-          npm --prefix typescript-duckdb version 0.13.0 --no-git-tag-version
-          npm --prefix typescript-duckdb pkg set 'peerDependencies.okf-parser=^0.13.0'
-          uv lock
-          npm install --prefix typescript --package-lock-only --ignore-scripts
-          npm install --prefix typescript-duckdb --package-lock-only --ignore-scripts
-          mv .github/release-dry-run.final.yml .github/workflows/release-dry-run.yml
-          rm -f .github/workflows/consolidate-registry-preflight.yml
-
-      - name: Verify Python implementation
-        shell: bash
+      - name: Install locked build dependencies
         run: |
-          set -euo pipefail
           uv sync --frozen --all-groups
-          uv run ruff format .
-          uv run ruff check .
-          uv run ty check src tests scripts
-          uv run vulture src --min-confidence 90
-          uv run pytest
-          python scripts/release_contract.py verify-source
-          uv run okf-parser check .
-
-      - name: Verify TypeScript packages
-        shell: bash
-        run: |
-          set -euo pipefail
           npm ci --prefix typescript
-          npm run check --prefix typescript
-          npm test --prefix typescript
-          npm run build --prefix typescript
           npm ci --prefix typescript-duckdb
-          npm run check --prefix typescript-duckdb
-          npm test --prefix typescript-duckdb
-          npm run build --prefix typescript-duckdb
 
-      - name: Exercise live read-only registry preflight
+      - name: Build each artifact once
         shell: bash
         run: |
           set -euo pipefail
@@ -217,28 +86,127 @@ if __name__ == "__main__":
           rm -f release/python/.gitignore
           (cd typescript && npm pack --pack-destination ../release/npm --silent)
           (cd typescript-duckdb && npm pack --pack-destination ../release/npm --silent)
+
+      - name: Generate immutable release manifest
+        shell: bash
+        run: |
+          set -euo pipefail
           python scripts/release_contract.py build-manifest \
             --directory release \
             --repository "$GITHUB_REPOSITORY" \
             --commit "$(git rev-parse HEAD)" \
-            --ref feat/registry-preflight \
+            --ref "$DRY_RUN_REF" \
             --python-version "$(python -c 'import platform; print(platform.python_version())')" \
             --node-version "$(node --version)" \
             --npm-version "$(npm --version)" \
             --uv-version "$(uv --version | awk '{print $2}')"
-          python scripts/release_contract.py verify-local --manifest release/manifest.json
-          python -m scripts.registry_state \
-            --manifest release/manifest.json \
-            --output release/registry-state.json
-          cat release/registry-state.json
-          rm -rf release dist typescript/dist typescript-duckdb/dist
 
-      - name: Commit verified implementation
+      - name: Verify wheel and source distribution as consumers
         shell: bash
         run: |
           set -euo pipefail
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git commit -m "feat(release): add read-only registry preflight"
-          git push origin HEAD:feat/registry-preflight
+          expected_version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          wheel=$(find release/python -maxdepth 1 -type f -name '*.whl' -print -quit)
+          sdist=$(find release/python -maxdepth 1 -type f -name '*.tar.gz' -print -quit)
+          for artifact in "$wheel" "$sdist"; do
+            label=$(basename "$artifact" | tr '.-' '__')
+            environment="$RUNNER_TEMP/python-$label"
+            uv venv --python 3.12 "$environment"
+            uv pip install --python "$environment/bin/python" "$artifact"
+            EXPECTED_VERSION="$expected_version" "$environment/bin/python" -c 'import importlib.metadata, os; assert importlib.metadata.version("okf-parser") == os.environ["EXPECTED_VERSION"]'
+            "$environment/bin/okf-parser" --help >/dev/null
+            mkdir "$environment/fixture"
+            printf '%s\n' '---' 'type: Node' '---' '# Node' > "$environment/fixture/node.md"
+            "$environment/bin/okf-parser" check "$environment/fixture" >/dev/null
+          done
+
+      - name: Verify main npm tarball as a consumer
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_version=$(node -p "require('./typescript/package.json').version")
+          parser_tarball="$GITHUB_WORKSPACE/release/npm/okf-parser-$expected_version.tgz"
+          consumer="$RUNNER_TEMP/npm-consumer"
+          mkdir "$consumer"
+          cd "$consumer"
+          npm init -y >/dev/null
+          npm install --ignore-scripts "$parser_tarball" >/dev/null
+          EXPECTED_VERSION="$expected_version" node --input-type=module -e 'import("okf-parser").then(({ capabilityManifest }) => { if (capabilityManifest.protocol_version !== process.env.EXPECTED_VERSION) process.exit(1) })'
+          ./node_modules/.bin/okf-parser-ts --help >/dev/null
+          mkdir format-fixture
+          printf '# Heading\n\n-   item\n' > format-fixture/concept.md
+          if ./node_modules/.bin/okf-parser-ts format format-fixture >/dev/null; then
+            echo "installed formatter check unexpectedly succeeded before rewrite"
+            exit 1
+          fi
+          ./node_modules/.bin/okf-parser-ts format format-fixture --write >/dev/null
+          ./node_modules/.bin/okf-parser-ts format format-fixture >/dev/null
+          grep -qx -- '- item' format-fixture/concept.md
+          node "$GITHUB_WORKSPACE/typescript/scripts/smoke-mcp-stdio.mjs" ./node_modules/.bin/okf-parser-ts-mcp
+
+      - name: Verify both npm tarballs together
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_version=$(node -p "require('./typescript/package.json').version")
+          parser_tarball="$GITHUB_WORKSPACE/release/npm/okf-parser-$expected_version.tgz"
+          adapter_tarball="$GITHUB_WORKSPACE/release/npm/okf-parser-duckdb-$expected_version.tgz"
+          consumer="$RUNNER_TEMP/duckdb-consumer"
+          mkdir "$consumer"
+          cd "$consumer"
+          npm init -y >/dev/null
+          npm install --ignore-scripts "$parser_tarball" >/dev/null
+          npm install --ignore-scripts "$adapter_tarball" >/dev/null
+          mkdir knowledge
+          printf '%s\n' '---' 'type: Node' '---' '# Node' > knowledge/node.md
+          ./node_modules/.bin/okf-parser-ts-duckdb knowledge --database bundle.duckdb > report.json
+          node --input-type=module -e 'import("okf-parser-duckdb").then(async ({ exportDuckDb }) => { const result = await exportDuckDb("knowledge", { database: "second.duckdb" }); if (result.concept_count !== 1) process.exit(1) })'
+
+      - name: Re-verify exact artifact bytes
+        run: python scripts/release_contract.py verify-local --manifest release/manifest.json
+
+      - name: Inspect public registry state
+        run: python -m scripts.registry_state --manifest release/manifest.json --output release/registry-state.json
+
+      - name: Write release summary
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          manifest = json.loads(Path("release/manifest.json").read_text(encoding="utf-8"))
+          registry = json.loads(Path("release/registry-state.json").read_text(encoding="utf-8"))
+          print(f"## Release dry run {manifest['version']}")
+          print()
+          print(f"Source: `{manifest['repository']}@{manifest['commit']}`")
+          print()
+          print("| Artifact | Bytes | SHA-256 |")
+          print("|---|---:|---|")
+          for artifact in manifest["artifacts"]:
+              print(f"| `{artifact['path']}` | {artifact['size']} | `{artifact['sha256']}` |")
+          print()
+          print("## Public registry preflight")
+          print()
+          print("| Registry | Package | State | Package exists | Action |")
+          print("|---|---|---|---|---|")
+          actions = {
+              (item["registry"], item["package"]): item["action"]
+              for item in registry["plan"]
+          }
+          for entry in registry["entries"]:
+              action = actions[(entry["registry"], entry["package"])]
+              print(
+                  f"| {entry['registry']} | `{entry['package']}` | "
+                  f"`{entry['state']}` | `{entry['package_exists']}` | `{action}` |"
+              )
+          PY
+
+      - name: Upload tested release set
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-dry-run-${{ github.sha }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
