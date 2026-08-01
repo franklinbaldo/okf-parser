@@ -23,6 +23,40 @@ const report = await checkBundle("./knowledge");
 const zod = await exportZod("./knowledge", { inferTypes: true });
 ```
 
-Parsing, validation, inventory, graph summaries, JSON Schema and Zod generation
-are stable cross-runtime capabilities. Formatter, DuckDB and MCP support remain
-explicitly marked `not_implemented` in the exported capability manifest.
+## MCP server
+
+The package includes a read-only stdio MCP server:
+
+```bash
+npx okf-parser-ts-mcp
+```
+
+A typical host configuration is:
+
+```json
+{
+  "servers": {
+    "okf-parser": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "okf-parser", "okf-parser-ts-mcp"]
+    }
+  }
+}
+```
+
+Applications embedding the server can import the factory without starting a
+transport:
+
+```ts
+import { createMcpServer } from "okf-parser/mcp";
+
+const server = createMcpServer();
+```
+
+The MCP adapter exposes `check`, `inventory`, `graph` and `schema`. All tools are
+read-only and reuse the same core functions as the CLI and package API.
+
+Parsing, validation, inventory, graph summaries, JSON Schema, Zod generation and
+MCP are stable capabilities. Formatter and DuckDB support remain explicitly
+marked `not_implemented` in the exported capability manifest.
