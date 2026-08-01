@@ -1,0 +1,50 @@
+[
+  {
+    "name": "scalar-preservation",
+    "source": "---\ntype: Reference\nnumber: 0012\nactive: false\ncreated: 2026-01-01\nnothing: null\n---\nBody\n",
+    "frontmatter": {
+      "type": "Reference",
+      "number": "0012",
+      "active": "false",
+      "created": "2026-01-01",
+      "nothing": null
+    },
+    "body": "Body\n"
+  },
+  {
+    "name": "merge-key",
+    "source": "---\ntype: Reference\ndefaults: &defaults\n  active: true\nitem:\n  <<: *defaults\n  title: Example\n---\n",
+    "frontmatter": {
+      "type": "Reference",
+      "defaults": {
+        "active": "true"
+      },
+      "item": {
+        "active": "true",
+        "title": "Example"
+      }
+    },
+    "body": ""
+  },
+  {
+    "name": "nested-structure",
+    "source": "---\ntype: Example\nitems:\n  - name: one\n    enabled: true\n  - null\n---\n# Example\n",
+    "frontmatter": {
+      "type": "Example",
+      "items": [
+        {
+          "name": "one",
+          "enabled": "true"
+        },
+        null
+      ]
+    },
+    "body": "# Example\n"
+  },
+  {
+    "name": "empty-frontmatter",
+    "source": "---\n---\n# Empty\n",
+    "frontmatter": {},
+    "body": "# Empty\n"
+  }
+]
