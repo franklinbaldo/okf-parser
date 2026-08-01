@@ -1,17 +1,34 @@
+"""Tests for synchronized release metadata and artifact verification."""
+
 from __future__ import annotations
 
 import io
 import json
 import tarfile
 import zipfile
-from pathlib import Path
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
-from scripts.release_contract import ContractError, build_manifest, verify_local, verify_source
+from scripts.release_contract import (
+    BuildContext,
+    ContractError,
+    build_manifest,
+    verify_local,
+    verify_source,
+)
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 VERSION = "1.2.3"
 COMMIT = "a" * 40
+BUILD_CONTEXT = BuildContext(
+    repository="example/okf-parser",
+    commit=COMMIT,
+    ref=f"v{VERSION}",
+    tools={"python": "3.12", "node": "24", "npm": "11", "uv": "0.11"},
+)
 
 
 def _write_source(root: Path, *, protocol_version: str = VERSION) -> None:
@@ -78,14 +95,7 @@ def _write_artifacts(release: Path) -> None:
 def _build(root: Path) -> dict[str, object]:
     release = root / "release"
     _write_artifacts(release)
-    return build_manifest(
-        root,
-        release,
-        "example/okf-parser",
-        COMMIT,
-        f"v{VERSION}",
-        {"python": "3.12", "node": "24", "npm": "11", "uv": "0.11"},
-    )
+    return build_manifest(root, release, BUILD_CONTEXT)
 
 
 def test_verify_source_accepts_synchronized_metadata(tmp_path: Path) -> None:
@@ -134,15 +144,20 @@ def test_build_manifest_rejects_unexpected_artifact(tmp_path: Path) -> None:
     _write_artifacts(release)
     (release / "npm" / "extra.tgz").write_bytes(b"extra")
     with pytest.raises(ContractError, match="unexpected release artifacts"):
-        build_manifest(tmp_path, release, "example/okf-parser", COMMIT, "main", {})
+        build_manifest(tmp_path, release, BUILD_CONTEXT)
 
 
 def test_verify_local_rejects_path_traversal(tmp_path: Path) -> None:
     _write_source(tmp_path)
     _build(tmp_path)
     path = tmp_path / "release" / "manifest.json"
-    manifest = json.loads(path.read_text(encoding="utf-8"))
-    manifest["artifacts"][0]["path"] = "../escape.whl"
+    raw_manifest = json.loads(path.read_text(encoding="utf-8"))
+    manifest = cast("dict[str, object]", raw_manifest)
+    artifacts = manifest["artifacts"]
+    assert isinstance(artifacts, list)
+    first = artifacts[0]
+    assert isinstance(first, dict)
+    first["path"] = "../escape.whl"
     path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ContractError, match="unsafe"):
         verify_local(tmp_path, path)
