@@ -157,7 +157,7 @@ rewrite.
 
 ## Package identity and runtime support
 
-The proposed npm package name is `@franklinbaldo/okf-parser`.
+The proposed npm package name is `okf-parser`. It is intentionally unscoped, so the implementation does not depend on a personal or organization npm scope. The first publication must verify and reserve the registry name before release artifacts are announced.
 
 It is:
 
