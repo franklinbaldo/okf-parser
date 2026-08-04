@@ -22,6 +22,7 @@ export {
 } from "./core.js";
 export type {
   Bundle,
+  CheckOptions,
   CheckReport,
   ConceptRecord,
   Diagnostic,
@@ -70,6 +71,12 @@ export type {
   ZodImport,
   ZodOptions,
 } from "./schema.js";
+export {
+  SPEC_SLUG_PLACEHOLDER,
+  missingTypeSpecs,
+  specRelativePath,
+  typeSlug,
+} from "./type-specs.js";
 export { PROTOCOL_VERSION } from "./version.js";
 import { PROTOCOL_VERSION } from "./version.js";
 

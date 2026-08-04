@@ -19,9 +19,15 @@ if TYPE_CHECKING:
     from okf_parser.schema_contract import ZodImport
 
 
-def check_bundle(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
+def check_bundle(
+    path: str,
+    exclude: Sequence[str] = (),
+    require_spec: str | None = None,
+    *,
+    normative_spec: bool = False,
+) -> dict[str, object]:
     """Validate every Markdown file below a path."""
-    report = validate_path(Path(path), exclude)
+    report = validate_path(Path(path), exclude, require_spec, normative_spec=normative_spec)
     return {
         "root": str(report.root),
         "conformant": report.is_conformant,

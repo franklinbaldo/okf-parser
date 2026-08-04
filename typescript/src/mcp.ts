@@ -11,6 +11,16 @@ const excludeSchema = z
   .optional()
   .describe("Anchored bundle-relative exclusion patterns");
 
+const requireSpecSchema = z
+  .string()
+  .min(1)
+  .optional()
+  .describe('Specification document template per type, e.g. ".okf/specs/{slug}.md"');
+const normativeSpecSchema = z
+  .boolean()
+  .optional()
+  .describe("Report a missing specification document as an error instead of a warning");
+
 function loadOptions(exclude: readonly string[] | undefined) {
   return exclude === undefined ? {} : { exclude };
 }
@@ -56,9 +66,21 @@ export function createMcpServer(): McpServer {
     {
       title: "Validate OKF bundle",
       description: "Validate every authored Markdown document below an OKF bundle root.",
-      inputSchema: z.object({ path: pathSchema, exclude: excludeSchema }),
+      inputSchema: z.object({
+        path: pathSchema,
+        exclude: excludeSchema,
+        require_spec: requireSpecSchema,
+        normative_spec: normativeSpecSchema,
+      }),
     },
-    ({ path, exclude }) => toolResult(() => checkBundle(path, loadOptions(exclude))),
+    ({ path, exclude, require_spec, normative_spec }) =>
+      toolResult(() =>
+        checkBundle(path, {
+          ...loadOptions(exclude),
+          ...(require_spec === undefined ? {} : { requireSpec: require_spec }),
+          normativeSpec: normative_spec ?? false,
+        }),
+      ),
   );
 
   server.registerTool(

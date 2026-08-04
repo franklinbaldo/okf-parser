@@ -33,9 +33,10 @@ from okf_parser.parser import (
     resolve_local_target,
     split_optional_frontmatter,
 )
+from okf_parser.type_specs import missing_type_specs
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Iterable, Sequence
     from pathlib import Path
 
     from ibis.expr.types import Table
@@ -66,6 +67,14 @@ _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _TITLE_LEVEL = 1
 _DATE_LEVEL = 2
 type TableRecord = ConceptRecord | ReservedRecord | LinkRecord
+
+
+def _ordered(diagnostics: Iterable[Violation]) -> list[Violation]:
+    """Order diagnostics deterministically by path, severity, code and message."""
+    return sorted(
+        diagnostics,
+        key=lambda item: (item.path, item.severity.value, item.code, item.message),
+    )
 
 
 def _table(records: Sequence[TableRecord], schema: ibis.Schema) -> Table:
@@ -100,10 +109,13 @@ class Bundle:
 
     def validate(self) -> list[Violation]:
         """Return deterministic diagnostics ordered by path, severity, and code."""
-        return sorted(
-            self.diagnostics,
-            key=lambda item: (item.path, item.severity.value, item.code, item.message),
-        )
+        return _ordered(self.diagnostics)
+
+    @property
+    def concept_types(self) -> set[str]:
+        """Every producer-defined type observed in the bundle."""
+        column = self.concepts.select("concept_type").execute()["concept_type"]
+        return {value for value in column if isinstance(value, str)}
 
     @property
     def is_conformant(self) -> bool:
@@ -402,10 +414,30 @@ def load_bundle(root: Path, exclude: Sequence[str] = ()) -> Bundle:
     )
 
 
-def validate_path(path: Path, exclude: Sequence[str] = ()) -> ValidationReport:
-    """Validate every Markdown file recursively below a path as OKF v0.2."""
+def validate_path(
+    path: Path,
+    exclude: Sequence[str] = (),
+    require_spec: str | None = None,
+    *,
+    normative_spec: bool = False,
+) -> ValidationReport:
+    """Validate every Markdown file recursively below a path as OKF v0.2.
+
+    ``require_spec`` adds the optional rule that every producer-defined type in
+    use has a specification document at the path its template derives.
+    """
     bundle = load_bundle(path, exclude)
-    violations = tuple(bundle.validate())
+    diagnostics = list(bundle.diagnostics)
+    if require_spec is not None:
+        diagnostics.extend(
+            missing_type_specs(
+                bundle.root,
+                bundle.concept_types,
+                require_spec,
+                normative=normative_spec,
+            )
+        )
+    violations = tuple(_ordered(diagnostics))
     return ValidationReport(
         root=bundle.root,
         markdown_count=bundle.markdown_count,

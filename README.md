@@ -91,15 +91,17 @@ versioned with the content and CI needs no extra flags:
 ```gitignore
 # vendored dependencies
 vendor
-# project Markdown, not knowledge
-*.md
+# the knowledge inside them is not noise
+!vendor/knowledge
+# project Markdown at the root, not knowledge
+/*.md
 ```
 
 Or pass them for a single run — the option repeats, and adds to the file rather
 than replacing it:
 
 ```bash
-uv run okf-parser check . --exclude vendor --exclude '*.md'
+uv run okf-parser check . --exclude vendor --exclude '/*.md'
 ```
 
 Every command that reads a bundle accepts `--exclude`: `check`, `inventory`,
@@ -107,26 +109,87 @@ Every command that reads a bundle accepts `--exclude`: `check`, `inventory`,
 written, so `format --write` on a repository root leaves vendored documents
 alone.
 
-Patterns are matched against POSIX-style paths **relative to the bundle root**:
+### Pattern semantics
 
-| pattern     | matches                           | does not match     |
-| ----------- | --------------------------------- | ------------------ |
-| `vendor`    | `vendor`, `vendor/deep/a.md`      | `libs/vendor/a.md` |
-| `**/vendor` | `vendor/a.md`, `libs/vendor/a.md` |                    |
-| `*.md`      | `README.md`                       | `items/tarefa.md`  |
-| `**/*.md`   | `README.md`, `items/tarefa.md`    |                    |
-| `docs/*.md` | `docs/a.md`                       | `docs/deep/a.md`   |
+`.okfignore` uses **`.gitignore` pattern semantics**, matched against
+POSIX-style paths relative to the bundle root:
 
-`*` and `?` stay inside one path segment; `**` spans segments. A pattern that
-matches a directory excludes everything below it. A leading or trailing `/`
-carries no meaning and is dropped, so `vendor/` and `/vendor` both mean
-`vendor`.
+| pattern       | matches                             | does not match          |
+| ------------- | ----------------------------------- | ----------------------- |
+| `vendor`      | `vendor/a.md`, `libs/vendor/a.md`   | `equipe/a.md`           |
+| `/vendor`     | `vendor/a.md`                       | `libs/vendor/a.md`      |
+| `vendor/`     | `vendor/a.md` (directory only)      | a *file* named `vendor` |
+| `*.md`        | `README.md`, `items/tarefa.md`      | `items/tarefa.markdown` |
+| `/*.md`       | `README.md`                         | `items/tarefa.md`       |
+| `docs/**/x.md`| `docs/x.md`, `docs/a/b/x.md`        | `other/x.md`            |
+| `!vendor/kb`  | re-includes what an earlier pattern excluded |                |
 
-This is deliberately **narrower than `.gitignore`** despite the familiar file
-name: patterns are anchored at the bundle root, and there is no negation. A
-pattern that silently widened its own scope would drop documents the author
-meant to validate, and a bundle that quietly shrinks is worse than one that
-reports too much.
+- a pattern without a separator matches its name **at any depth**; a separator
+  anchors it at the bundle root;
+- `*` and `?` stay inside one segment, `[abc]` and `[!abc]` classes work, and
+  `**` spans segments;
+- a trailing `/` matches directories only;
+- `!` re-includes, and **the last pattern that matches a path decides**;
+- `#` starts a comment, blank lines declare nothing, unescaped trailing spaces
+  are dropped, and `\#` or `\!` escape a literal first character.
+
+One deviation from `.gitignore` is deliberate. Git cannot re-include a path
+whose parent directory is excluded, because it prunes the walk and never looks
+back, so `vendor` plus `!vendor/knowledge` does nothing there. Here it works:
+discovery descends whenever a negation exists. A negation that silently does
+nothing is exactly the surprise this feature exists to prevent. With no
+negation in the rules the walk still prunes, so excluding a vendored dependency
+of several hundred documents never walks it.
+
+The same rules are shared with the TypeScript package through
+`conformance/exclusion.json`.
+
+### Migrating from the pre-0.14 semantics
+
+Before 0.14.0 every pattern was anchored at the bundle root and `!` was a
+literal character. Two rewrites cover it:
+
+| before        | after     | why                                              |
+| ------------- | --------- | ------------------------------------------------ |
+| `*.md`        | `/*.md`   | unanchored patterns now match at any depth        |
+| `vendor`      | `/vendor` | keep it root-only; leave as-is to match any depth |
+
+A pattern that begins with a literal `!` now needs `\!`.
+
+## Requiring a specification per type
+
+OKF v0.2 only requires `type` to be non-empty, so a producer can invent a type,
+emit concepts of it and keep a green `check` while that type's frontmatter
+schema changes underneath its consumers.
+
+The optional rule below closes that gap without inventing taxonomy: it derives a
+document path from each type in use and reports the types whose document is
+absent.
+
+```bash
+uv run okf-parser check ./bundle --require-spec ".okf/specs/{slug}.md"
+uv run okf-parser check ./bundle --require-spec ".okf/specs/{slug}.md" --normative-spec
+```
+
+The template must contain `{slug}`. The slug is lowercase, with accents and
+cedillas removed, whitespace and `/` turned into hyphens, and every remaining
+non-alphanumeric character dropped:
+
+| `type`            | derived path                    |
+| ----------------- | ------------------------------- |
+| `Spec`            | `.okf/specs/spec.md`            |
+| `Revisão Ciência` | `.okf/specs/revisao-ciencia.md` |
+| `Peça Forense`    | `.okf/specs/peca-forense.md`    |
+
+The path is **derived**, not declared. A `spec:` frontmatter field would be a
+second fact free to disagree with the first, and putting the path in `type`
+itself would tie identity to layout, so renaming a directory would invalidate
+every concept of that type.
+
+Missing documents are reported as `OKF010` warnings, because a bundle mid-
+adoption legitimately has legacy types without a document and that is not an
+OKF v0.2 defect. `--normative-spec` promotes them to errors for a bundle that
+has completed the adoption. The rule is off unless `--require-spec` is given.
 
 ## GitHub Actions
 
@@ -217,14 +280,21 @@ on their own, and take an `exclude` sequence for patterns supplied per call:
 report = validate_path(Path("."), exclude=["vendor", "*.md"])
 ```
 
+`validate_path` also takes the optional type-specification rule:
+
+```python
+report = validate_path(Path("knowledge"), require_spec=".okf/specs/{slug}.md")
+```
+
 ## Current scope
 
-- UTF-8 Markdown discovery, matching `.md` case-insensitively, with anchored
-  glob exclusions from `.okfignore` or `--exclude`;
+- UTF-8 Markdown discovery, matching `.md` case-insensitively, with
+  `.gitignore`-compatible exclusions from `.okfignore` or `--exclude`;
 - reserved `index.md` and `log.md` handling;
 - strict YAML-frontmatter parsing for concept documents, validated with Pydantic
   at the parse boundary so one malformed document cannot abort a run;
-- required non-empty `type`;
+- required non-empty `type`, optionally requiring a specification document per
+  type in use;
 - stable concept IDs derived from paths;
 - Markdown-link extraction and resolution;
 - Ibis tables for concepts, reserved documents, and links;

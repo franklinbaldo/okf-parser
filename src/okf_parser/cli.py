@@ -67,9 +67,15 @@ mcp = FastMCP(
 
 
 @app.command
-def check(path: str, *, exclude: RepeatableStrings = None) -> CliResult[JsonPayload]:
+def check(
+    path: str,
+    *,
+    exclude: RepeatableStrings = None,
+    require_spec: str | None = None,
+    normative_spec: bool = False,
+) -> CliResult[JsonPayload]:
     """Validate every Markdown file recursively as OKF v0.2."""
-    payload = check_bundle(path, exclude or ())
+    payload = check_bundle(path, exclude or (), require_spec, normative_spec=normative_spec)
     return CliResult(payload, 0 if payload["conformant"] else 1)
 
 
@@ -160,9 +166,15 @@ def serve(
 
 
 @mcp.tool(name="check")
-def mcp_check(path: str, exclude: RepeatableStrings = None) -> dict[str, object]:
+def mcp_check(
+    path: str,
+    exclude: RepeatableStrings = None,
+    require_spec: str | None = None,
+    *,
+    normative_spec: bool = False,
+) -> dict[str, object]:
     """Validate every Markdown file recursively as OKF v0.2."""
-    return check_bundle(path, exclude or ())
+    return check_bundle(path, exclude or (), require_spec, normative_spec=normative_spec)
 
 
 @mcp.tool(name="inventory")
