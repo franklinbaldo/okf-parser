@@ -131,3 +131,25 @@ def test_the_exclusion_file_itself_needs_no_pattern(tmp_path: Path) -> None:
     _write(tmp_path / EXCLUSION_FILENAME, "vendor\n")
 
     assert validate_path(tmp_path).markdown_count == 1
+
+
+def test_okf_metadata_directory_is_never_content(tmp_path: Path) -> None:
+    """`.okf/` descreve o bundle e não é conceito dele.
+
+    A disposição proposta pelo issue #25 guarda a especificação de cada tipo em
+    `.okf/specs/<tipo>.md`. Enquanto o walk descia ali, o documento que
+    descreve um tipo virava conceito do bundle e passava a exigir `type` — e o
+    tipo dessas especificações exigiria a sua própria especificação dentro de
+    todo bundle que tivesse uma. A pasta é metadado, e por isso é podada.
+    """
+    _write(tmp_path / "index.md", "# Bundle\n")
+    _write(
+        tmp_path / "tarefa.md",
+        "---\ntype: Work Item\ntitle: Tarefa\n---\n\n# Tarefa\n",
+    )
+    _write(tmp_path / ".okf" / "specs" / "work-item.md", "# Work Item\n")
+
+    encontrados = {caminho.name for caminho in discover_markdown(tmp_path)}
+
+    assert encontrados == {"index.md", "tarefa.md"}
+    assert validate_path(tmp_path).violations == ()

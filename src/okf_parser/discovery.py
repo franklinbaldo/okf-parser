@@ -9,8 +9,17 @@ from okf_parser.exclusion import ExclusionRules
 if TYPE_CHECKING:
     from pathlib import Path
 
+# `.okf/` guarda metadados **sobre** o bundle — a especificação de cada tipo,
+# na disposição proposta pelo issue #25 — e não conteúdo dele. Sem esta
+# entrada, o próprio parser conta como conceito a pasta que o formato reserva
+# para descrevê-lo: cada spec passaria a exigir `type`, e o tipo dessas specs
+# exigiria a sua própria spec dentro de todo bundle que tivesse uma, que é
+# duplicação obrigatória do mesmo documento.
+#
+# É diferente de `.okfignore`, que é escolha de quem mantém um repositório
+# misto. Esta lista é o que nunca é conteúdo em bundle nenhum.
 IGNORED_DIRECTORIES = frozenset(
-    {".git", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".ty_cache", ".venv"}
+    {".git", ".mypy_cache", ".okf", ".pytest_cache", ".ruff_cache", ".ty_cache", ".venv"}
 )
 MARKDOWN_SUFFIX = ".md"
 
