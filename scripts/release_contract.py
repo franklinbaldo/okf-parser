@@ -25,6 +25,45 @@ PROTOCOL_VERSION: Final = re.compile(
 KINDS: Final = ("python-wheel", "python-sdist", "npm-parser", "npm-duckdb")
 Kind = Literal["python-wheel", "python-sdist", "npm-parser", "npm-duckdb"]
 Artifact = dict[str, object]
+ROOT_PREFIXES: Final[dict[str, str | None]] = {
+    "python-wheel": None,
+    "python-sdist": "okf_parser-{version}/",
+    "npm-parser": "package/",
+    "npm-duckdb": "package/",
+}
+FORBIDDEN_DIRECTORIES: Final = frozenset(
+    {
+        ".git",
+        ".github",
+        ".idea",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".tox",
+        ".venv",
+        ".vscode",
+        "__pycache__",
+        "htmlcov",
+        "node_modules",
+        "venv",
+    }
+)
+FORBIDDEN_NAMES: Final = frozenset(
+    {
+        ".DS_Store",
+        ".env",
+        ".netrc",
+        ".npmrc",
+        ".pypirc",
+        "id_dsa",
+        "id_ecdsa",
+        "id_ed25519",
+        "id_rsa",
+    }
+)
+FORBIDDEN_SUFFIXES: Final = frozenset(
+    {".duckdb", ".key", ".p12", ".pem", ".pfx", ".pyc", ".pyo", ".sqlite"}
+)
 
 
 class ContractError(ValueError):
@@ -58,6 +97,49 @@ class ExpectedArtifact:
     directory: str
     filename: str | None = None
     pattern: str | None = None
+
+
+@dataclass(frozen=True)
+class ContentPolicy:
+    """Files one distribution must ship and paths it must never ship."""
+
+    required: tuple[str, ...]
+    forbidden_prefixes: tuple[str, ...] = ()
+
+
+CONTENT_POLICIES: Final[dict[str, ContentPolicy]] = {
+    "python-wheel": ContentPolicy(
+        required=("okf_parser/__init__.py", "okf_parser/cli.py", "okf_parser/parser.py"),
+        forbidden_prefixes=("tests/", "scripts/", "typescript/", "typescript-duckdb/"),
+    ),
+    "python-sdist": ContentPolicy(
+        required=("PKG-INFO", "README.md", "pyproject.toml", "src/okf_parser/__init__.py"),
+        forbidden_prefixes=(),
+    ),
+    "npm-parser": ContentPolicy(
+        required=(
+            "package.json",
+            "README.md",
+            "LICENSE",
+            "dist/index.js",
+            "dist/index.d.ts",
+            "dist/cli.js",
+            "dist/mcp.js",
+        ),
+        forbidden_prefixes=("src/", "test/", "scripts/", "tsconfig"),
+    ),
+    "npm-duckdb": ContentPolicy(
+        required=(
+            "package.json",
+            "README.md",
+            "LICENSE",
+            "dist/index.js",
+            "dist/index.d.ts",
+            "dist/cli.js",
+        ),
+        forbidden_prefixes=("src/", "test/", "scripts/", "tsconfig"),
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -267,6 +349,93 @@ def _tar_metadata(path: Path, kind: Kind) -> str:
             return file_object.read().decode("utf-8")
     except (OSError, UnicodeError, KeyError, tarfile.TarError) as exc:
         _fail(f"cannot inspect {path}: {exc}")
+
+
+def _tar_names(path: Path, kind: Kind) -> list[str]:
+    try:
+        with tarfile.open(path, mode="r:gz") as archive:
+            names: list[str] = []
+            for member in archive.getmembers():
+                if member.isdir():
+                    continue
+                if not member.isfile():
+                    _fail(f"{kind} archive {path.name} contains non-regular member {member.name!r}")
+                names.append(member.name)
+    except (OSError, tarfile.TarError) as exc:
+        _fail(f"cannot inspect {path}: {exc}")
+    return names
+
+
+def _archive_names(path: Path, kind: Kind) -> list[str]:
+    if kind == "python-wheel":
+        try:
+            with zipfile.ZipFile(path) as archive:
+                return [item.filename for item in archive.infolist() if not item.is_dir()]
+        except (OSError, zipfile.BadZipFile) as exc:
+            _fail(f"cannot inspect {path}: {exc}")
+    return _tar_names(path, kind)
+
+
+def _relative_members(path: Path, kind: Kind, version: str) -> list[str]:
+    prefix = ROOT_PREFIXES[kind]
+    if prefix is not None:
+        prefix = prefix.format(version=version)
+    members: list[str] = []
+    for name in _archive_names(path, kind):
+        pure = PurePosixPath(name)
+        if pure.is_absolute() or ".." in pure.parts or not pure.parts:
+            _fail(f"{kind} archive {path.name} contains unsafe member {name!r}")
+        if prefix is None:
+            members.append(pure.as_posix())
+            continue
+        if not name.startswith(prefix):
+            _fail(f"{kind} archive {path.name} member outside {prefix!r}: {name!r}")
+        members.append(name.removeprefix(prefix))
+    if not members:
+        _fail(f"{kind} archive {path.name} is empty")
+    return members
+
+
+def _forbidden_reason(member: str, policy: ContentPolicy) -> str | None:
+    pure = PurePosixPath(member)
+    parents = pure.parts[:-1]
+    if any(part in FORBIDDEN_DIRECTORIES for part in parents):
+        return "excluded directory"
+    if pure.name in FORBIDDEN_NAMES:
+        return "excluded file name"
+    if pure.suffix in FORBIDDEN_SUFFIXES:
+        return "excluded file type"
+    if any(member.startswith(prefix) for prefix in policy.forbidden_prefixes):
+        return "source-only or development path"
+    return None
+
+
+def verify_contents(root: Path, manifest_path: Path) -> dict[str, object]:
+    """Verify that every built artifact ships its expected files and nothing else."""
+    manifest = _json(manifest_path)
+    contract = verify_source(root)
+    release = manifest_path.parent
+    report: dict[str, object] = {}
+    seen: set[Kind] = set()
+    for item in _manifest_artifacts(manifest, contract.version):
+        kind = _entry_kind(item, seen)
+        path = _safe_path(release, _string(item, "path", "manifest artifact"))
+        members = _relative_members(path, kind, contract.version)
+        policy = CONTENT_POLICIES[kind]
+        missing = sorted(set(policy.required) - set(members))
+        if missing:
+            _fail(f"{kind} archive {path.name} is missing {', '.join(missing)}")
+        rejected = sorted(
+            f"{member} ({reason})"
+            for member in members
+            if (reason := _forbidden_reason(member, policy)) is not None
+        )
+        if rejected:
+            _fail(f"{kind} archive {path.name} ships {', '.join(rejected)}")
+        report[kind] = {"filename": path.name, "member_count": len(members)}
+    if seen != set(KINDS):
+        _fail("manifest artifact set is incomplete")
+    return {"version": contract.version, "artifacts": report}
 
 
 def _identity(path: Path, kind: Kind) -> tuple[str, str]:
@@ -484,6 +653,9 @@ def _parser() -> argparse.ArgumentParser:
     local = commands.add_parser("verify-local")
     local.add_argument("--root", type=Path, default=Path.cwd())
     local.add_argument("--manifest", type=Path, default=Path("release/manifest.json"))
+    contents = commands.add_parser("verify-contents")
+    contents.add_argument("--root", type=Path, default=Path.cwd())
+    contents.add_argument("--manifest", type=Path, default=Path("release/manifest.json"))
     return parser
 
 
@@ -516,6 +688,8 @@ def main(argv: list[str] | None = None) -> int:
             result: object = asdict(verify_source(root, arguments.tag))
         elif arguments.command == "build-manifest":
             result = build_manifest(root, arguments.directory.resolve(), _build_context(arguments))
+        elif arguments.command == "verify-contents":
+            result = verify_contents(root, arguments.manifest.resolve())
         else:
             result = verify_local(root, arguments.manifest.resolve())
     except ContractError as exc:

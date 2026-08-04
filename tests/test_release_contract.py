@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import tarfile
 import zipfile
 from typing import TYPE_CHECKING, cast
@@ -14,6 +15,7 @@ from scripts.release_contract import (
     BuildContext,
     ContractError,
     build_manifest,
+    verify_contents,
     verify_local,
     verify_source,
 )
@@ -60,13 +62,32 @@ def _write_source(root: Path, *, protocol_version: str = VERSION) -> None:
     )
 
 
+def _tar_bytes(archive: tarfile.TarFile, member: tarfile.TarInfo) -> bytes:
+    file_object = archive.extractfile(member)
+    assert file_object is not None
+    return file_object.read()
+
+
 def _tar_member(archive: tarfile.TarFile, name: str, data: bytes) -> None:
     member = tarfile.TarInfo(name)
     member.size = len(data)
     archive.addfile(member, io.BytesIO(data))
 
 
-def _write_artifacts(release: Path) -> None:
+WHEEL_MEMBERS = ("okf_parser/__init__.py", "okf_parser/cli.py", "okf_parser/parser.py")
+SDIST_MEMBERS = ("README.md", "pyproject.toml", "src/okf_parser/__init__.py")
+NPM_MEMBERS = (
+    "README.md",
+    "LICENSE",
+    "dist/index.js",
+    "dist/index.d.ts",
+    "dist/cli.js",
+    "dist/mcp.js",
+)
+
+
+def _write_artifacts(release: Path, extra: dict[str, tuple[str, ...]] | None = None) -> None:
+    additions = extra or {}
     python_dir = release / "python"
     npm_dir = release / "npm"
     python_dir.mkdir(parents=True)
@@ -77,19 +98,27 @@ def _write_artifacts(release: Path) -> None:
             f"okf_parser-{VERSION}.dist-info/METADATA",
             f"Metadata-Version: 2.4\nName: okf-parser\nVersion: {VERSION}\n",
         )
+        for member in WHEEL_MEMBERS + additions.get("python-wheel", ()):
+            archive.writestr(member, "content\n")
+    root = f"okf_parser-{VERSION}"
     with tarfile.open(python_dir / f"okf_parser-{VERSION}.tar.gz", mode="w:gz") as archive:
         _tar_member(
             archive,
-            f"okf_parser-{VERSION}/PKG-INFO",
+            f"{root}/PKG-INFO",
             f"Metadata-Version: 2.4\nName: okf-parser\nVersion: {VERSION}\n".encode(),
         )
-    for package in ("okf-parser", "okf-parser-duckdb"):
+        for member in SDIST_MEMBERS + additions.get("python-sdist", ()):
+            _tar_member(archive, f"{root}/{member}", b"content\n")
+    kinds = {"okf-parser": "npm-parser", "okf-parser-duckdb": "npm-duckdb"}
+    for package, kind in kinds.items():
         with tarfile.open(npm_dir / f"{package}-{VERSION}.tgz", mode="w:gz") as archive:
             _tar_member(
                 archive,
                 "package/package.json",
                 json.dumps({"name": package, "version": VERSION}).encode(),
             )
+            for member in NPM_MEMBERS + additions.get(kind, ()):
+                _tar_member(archive, f"package/{member}", b"content\n")
 
 
 def _build(root: Path) -> dict[str, object]:
@@ -163,3 +192,66 @@ def test_verify_local_rejects_path_traversal(tmp_path: Path) -> None:
     path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ContractError, match="unsafe"):
         verify_local(tmp_path, path)
+
+
+def test_verify_contents_accepts_complete_distributions(tmp_path: Path) -> None:
+    _write_source(tmp_path)
+    _build(tmp_path)
+    report = verify_contents(tmp_path, tmp_path / "release" / "manifest.json")
+    assert report["version"] == VERSION
+    artifacts = report["artifacts"]
+    assert isinstance(artifacts, dict)
+    assert set(artifacts) == {"python-wheel", "python-sdist", "npm-parser", "npm-duckdb"}
+
+
+def test_verify_contents_rejects_missing_module(tmp_path: Path) -> None:
+    _write_source(tmp_path)
+    release = tmp_path / "release"
+    _write_artifacts(release)
+    wheel = release / "python" / f"okf_parser-{VERSION}-py3-none-any.whl"
+    with zipfile.ZipFile(wheel) as archive:
+        kept = [name for name in archive.namelist() if not name.endswith("cli.py")]
+        contents = {name: archive.read(name) for name in kept}
+    with zipfile.ZipFile(wheel, mode="w") as archive:
+        for name, data in contents.items():
+            archive.writestr(name, data)
+    build_manifest(tmp_path, release, BUILD_CONTEXT)
+    with pytest.raises(ContractError, match=re.escape("missing okf_parser/cli.py")):
+        verify_contents(tmp_path, release / "manifest.json")
+
+
+@pytest.mark.parametrize(
+    ("kind", "member", "reason"),
+    [
+        ("python-sdist", ".github/workflows/release.yml", "excluded directory"),
+        ("python-sdist", "src/okf_parser/__pycache__/cli.pyc", "excluded directory"),
+        ("npm-parser", "src/index.ts", "source-only or development path"),
+        ("npm-duckdb", ".npmrc", "excluded file name"),
+        ("python-wheel", "okf_parser/signing.pem", "excluded file type"),
+    ],
+)
+def test_verify_contents_rejects_unshippable_members(
+    tmp_path: Path, kind: str, member: str, reason: str
+) -> None:
+    _write_source(tmp_path)
+    release = tmp_path / "release"
+    _write_artifacts(release, {kind: (member,)})
+    build_manifest(tmp_path, release, BUILD_CONTEXT)
+    with pytest.raises(ContractError, match=reason):
+        verify_contents(tmp_path, release / "manifest.json")
+
+
+def test_verify_contents_rejects_members_outside_package_root(tmp_path: Path) -> None:
+    _write_source(tmp_path)
+    release = tmp_path / "release"
+    _write_artifacts(release)
+    tarball = release / "npm" / f"okf-parser-{VERSION}.tgz"
+    with tarfile.open(tarball, mode="r:gz") as archive:
+        members = [(member.name, _tar_bytes(archive, member)) for member in archive.getmembers()]
+    with tarfile.open(tarball, mode="w:gz") as archive:
+        for name, data in members:
+            _tar_member(archive, name, data)
+        _tar_member(archive, "outside/leak.txt", b"content\n")
+    build_manifest(tmp_path, release, BUILD_CONTEXT)
+    with pytest.raises(ContractError, match="member outside"):
+        verify_contents(tmp_path, release / "manifest.json")

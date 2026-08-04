@@ -165,6 +165,9 @@ jobs:
       - name: Re-verify exact artifact bytes
         run: python scripts/release_contract.py verify-local --manifest release/manifest.json
 
+      - name: Verify shipped package contents
+        run: python scripts/release_contract.py verify-contents --manifest release/manifest.json
+
       - name: Inspect public registry state
         run: python -m scripts.registry_state --manifest release/manifest.json --output release/registry-state.json
 

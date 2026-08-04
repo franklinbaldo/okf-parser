@@ -76,6 +76,7 @@ python scripts/release_contract.py build-manifest \
   --npm-version "$(npm --version)" \
   --uv-version "$(uv --version | awk '{print $2}')"
 python scripts/release_contract.py verify-local --manifest release/manifest.json
+python scripts/release_contract.py verify-contents --manifest release/manifest.json
 python -m scripts.registry_state --manifest release/manifest.json \
   --output release/registry-state.json
 ```
@@ -83,6 +84,28 @@ python -m scripts.registry_state --manifest release/manifest.json \
 The manifest command fails on missing, duplicate or unexpected artifacts. The
 verification command rejects path traversal, archive identity drift, changed
 sizes or digests, and a `SHA256SUMS` file that no longer matches the manifest.
+
+## Package contents
+
+`verify-contents` reads the member list of each archive named by the manifest
+and answers a question digests cannot: whether the bytes that were tested are
+also the right files to publish.
+
+Every distribution must ship its installable payload — importable modules,
+executables, type declarations, README and licence — and must not ship:
+
+- caches, virtual environments and editor state such as `__pycache__`,
+  `.ruff_cache`, `.pytest_cache`, `.venv` or `.vscode`;
+- repository automation, including `.github` workflows;
+- credential files such as `.npmrc`, `.pypirc`, `.netrc` or `.env`, private keys
+  and certificates;
+- compiled bytecode and local databases;
+- source-only or development paths that belong to the repository rather than an
+  installed consumer, such as TypeScript sources, test suites and compiler
+  configuration inside the npm tarballs.
+
+Archive members outside the expected package root, non-regular members such as
+symbolic links, and traversing member names are rejected before any policy check.
 
 ## Public registry preflight
 
