@@ -3,6 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import MarkdownIt from "markdown-it";
+
+import { missingTypeSpecs } from "./type-specs.js";
 import { parseDocument as parseYamlDocument } from "yaml";
 
 export interface FrontmatterObject {
@@ -77,6 +79,17 @@ export interface Bundle {
 export interface LoadOptions {
   readonly exclude?: readonly string[];
   readonly signal?: AbortSignal;
+}
+
+function compareDiagnostics(left: Diagnostic, right: Diagnostic): number {
+  return [left.path, left.severity, left.code, left.message]
+    .join("\u0000")
+    .localeCompare([right.path, right.severity, right.code, right.message].join("\u0000"), "en");
+}
+
+export interface CheckOptions extends LoadOptions {
+  readonly requireSpec?: string;
+  readonly normativeSpec?: boolean;
 }
 
 export interface CheckReport {
@@ -675,11 +688,7 @@ export async function loadBundle(
     );
   }
 
-  diagnostics.sort((left, right) =>
-    [left.path, left.severity, left.code, left.message]
-      .join("\u0000")
-      .localeCompare([right.path, right.severity, right.code, right.message].join("\u0000"), "en"),
-  );
+  diagnostics.sort(compareDiagnostics);
   return Object.freeze({
     root,
     concepts: Object.freeze(concepts),
@@ -692,16 +701,28 @@ export async function loadBundle(
 
 export async function checkBundle(
   root: string | URL,
-  options: LoadOptions = {},
+  options: CheckOptions = {},
 ): Promise<CheckReport> {
   const bundle = await loadBundle(root, options);
+  const diagnostics = [...bundle.diagnostics];
+  if (options.requireSpec !== undefined) {
+    diagnostics.push(
+      ...(await missingTypeSpecs(
+        bundle.root,
+        bundle.concepts.map((concept) => concept.conceptType),
+        options.requireSpec,
+        { normative: options.normativeSpec === true },
+      )),
+    );
+    diagnostics.sort(compareDiagnostics);
+  }
   return Object.freeze({
     root: bundle.root,
-    conformant: !bundle.diagnostics.some((item) => item.severity === "error"),
+    conformant: !diagnostics.some((item) => item.severity === "error"),
     markdown_count: bundle.markdownCount,
     concept_count: bundle.concepts.length,
     reserved_count: bundle.reserved.length,
-    diagnostics: bundle.diagnostics,
+    diagnostics: Object.freeze(diagnostics),
   });
 }
 

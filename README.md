@@ -128,6 +128,41 @@ pattern that silently widened its own scope would drop documents the author
 meant to validate, and a bundle that quietly shrinks is worse than one that
 reports too much.
 
+## Requiring a specification per type
+
+OKF v0.2 only requires `type` to be non-empty, so a producer can invent a type,
+emit concepts of it and keep a green `check` while that type's frontmatter
+schema changes underneath its consumers.
+
+The optional rule below closes that gap without inventing taxonomy: it derives a
+document path from each type in use and reports the types whose document is
+absent.
+
+```bash
+uv run okf-parser check ./bundle --require-spec ".okf/specs/{slug}.md"
+uv run okf-parser check ./bundle --require-spec ".okf/specs/{slug}.md" --normative-spec
+```
+
+The template must contain `{slug}`. The slug is lowercase, with accents and
+cedillas removed, whitespace and `/` turned into hyphens, and every remaining
+non-alphanumeric character dropped:
+
+| `type`            | derived path                    |
+| ----------------- | ------------------------------- |
+| `Spec`            | `.okf/specs/spec.md`            |
+| `Revisão Ciência` | `.okf/specs/revisao-ciencia.md` |
+| `Peça Forense`    | `.okf/specs/peca-forense.md`    |
+
+The path is **derived**, not declared. A `spec:` frontmatter field would be a
+second fact free to disagree with the first, and putting the path in `type`
+itself would tie identity to layout, so renaming a directory would invalidate
+every concept of that type.
+
+Missing documents are reported as `OKF010` warnings, because a bundle mid-
+adoption legitimately has legacy types without a document and that is not an
+OKF v0.2 defect. `--normative-spec` promotes them to errors for a bundle that
+has completed the adoption. The rule is off unless `--require-spec` is given.
+
 ## GitHub Actions
 
 Add the repository as a CI check:
@@ -217,6 +252,12 @@ on their own, and take an `exclude` sequence for patterns supplied per call:
 report = validate_path(Path("."), exclude=["vendor", "*.md"])
 ```
 
+`validate_path` also takes the optional type-specification rule:
+
+```python
+report = validate_path(Path("knowledge"), require_spec=".okf/specs/{slug}.md")
+```
+
 ## Current scope
 
 - UTF-8 Markdown discovery, matching `.md` case-insensitively, with anchored
@@ -224,7 +265,8 @@ report = validate_path(Path("."), exclude=["vendor", "*.md"])
 - reserved `index.md` and `log.md` handling;
 - strict YAML-frontmatter parsing for concept documents, validated with Pydantic
   at the parse boundary so one malformed document cannot abort a run;
-- required non-empty `type`;
+- required non-empty `type`, optionally requiring a specification document per
+  type in use;
 - stable concept IDs derived from paths;
 - Markdown-link extraction and resolution;
 - Ibis tables for concepts, reserved documents, and links;

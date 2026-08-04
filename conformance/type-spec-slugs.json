@@ -1,0 +1,52 @@
+[
+  {
+    "name": "ascii-single-word",
+    "concept_type": "Spec",
+    "slug": "spec"
+  },
+  {
+    "name": "accented-two-words",
+    "concept_type": "Revisão Ciência",
+    "slug": "revisao-ciencia"
+  },
+  {
+    "name": "cedilla",
+    "concept_type": "Peça Forense",
+    "slug": "peca-forense"
+  },
+  {
+    "name": "slash-becomes-hyphen",
+    "concept_type": "Parecer/Consulta",
+    "slug": "parecer-consulta"
+  },
+  {
+    "name": "runs-of-whitespace-collapse",
+    "concept_type": "  Nota   Técnica  ",
+    "slug": "nota-tecnica"
+  },
+  {
+    "name": "punctuation-is-dropped",
+    "concept_type": "Decisão (2ª instância)!",
+    "slug": "decisao-2a-instancia"
+  },
+  {
+    "name": "digits-are-kept",
+    "concept_type": "RFC 0003",
+    "slug": "rfc-0003"
+  },
+  {
+    "name": "existing-hyphens-are-kept",
+    "concept_type": "Pré-Análise",
+    "slug": "pre-analise"
+  },
+  {
+    "name": "hyphen-runs-collapse",
+    "concept_type": "Ata -- Reunião",
+    "slug": "ata-reuniao"
+  },
+  {
+    "name": "non-latin-script-has-no-slug",
+    "concept_type": "概念",
+    "slug": ""
+  }
+]

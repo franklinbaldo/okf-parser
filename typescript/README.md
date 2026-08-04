@@ -23,6 +23,27 @@ const report = await checkBundle("./knowledge");
 const zod = await exportZod("./knowledge", { inferTypes: true });
 ```
 
+## Requiring a specification per type
+
+The optional rule derives a document path from every producer-defined type in
+use and reports the types whose document is absent. The slug is lowercase, with
+accents and cedillas removed, whitespace and `/` turned into hyphens, and every
+remaining non-alphanumeric character dropped, so `Revisão Ciência` resolves to
+`.okf/specs/revisao-ciencia.md`.
+
+```bash
+npx okf-parser-ts check ./knowledge --require-spec ".okf/specs/{slug}.md"
+npx okf-parser-ts check ./knowledge --require-spec ".okf/specs/{slug}.md" --normative-spec
+```
+
+```ts
+const report = await checkBundle("./knowledge", { requireSpec: ".okf/specs/{slug}.md" });
+```
+
+Missing documents are `OKF010` warnings unless `--normative-spec` promotes them
+to errors. The slug derivation is shared with the Python package through
+`conformance/type-spec-slugs.json`.
+
 ## Markdown formatting
 
 Formatting is read-only unless `--write` is explicit:
