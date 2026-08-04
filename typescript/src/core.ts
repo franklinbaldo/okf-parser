@@ -147,6 +147,9 @@ const RESERVED_FILENAMES = new Set(["index.md", "log.md"]);
 const IGNORED_DIRECTORIES = new Set([
   ".git",
   ".mypy_cache",
+  // `.okf/` descreve o bundle e não é conteúdo dele — mesma razão e mesma
+  // lista do lado Python, que esta porta precisa espelhar.
+  ".okf",
   ".pytest_cache",
   ".ruff_cache",
   ".ty_cache",

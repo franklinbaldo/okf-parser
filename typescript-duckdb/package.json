@@ -33,7 +33,7 @@
     "@duckdb/node-api": "1.5.5-r.1"
   },
   "peerDependencies": {
-    "okf-parser": "^0.13.0"
+    "okf-parser": "^0.14.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
