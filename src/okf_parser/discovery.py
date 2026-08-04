@@ -29,6 +29,8 @@ def discover_markdown(root: Path, rules: ExclusionRules | None = None) -> tuple[
 
     An excluded directory is pruned rather than filtered afterwards, so a
     vendored dependency of several hundred documents is never walked at all.
+    Pruning stops when the rules contain a negation, because a directory
+    excluded at the top can be re-included below it.
     """
     resolved_root = root.resolve()
     if not resolved_root.is_dir():
@@ -36,6 +38,7 @@ def discover_markdown(root: Path, rules: ExclusionRules | None = None) -> tuple[
         raise NotADirectoryError(msg)
 
     active = ExclusionRules(patterns=()) if rules is None else rules
+    prunes = not active.has_negation
     paths: list[Path] = []
     for directory, directory_names, filenames in resolved_root.walk(follow_symlinks=False):
         base = directory.relative_to(resolved_root)
@@ -44,7 +47,7 @@ def discover_markdown(root: Path, rules: ExclusionRules | None = None) -> tuple[
             for name in directory_names
             if name not in IGNORED_DIRECTORIES
             and not (directory / name).is_symlink()
-            and not active.excludes((base / name).as_posix())
+            and not (prunes and active.excludes((base / name).as_posix(), is_dir=True))
         ]
         paths.extend(
             candidate

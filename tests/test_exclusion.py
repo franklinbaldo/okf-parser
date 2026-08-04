@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+import json
+from pathlib import Path
+from typing import cast
 
 import pytest
 
 from okf_parser.exclusion import EXCLUSION_FILENAME, ExclusionFileError, ExclusionRules
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def test_no_patterns_excludes_nothing() -> None:
@@ -19,41 +18,22 @@ def test_no_patterns_excludes_nothing() -> None:
     assert not rules.excludes("vendor/a.md")
 
 
-@pytest.mark.parametrize(
-    ("pattern", "relative", "expected"),
-    [
-        # A directory name takes everything below it, at any depth.
-        ("vendor", "vendor/a.md", True),
-        ("vendor", "vendor/deep/b.md", True),
-        ("vendor", "vendor", True),
-        ("vendor", "equipe/a.md", False),
-        # A directory name is anchored, so it does not match the same name deeper.
-        ("vendor", "libs/vendor/a.md", False),
-        ("**/vendor", "libs/vendor/a.md", True),
-        ("**/vendor", "vendor/a.md", True),
-        # `*` stays inside one segment: this is what lets `*.md` mean
-        # "root-level Markdown" without swallowing every bundle below it.
-        ("*.md", "README.md", True),
-        ("*.md", "items/tarefa.md", False),
-        ("**/*.md", "items/tarefa.md", True),
-        ("?.md", "a.md", True),
-        ("?.md", "ab.md", False),
-        ("docs/*.md", "docs/a.md", True),
-        ("docs/*.md", "docs/deep/a.md", False),
-        ("docs/**", "docs/deep/a.md", True),
-        # A `.gitignore` habit writes `vendor/` or `/vendor`; anchoring already
-        # gives both, so the separators are dropped rather than matching nothing.
-        ("vendor/", "vendor/a.md", True),
-        ("vendor/", "vendor", True),
-        ("/vendor", "vendor/a.md", True),
-        ("/vendor/", "vendor/deep/a.md", True),
-        ("/", "a.md", False),
-    ],
+CASES = json.loads(
+    (Path(__file__).parent.parent / "conformance" / "exclusion.json").read_text(encoding="utf-8")
 )
-def test_pattern_matching(pattern: str, relative: str, *, expected: bool) -> None:
-    rules = ExclusionRules(patterns=(pattern,))
 
-    assert rules.excludes(relative) is expected
+
+@pytest.mark.parametrize("case", CASES, ids=[case["name"] for case in CASES])
+def test_matching_follows_shared_conformance(case: dict[str, object]) -> None:
+    """One matching contract, shared byte-for-byte with the TypeScript runtime."""
+    patterns = cast("list[str]", case["patterns"])
+    rules = ExclusionRules(patterns=tuple(patterns))
+
+    for item in cast("list[dict[str, object]]", case["paths"]):
+        relative = cast("str", item["path"])
+        is_dir = bool(item.get("is_dir", False))
+
+        assert rules.excludes(relative, is_dir=is_dir) is item["excluded"], relative
 
 
 def test_a_pattern_matching_an_ancestor_excludes_the_descendant() -> None:
@@ -85,7 +65,17 @@ def test_reading_skips_blank_lines_and_comments(tmp_path: Path) -> None:
 
     rules = ExclusionRules.read(tmp_path)
 
-    assert rules.patterns == ("vendor", "*.md")
+    # Lines are kept as authored — trailing spaces are `.gitignore` noise that
+    # only compilation drops — so what is asserted is what they decide.
+    assert rules.patterns == ("vendor", "*.md   ")
+    assert rules.excludes("vendor/a.md")
+    assert rules.excludes("items/tarefa.md")
+
+
+def test_a_negation_is_visible_to_the_walk() -> None:
+    """Pruning is only safe while nothing below can be re-included."""
+    assert not ExclusionRules(patterns=("vendor",)).has_negation
+    assert ExclusionRules(patterns=("vendor", "!vendor/knowledge")).has_negation
 
 
 def test_an_unreadable_exclusion_file_names_the_path(tmp_path: Path) -> None:

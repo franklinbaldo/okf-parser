@@ -393,52 +393,139 @@ function toPosix(value: string): string {
   return value.split(path.sep).join("/");
 }
 
-function normalizePattern(pattern: string): string {
-  return pattern.replace(/^\/+|\/+$/gu, "");
+interface ExclusionRule {
+  readonly expression: RegExp;
+  readonly negated: boolean;
+  readonly directoryOnly: boolean;
 }
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 }
 
+function stripTrailingSpace(pattern: string): string {
+  let end = pattern.length;
+  while (end > 0 && pattern[end - 1] === " ") {
+    let escapes = 0;
+    while (end - 2 - escapes >= 0 && pattern[end - 2 - escapes] === "\\") escapes += 1;
+    if (escapes % 2 === 1) break;
+    end -= 1;
+  }
+  return pattern.slice(0, end);
+}
+
+function classExpression(pattern: string, index: number): readonly [string, number] | null {
+  let end = index + 1;
+  if (end < pattern.length && (pattern[end] === "!" || pattern[end] === "^")) end += 1;
+  if (end < pattern.length && pattern[end] === "]") end += 1;
+  while (end < pattern.length && pattern[end] !== "]") end += 1;
+  if (end >= pattern.length) return null;
+  const body = pattern.slice(index + 1, end);
+  return [`[${body.startsWith("!") ? `^${body.slice(1)}` : body}]`, end + 1] as const;
+}
+
 function segmentExpression(segment: string): string {
   let expression = "";
-  for (const character of segment) {
-    if (character === "*") expression += "[^/]*";
-    else if (character === "?") expression += "[^/]";
-    else expression += escapeRegExp(character);
+  let index = 0;
+  while (index < segment.length) {
+    const character = segment[index] ?? "";
+    if (character === "\\" && index + 1 < segment.length) {
+      expression += escapeRegExp(segment[index + 1] ?? "");
+      index += 2;
+      continue;
+    }
+    if (character === "*") {
+      expression += "[^/]*";
+    } else if (character === "?") {
+      expression += "[^/]";
+    } else if (character === "[") {
+      const translated = classExpression(segment, index);
+      if (translated !== null) {
+        expression += translated[0];
+        index = translated[1];
+        continue;
+      }
+      expression += escapeRegExp(character);
+    } else {
+      expression += escapeRegExp(character);
+    }
+    index += 1;
   }
   return expression;
 }
 
-function compilePattern(pattern: string): RegExp {
+function bodyExpression(pattern: string): string {
   const segments = pattern.split("/");
   let expression = "";
   for (let index = 0; index < segments.length; index += 1) {
     const segment = segments[index] ?? "";
+    const last = index === segments.length - 1;
     if (segment === "**") {
-      expression += index < segments.length - 1 ? "(?:[^/]+/)*" : ".*";
+      // Absorb the following separator so `**/vendor` also matches `vendor`,
+      // the zero-directory case.
+      expression += last ? ".*" : "(?:[^/]+/)*";
       continue;
     }
     expression += segmentExpression(segment);
-    if (index < segments.length - 1) expression += "/";
+    if (!last) expression += "/";
   }
-  return new RegExp(`^(?:${expression})$`, "u");
+  return expression;
 }
 
-function ancestors(relative: string): readonly string[] {
+function compilePattern(pattern: string): ExclusionRule | null {
+  let line = stripTrailingSpace(pattern);
+  if (line === "" || line.startsWith("#")) return null;
+  const negated = line.startsWith("!");
+  // A leading `\` escapes the `!` or `#` that would otherwise be syntax.
+  if (negated || (line.startsWith("\\") && (line[1] === "#" || line[1] === "!"))) {
+    line = line.slice(1);
+  }
+  const directoryOnly = line.endsWith("/") && !line.endsWith("\\/");
+  if (directoryOnly) line = line.slice(0, -1);
+  if (line === "") return null;
+  // A separator anywhere but at the end anchors the pattern at the bundle
+  // root; without one the pattern matches its name at any depth.
+  const anchored = line.includes("/");
+  const body = bodyExpression(line.replace(/^\//u, ""));
+  return Object.freeze({
+    expression: new RegExp(`^(?:${anchored ? body : `(?:[^/]+/)*${body}`})$`, "u"),
+    negated,
+    directoryOnly,
+  });
+}
+
+function ancestors(relative: string): readonly (readonly [string, boolean])[] {
   const segments = relative.split("/");
-  return segments.map((_, index) => segments.slice(0, segments.length - index).join("/"));
+  return segments.map(
+    (_, index) =>
+      [segments.slice(0, index + 1).join("/"), index < segments.length - 1] as const,
+  );
 }
 
+/**
+ * `.gitignore` patterns that keep a subpath out of a bundle.
+ *
+ * Patterns follow `.gitignore`: a pattern without a separator matches its name
+ * at any depth, a separator anchors it at the bundle root, a trailing `/`
+ * matches directories only, `!` re-includes, and the last pattern that matches
+ * a path decides its fate.
+ *
+ * One deliberate deviation: `.gitignore` cannot re-include a path whose parent
+ * directory is excluded, because git prunes the walk. Here `vendor` followed by
+ * `!vendor/knowledge` does re-include, since a negation that silently does
+ * nothing is the surprise this module exists to prevent. Without any negation
+ * the walk still prunes.
+ */
 export class ExclusionRules {
   readonly patterns: readonly string[];
-  readonly #expressions: readonly RegExp[];
+  readonly #rules: readonly ExclusionRule[];
 
   constructor(patterns: readonly string[] = []) {
     this.patterns = Object.freeze([...patterns]);
-    this.#expressions = Object.freeze(
-      patterns.map(normalizePattern).filter(Boolean).map(compilePattern),
+    this.#rules = Object.freeze(
+      patterns
+        .map(compilePattern)
+        .filter((rule): rule is ExclusionRule => rule !== null),
     );
   }
 
@@ -447,9 +534,9 @@ export class ExclusionRules {
     const patterns: string[] = [];
     try {
       const text = await readUtf8(exclusionPath);
-      for (const line of text.split(/\r?\n/u)) {
-        const stripped = line.trim();
-        if (stripped !== "" && !stripped.startsWith("#")) patterns.push(stripped);
+      for (const raw of text.split("\n")) {
+        const line = raw.replace(/\r$/u, "");
+        if (compilePattern(line) !== null) patterns.push(line);
       }
     } catch (error) {
       if (errorCode(error) !== "ENOENT") throw new ExclusionFileError(exclusionPath, error);
@@ -458,10 +545,21 @@ export class ExclusionRules {
     return new ExclusionRules(patterns);
   }
 
-  excludes(relative: string): boolean {
-    return ancestors(relative).some((ancestor) =>
-      this.#expressions.some((expression) => expression.test(ancestor)),
-    );
+  get hasNegation(): boolean {
+    return this.#rules.some((rule) => rule.negated);
+  }
+
+  excludes(relative: string, options: { readonly isDir?: boolean } = {}): boolean {
+    if (this.#rules.length === 0) return false;
+    let excluded = false;
+    for (const [ancestor, ancestorIsDir] of ancestors(relative)) {
+      const isDir = ancestorIsDir || options.isDir === true;
+      const decisive = this.#rules.filter(
+        (rule) => (!rule.directoryOnly || isDir) && rule.expression.test(ancestor),
+      );
+      if (decisive.length > 0) excluded = decisive[decisive.length - 1]?.negated !== true;
+    }
+    return excluded;
   }
 }
 
@@ -471,6 +569,7 @@ export async function discoverMarkdown(
 ): Promise<readonly string[]> {
   const root = path.resolve(rootInput instanceof URL ? fileURLToPath(rootInput) : rootInput);
   const rules = await ExclusionRules.read(root, options.exclude ?? []);
+  const prunes = !rules.hasNegation;
   const output: string[] = [];
 
   async function walk(directory: string): Promise<void> {
@@ -481,11 +580,13 @@ export async function discoverMarkdown(
       options.signal?.throwIfAborted();
       const candidate = path.join(directory, entry.name);
       const relative = toPosix(path.relative(root, candidate));
-      if (rules.excludes(relative)) continue;
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
+        // Pruning is only safe while nothing below can be re-included.
+        if (prunes && rules.excludes(relative, { isDir: true })) continue;
         if (!IGNORED_DIRECTORIES.has(entry.name)) await walk(candidate);
       } else if (entry.isFile() && isMarkdownFilename(entry.name)) {
+        if (rules.excludes(relative)) continue;
         output.push(candidate);
       }
     }

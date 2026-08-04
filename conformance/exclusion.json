@@ -1,0 +1,164 @@
+[
+  {
+    "name": "no-patterns-exclude-nothing",
+    "patterns": [],
+    "paths": [
+      { "path": "README.md", "excluded": false },
+      { "path": "vendor/a.md", "excluded": false }
+    ]
+  },
+  {
+    "name": "a-bare-name-matches-at-any-depth",
+    "patterns": ["vendor"],
+    "paths": [
+      { "path": "vendor", "is_dir": true, "excluded": true },
+      { "path": "vendor/a.md", "excluded": true },
+      { "path": "vendor/deep/b.md", "excluded": true },
+      { "path": "libs/vendor/a.md", "excluded": true },
+      { "path": "equipe/a.md", "excluded": false }
+    ]
+  },
+  {
+    "name": "a-leading-separator-anchors-at-the-root",
+    "patterns": ["/vendor"],
+    "paths": [
+      { "path": "vendor/a.md", "excluded": true },
+      { "path": "libs/vendor/a.md", "excluded": false }
+    ]
+  },
+  {
+    "name": "an-inner-separator-anchors-at-the-root",
+    "patterns": ["docs/vendor"],
+    "paths": [
+      { "path": "docs/vendor/a.md", "excluded": true },
+      { "path": "libs/docs/vendor/a.md", "excluded": false }
+    ]
+  },
+  {
+    "name": "a-trailing-separator-matches-directories-only",
+    "patterns": ["vendor/"],
+    "paths": [
+      { "path": "vendor", "is_dir": true, "excluded": true },
+      { "path": "vendor", "excluded": false },
+      { "path": "vendor/a.md", "excluded": true }
+    ]
+  },
+  {
+    "name": "star-stays-inside-one-segment",
+    "patterns": ["*.md"],
+    "paths": [
+      { "path": "README.md", "excluded": true },
+      { "path": "items/tarefa.md", "excluded": true },
+      { "path": "items/tarefa.markdown", "excluded": false }
+    ]
+  },
+  {
+    "name": "an-anchored-star-is-root-level-only",
+    "patterns": ["/*.md"],
+    "paths": [
+      { "path": "README.md", "excluded": true },
+      { "path": "items/tarefa.md", "excluded": false }
+    ]
+  },
+  {
+    "name": "question-mark-matches-one-character",
+    "patterns": ["/?.md"],
+    "paths": [
+      { "path": "a.md", "excluded": true },
+      { "path": "ab.md", "excluded": false }
+    ]
+  },
+  {
+    "name": "character-classes-are-supported",
+    "patterns": ["/[abc].md"],
+    "paths": [
+      { "path": "b.md", "excluded": true },
+      { "path": "d.md", "excluded": false }
+    ]
+  },
+  {
+    "name": "a-negated-character-class-is-supported",
+    "patterns": ["/[!abc].md"],
+    "paths": [
+      { "path": "b.md", "excluded": false },
+      { "path": "d.md", "excluded": true }
+    ]
+  },
+  {
+    "name": "double-star-spans-segments",
+    "patterns": ["docs/**/draft.md"],
+    "paths": [
+      { "path": "docs/draft.md", "excluded": true },
+      { "path": "docs/a/b/draft.md", "excluded": true },
+      { "path": "other/draft.md", "excluded": false }
+    ]
+  },
+  {
+    "name": "a-trailing-double-star-takes-the-subtree",
+    "patterns": ["docs/**"],
+    "paths": [
+      { "path": "docs/deep/a.md", "excluded": true },
+      { "path": "docs", "is_dir": true, "excluded": false }
+    ]
+  },
+  {
+    "name": "negation-re-includes-a-subtree",
+    "patterns": ["vendor", "!vendor/knowledge"],
+    "paths": [
+      { "path": "vendor/a.md", "excluded": true },
+      { "path": "vendor/knowledge", "is_dir": true, "excluded": false },
+      { "path": "vendor/knowledge/a.md", "excluded": false },
+      { "path": "vendor/knowledge/deep/b.md", "excluded": false }
+    ]
+  },
+  {
+    "name": "the-last-matching-pattern-decides",
+    "patterns": ["!vendor", "vendor"],
+    "paths": [{ "path": "vendor/a.md", "excluded": true }]
+  },
+  {
+    "name": "a-negation-can-be-re-excluded-below",
+    "patterns": ["vendor", "!vendor/knowledge", "vendor/knowledge/tmp"],
+    "paths": [
+      { "path": "vendor/knowledge/a.md", "excluded": false },
+      { "path": "vendor/knowledge/tmp/a.md", "excluded": true }
+    ]
+  },
+  {
+    "name": "comments-and-blank-lines-declare-nothing",
+    "patterns": ["# vendored dependencies", "", "   ", "vendor"],
+    "paths": [
+      { "path": "vendor/a.md", "excluded": true },
+      { "path": "a.md", "excluded": false }
+    ]
+  },
+  {
+    "name": "unescaped-trailing-spaces-are-dropped",
+    "patterns": ["vendor   "],
+    "paths": [{ "path": "vendor/a.md", "excluded": true }]
+  },
+  {
+    "name": "an-escaped-hash-is-a-literal-name",
+    "patterns": ["\\#notes.md"],
+    "paths": [
+      { "path": "#notes.md", "excluded": true },
+      { "path": "notes.md", "excluded": false }
+    ]
+  },
+  {
+    "name": "a-dot-is-a-literal-not-any-character",
+    "patterns": ["a.md"],
+    "paths": [
+      { "path": "a.md", "excluded": true },
+      { "path": "axmd", "excluded": false }
+    ]
+  },
+  {
+    "name": "a-hidden-directory-can-be-excluded-by-name",
+    "patterns": [".okf"],
+    "paths": [
+      { "path": ".okf/specs/spec.md", "excluded": true },
+      { "path": "okf/specs/spec.md", "excluded": false }
+    ]
+  }
+]

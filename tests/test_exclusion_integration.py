@@ -64,7 +64,7 @@ def test_the_mixed_repository_validates_from_its_real_root(tmp_path: Path) -> No
     fragmented = validate_path(tmp_path / "items")
     assert [item.code for item in fragmented.violations] == ["OKF101"]
 
-    _write(tmp_path / EXCLUSION_FILENAME, "vendor\n*.md\n")
+    _write(tmp_path / EXCLUSION_FILENAME, "vendor\n/*.md\n")
     whole = validate_path(tmp_path)
 
     assert whole.is_conformant
@@ -89,7 +89,7 @@ def test_an_excluded_file_is_never_rewritten(tmp_path: Path) -> None:
 def test_check_accepts_repeated_exclude_options(tmp_path: Path) -> None:
     _mixed_repository(tmp_path)
 
-    result = check_command(str(tmp_path), exclude=["vendor", "*.md"])
+    result = check_command(str(tmp_path), exclude=["vendor", "/*.md"])
 
     assert result.exit_code == 0
     assert result.payload["concept_count"] == 2
@@ -112,7 +112,7 @@ def test_duckdb_export_honours_exclusion(tmp_path: Path) -> None:
     payload = export_duckdb(
         str(tmp_path),
         str(database),
-        exclude=["vendor", "*.md"],
+        exclude=["vendor", "/*.md"],
     )
 
     assert payload["markdown_count"] == 2
@@ -131,3 +131,24 @@ def test_the_exclusion_file_itself_needs_no_pattern(tmp_path: Path) -> None:
     _write(tmp_path / EXCLUSION_FILENAME, "vendor\n")
 
     assert validate_path(tmp_path).markdown_count == 1
+
+
+def test_a_negation_re_includes_knowledge_inside_an_excluded_directory(tmp_path: Path) -> None:
+    """The monorepo case: vendored code is noise, the knowledge inside it is not.
+
+    Under `.gitignore` semantics git could not express this, because it prunes
+    the walk and never reconsiders. Here the walk descends whenever a negation
+    exists, so the re-inclusion is real rather than a silent no-op.
+    """
+    _write(tmp_path / "vendor" / "dep" / "guide.md", "# Guide\n")
+    _write(
+        tmp_path / "vendor" / "knowledge" / "tarefa.md",
+        "---\ntype: Work Item\n---\n\n# Tarefa\n",
+    )
+    _write(tmp_path / EXCLUSION_FILENAME, "vendor\n!vendor/knowledge\n")
+
+    report = validate_path(tmp_path)
+
+    assert report.is_conformant
+    assert report.markdown_count == 1
+    assert report.concept_count == 1
