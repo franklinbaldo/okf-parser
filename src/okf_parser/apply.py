@@ -8,11 +8,18 @@ single transaction. DuckDB's own parser, binder and catalog resolve every
 identifier and every ALTER's effect; this module never re-derives "what did
 the script mean to do." Instead, for whichever single type table the script
 touched, every concept's target frontmatter is *compiled directly from the
-final relational state* against the original document - a column absent (or
-NULL) from the final row means the key is absent from the document, a column
-present with a non-NULL value means the key holds exactly that value. The
-same final state always compiles to the same document, regardless of how
-many statements, or which ones, produced it.
+final relational state*: a column absent (or NULL) from the final row means
+the key is absent from the document, a column present with a non-NULL value
+means the key holds exactly that value. Two more pieces of information feed
+the compile, both read from DuckDB's own catalog and `RETURNING` output
+rather than by parsing the script's SQL text: which rows the trailing
+UPDATE's WHERE actually selected (needed only to resolve a value that was,
+and still is, NULL - otherwise indistinguishable from a row the script never
+touched at all), and which columns are the final name of a rename chain
+(needed to carry a value structurally to every row that authored the old
+name, independent of selection). Given those, the same final state always
+compiles to the same document, regardless of how many statements, or which
+ones, produced it.
 """
 
 from __future__ import annotations
@@ -200,6 +207,27 @@ def _file_signature(path: Path) -> tuple[int, int]:
     return (stat.st_size, stat.st_mtime_ns)
 
 
+def _prune_walk_directories(
+    directory: Path, directory_names: list[str], base: Path, rules: ExclusionRules, *, prunes: bool
+) -> None:
+    """Filter `directory_names` in place to the exact universe every bundle walk must agree on.
+
+    Shared by `_snapshot_bundle` (the baseline), `_snapshot_manifest` (the
+    write-time recheck), and `_build_candidate_tree` (the staged tree
+    `check` validates) - if any of the three pruned a different set of
+    directories, an excluded directory's files would appear in one walk's
+    universe but not another's, and `apply --write` would either miss a real
+    conflict or report a false one purely from directory-level exclusion.
+    """
+    directory_names[:] = [
+        name
+        for name in directory_names
+        if name not in IGNORED_DIRECTORIES
+        and not (directory / name).is_symlink()
+        and not (prunes and rules.excludes((base / name).as_posix(), is_dir=True))
+    ]
+
+
 @dataclass(frozen=True, slots=True)
 class _BundleSnapshot:
     manifest: dict[str, tuple[int, int]]
@@ -224,13 +252,7 @@ def _snapshot_bundle(root: Path, exclude: Sequence[str]) -> _BundleSnapshot:
     concepts: list[_Concept] = []
     for directory, directory_names, filenames in root.walk(follow_symlinks=False):
         base = directory.relative_to(root)
-        directory_names[:] = [
-            name
-            for name in directory_names
-            if name not in IGNORED_DIRECTORIES
-            and not (directory / name).is_symlink()
-            and not (prunes and rules.excludes((base / name).as_posix(), is_dir=True))
-        ]
+        _prune_walk_directories(directory, directory_names, base, rules, prunes=prunes)
         for name in filenames:
             source = directory / name
             if source.is_symlink():
@@ -513,7 +535,7 @@ def _fetch_rows(con: IbisConnection, table: str) -> dict[str, dict[str, object]]
 
 def _check_alter_shape(
     before: dict[str, dict[str, str]], after: dict[str, dict[str, str]], query: str
-) -> tuple[str, str] | None:
+) -> tuple[str, str, str] | None:
     """Reject any ALTER whose catalog delta isn't a single add/drop/rename column.
 
     The RFC promises leading statements are limited to
@@ -521,8 +543,9 @@ def _check_alter_shape(
     forms (a type change, a constraint, a default) that a name/type diff
     wouldn't otherwise notice, since `DESCRIBE` only reports name and type.
     Checked against the real catalog per statement, not by parsing the SQL.
-    Returns ``(old_name, new_name)`` when the statement was a rename, so the
-    caller can track a value's structural carry across it - ``None``
+    Returns ``(type_name, old_name, new_name)`` when the statement was a
+    rename, so the caller can track a value's structural carry across it -
+    scoped to the exact type the rename happened on, not globally - ``None``
     otherwise.
     """
     changed_types = [type_name for type_name in before if before[type_name] != after[type_name]]
@@ -550,7 +573,7 @@ def _check_alter_shape(
     if is_rename:
         (old_name,) = removed
         (new_name,) = added
-        return (old_name, new_name)
+        return (type_name, old_name, new_name)
     return None
 
 
@@ -559,8 +582,8 @@ def _run_transaction(
     type_names: Sequence[str],
     alter_queries: list[str],
     update_query: str,
-) -> tuple[frozenset[str], dict[str, str]]:
-    """Run the script; return selected concept IDs and the rename chain.
+) -> tuple[frozenset[str], dict[str, dict[str, str]]]:
+    """Run the script; return selected concept IDs and the rename chain, per type.
 
     `RETURNING __okf_concept_id` is the only reliable source for "which rows
     did the trailing UPDATE's WHERE select": a row the WHERE matched but
@@ -574,9 +597,14 @@ def _run_transaction(
     statement's own catalog delta, never its text - because a renamed
     column's value is carried structurally to every row that had the old
     name, independent of whether the trailing UPDATE's `WHERE` selected that
-    row at all.
+    row at all. Kept one chain per type, not one shared chain across every
+    type's table: a rename on one type must never bleed into another type
+    that happens to have a column under the same name. Identity mappings
+    (a chain that renamed a column back to its original name) are dropped
+    once the whole script has run, so a cancel-out chain on the touched
+    type's own columns doesn't get treated as a structural carry either.
     """
-    renamed: dict[str, str] = {}
+    renamed_by_type: dict[str, dict[str, str]] = {}
     con.raw_sql("BEGIN TRANSACTION")
     try:
         for query in alter_queries:
@@ -585,9 +613,10 @@ def _run_transaction(
             after = {t: _describe(con, t) for t in type_names}
             rename = _check_alter_shape(before, after, query)
             if rename is not None:
-                old_name, new_name = rename
-                origin = next((k for k, v in renamed.items() if v == old_name), old_name)
-                renamed[origin] = new_name
+                type_name, old_name, new_name = rename
+                type_renamed = renamed_by_type.setdefault(type_name, {})
+                origin = next((k for k, v in type_renamed.items() if v == old_name), old_name)
+                type_renamed[origin] = new_name
         cursor = con.raw_sql(f"{update_query} RETURNING __okf_concept_id")
         selected_ids = frozenset(row[0] for row in cursor.fetchall())
     except duckdb.Error as exc:
@@ -598,7 +627,10 @@ def _run_transaction(
         con.raw_sql("ROLLBACK")
         raise
     con.raw_sql("COMMIT")
-    return selected_ids, renamed
+    for type_renamed in renamed_by_type.values():
+        for origin in [key for key, target in type_renamed.items() if key == target]:
+            del type_renamed[origin]
+    return selected_ids, renamed_by_type
 
 
 def _relation_differs(before: ibis.Table, after: ibis.Table) -> bool:
@@ -671,6 +703,11 @@ def _check_result_schema(
                 f"to {after_schema[column]}"
             )
             raise ApplyError(msg)
+    # ASCII-case-folded, matching DuckDB's own identifier equality: a bare or
+    # quoted "Tags"/"TAGS"/"tags" are all the same column to DuckDB, so a
+    # structured "Tags" is exactly as reserved as a differently-cased
+    # reintroduction of it.
+    structured_folded = {name.lower() for name in structured}
     for column in after_cols - before_cols:
         # ASCII-case-insensitive, matching the authored-side reserved-prefix
         # check: DuckDB folds unquoted/quoted ASCII case, so "__OKF_custom"
@@ -678,11 +715,10 @@ def _check_result_schema(
         if column[: len(_OKF_PREFIX)].lower() == _OKF_PREFIX:
             msg = f'column "{column}" collides with the reserved __okf_ prefix'
             raise ApplyError(msg)
-        if column in structured:
+        if column.lower() in structured_folded:
             msg = (
-                f'column "{column}" reintroduces "{column}", which is structured '
-                "(list/map) on at least one document of this type and is never "
-                "a writable column"
+                f'column "{column}" reintroduces a structured (list/map) field '
+                "under DuckDB identifier equality, which is never a writable column"
             )
             raise ApplyError(msg)
         if after_schema[column].upper() != "VARCHAR":
@@ -734,13 +770,29 @@ def _compile_field_value(final_value: object, *, was_present: bool) -> str | Non
 
 
 def _compile_changed_field_value(
-    final_value: object, *, was_present: bool, current_value: object
+    final_value: object, *, was_present: bool, current_value: object, selected: bool
 ) -> str | None | _NotApplicable:
-    """Same as `_compile_field_value`, but skip emitting an entry that changes nothing."""
+    """Compile a kept/added column's target: on a real value change, or on selection.
+
+    A kept-or-added column can change its stored value without that row ever
+    being selected by the trailing `UPDATE`'s `WHERE` - a `DROP COLUMN`
+    immediately followed by `ADD COLUMN` of the same name resets every row
+    to NULL (or to an `ADD COLUMN ... DEFAULT`'s literal) structurally, not
+    row by row. Whenever the final value is a string, or differs from the
+    row's own original value, that's real information regardless of
+    selection. Only the NULL-was-already-NULL case is genuinely ambiguous
+    without knowing selection - a `RETURNING`-selected row explicitly set to
+    NULL always deletes the key, but an unselected row whose value was
+    already absent/null must be left alone.
+    """
     target = final_value if isinstance(final_value, str) else None
-    if target is None:
+    if target is not None:
+        return _NOT_APPLICABLE if current_value == target else target
+    if current_value is not None:
         return None if was_present else _NOT_APPLICABLE
-    return _NOT_APPLICABLE if current_value == target else target
+    if not selected:
+        return _NOT_APPLICABLE
+    return None if was_present else _NOT_APPLICABLE
 
 
 def _compile_row_diff(  # noqa: PLR0913 - each argument is a distinct compile input.
@@ -768,13 +820,12 @@ def _compile_row_diff(  # noqa: PLR0913 - each argument is a distinct compile in
       trailing UPDATE's `WHERE` - a rename is a schema operation, not a row
       selection;
     - any other column still in the final schema (kept, or newly added via
-      `ADD COLUMN`) only touches a row the UPDATE actually selected, per
-      `RETURNING`. Within a selected row, a final NULL always means "delete
-      this key" - even one that was already NULL before the script ran,
-      which a before/after value comparison alone cannot distinguish from
-      "this row was never selected at all." A row the `WHERE` never matched
-      is left exactly as authored, even if one of its fields happens to be
-      NULL too.
+      `ADD COLUMN`) compiles whenever that row's own value actually changed
+      from what it was originally authored with - regardless of whether the
+      trailing `UPDATE` selected that row - plus the one case a value
+      comparison alone can't resolve: a `RETURNING`-selected row whose value
+      was, and still is, NULL, which always means "delete this key." A row
+      neither selected nor whose value changed is left exactly as authored.
     """
     diff: dict[str, str | None] = {}
     for name in field_names:
@@ -790,14 +841,13 @@ def _compile_row_diff(  # noqa: PLR0913 - each argument is a distinct compile in
             entry = _compile_field_value(
                 after_row.get(name), was_present=origin in concept.frontmatter
             )
-        elif selected:
+        else:
             entry = _compile_changed_field_value(
                 after_row.get(name),
                 was_present=name in concept.frontmatter,
                 current_value=concept.frontmatter.get(name),
+                selected=selected,
             )
-        else:
-            entry = _NOT_APPLICABLE
         if not isinstance(entry, _NotApplicable):
             diff[name] = entry
     return diff
@@ -816,10 +866,9 @@ def _execute_script(
     ephemeral in-memory database is touched.
     """
     snapshots = _snapshot_types(con, materialized.fields_by_type)
-    selected_ids, renamed = _run_transaction(
+    selected_ids, renamed_by_type = _run_transaction(
         con, list(materialized.fields_by_type), alter_queries, update_query
     )
-    renamed_from = {new_name: old_name for old_name, new_name in renamed.items()}
 
     touched = _find_touched_type(con, snapshots)
     selected_type = _type_of_selected(materialized.concepts_by_type, selected_ids)
@@ -830,6 +879,9 @@ def _execute_script(
         raise ApplyError(msg)
     if touched is None:
         return _ScriptOutcome(touched_type=None)
+
+    renamed = renamed_by_type.get(touched, {})
+    renamed_from = {new_name: old_name for old_name, new_name in renamed.items()}
 
     after_schema = _describe(con, touched)
     structured = materialized.structured_by_type[touched]
@@ -974,22 +1026,23 @@ def apply_bundle(  # noqa: PLR0913 - each argument is an independent public CLI 
     )
 
 
-def _snapshot_manifest(root: Path) -> dict[str, tuple[int, int]]:
+def _snapshot_manifest(root: Path, exclude: Sequence[str]) -> dict[str, tuple[int, int]]:
     """Relative path -> (size, mtime_ns) for every real file `check` could see.
 
-    Pruned the same way `discover_markdown` prunes: ignored directories and
-    symlinks are skipped, not walked - keeping this manifest and the
-    candidate tree built from it looking at the same universe of files. Used
-    only for the write-time recheck; the baseline comes from `_snapshot_bundle`.
+    Pruned via the same `_prune_walk_directories` helper - and the same
+    `exclude` argument - `_snapshot_bundle` uses for the baseline: an
+    excluded directory must be absent from both walks' universes, or present
+    in both, never split between them, or a mismatch shows up as a false
+    conflict (or a missed real one) purely from directory-level exclusion.
+    Used only for the write-time recheck; the baseline comes from
+    `_snapshot_bundle`.
     """
+    rules = ExclusionRules.read(root, exclude)
+    prunes = not rules.has_negation
     manifest: dict[str, tuple[int, int]] = {}
     for directory, directory_names, filenames in root.walk(follow_symlinks=False):
         base = directory.relative_to(root)
-        directory_names[:] = [
-            name
-            for name in directory_names
-            if name not in IGNORED_DIRECTORIES and not (directory / name).is_symlink()
-        ]
+        _prune_walk_directories(directory, directory_names, base, rules, prunes=prunes)
         for name in filenames:
             source = directory / name
             if source.is_symlink():
@@ -1011,7 +1064,7 @@ def _stage_validate_write(  # noqa: PLR0913 - each argument is a distinct write-
         candidate_root = Path(tmp) / "bundle"
         candidate_root.mkdir()
         try:
-            _build_candidate_tree(root, candidate_root, candidates)
+            _build_candidate_tree(root, candidate_root, candidates, exclude)
         except OSError as exc:
             return ApplyResult(
                 succeeded=False, error=f"could not stage the candidate bundle: {exc}"
@@ -1038,7 +1091,7 @@ def _stage_validate_write(  # noqa: PLR0913 - each argument is a distinct write-
         # Re-check the whole manifest `check` saw, immediately before writing,
         # not just the touched documents: an untouched file may have changed,
         # and a file may have appeared or disappeared since validation ran.
-        current_manifest = _snapshot_manifest(root)
+        current_manifest = _snapshot_manifest(root, exclude)
         added_or_removed = set(baseline_manifest) ^ set(current_manifest)
         stale_untouched = {
             rel
@@ -1063,22 +1116,25 @@ def _stage_validate_write(  # noqa: PLR0913 - each argument is a distinct write-
 
 
 def _build_candidate_tree(
-    root: Path, candidate_root: Path, candidates: dict[str, tuple[_RawDocument, str, Path]]
+    root: Path,
+    candidate_root: Path,
+    candidates: dict[str, tuple[_RawDocument, str, Path]],
+    exclude: Sequence[str],
 ) -> None:
     """Hardlink (copy-fallback) every real file `check` would see into a staging tree.
 
-    Pruned like `_snapshot_manifest`/`discover_markdown`: ignored directories
-    (``.git``, ``.venv``, caches) and symlinks are skipped, not staged, so a
-    write doesn't multiply I/O across an unrelated VCS or virtualenv tree for
-    no validation benefit.
+    Pruned via the same `_prune_walk_directories` helper `_snapshot_bundle`
+    and `_snapshot_manifest` use, with the same `exclude` argument: an
+    excluded directory (``.okfignore``, `--exclude`) is skipped exactly the
+    same way here as in the manifest walks, not just the fixed
+    `IGNORED_DIRECTORIES` (``.git``, ``.venv``, caches) - keeping the staged
+    tree's universe identical to what both manifests already agree on.
     """
+    rules = ExclusionRules.read(root, exclude)
+    prunes = not rules.has_negation
     for directory, directory_names, filenames in root.walk(follow_symlinks=False):
         base = directory.relative_to(root)
-        directory_names[:] = [
-            name
-            for name in directory_names
-            if name not in IGNORED_DIRECTORIES and not (directory / name).is_symlink()
-        ]
+        _prune_walk_directories(directory, directory_names, base, rules, prunes=prunes)
         for name in filenames:
             source = directory / name
             if source.is_symlink():

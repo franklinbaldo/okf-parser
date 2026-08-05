@@ -760,3 +760,114 @@ def test_write_preserves_bom_and_crlf(tmp_path: Path) -> None:
     assert b"\n" not in raw.replace(b"\r\n", b"")
     text = raw.decode("utf-8")
     assert "setor: '#GAB#FSB'" in text or "setor: #GAB#FSB" in text
+
+
+def test_drop_then_add_same_column_name_compiles_even_when_unselected(tmp_path: Path) -> None:
+    # DROP+ADD resets every row's "a" to NULL structurally, in the ALTER
+    # phase - independent of whatever the trailing UPDATE's WHERE selects.
+    # Gating compilation on `selected` alone would miss this: the row was
+    # never selected, but its value genuinely changed (30 -> absent).
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\na: 30\n---\n# R1\n")
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql=(
+            'ALTER TABLE "Rotina" DROP COLUMN a; '
+            'ALTER TABLE "Rotina" ADD COLUMN a VARCHAR; '
+            'UPDATE "Rotina" SET __okf_path = __okf_path WHERE FALSE'
+        ),
+        write=True,
+    )
+
+    assert result["succeeded"] is True, result
+    text = _read(tmp_path / "r1.md")
+    assert "a: 30" not in text
+    assert "a:" not in text.split("---")[1]
+
+
+def test_add_column_with_default_backfills_every_row_even_when_unselected(tmp_path: Path) -> None:
+    # ADD COLUMN ... DEFAULT backfills every existing row structurally, not
+    # just the ones the trailing UPDATE happens to select.
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\n---\n# R1\n")
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql=(
+            "ALTER TABLE \"Rotina\" ADD COLUMN novo VARCHAR DEFAULT 'x'; "
+            'UPDATE "Rotina" SET __okf_path = __okf_path WHERE FALSE'
+        ),
+        write=True,
+    )
+
+    assert result["succeeded"] is True, result
+    text = _read(tmp_path / "r1.md")
+    assert "novo: x" in text or "novo: 'x'" in text
+
+
+def test_rename_chain_is_scoped_to_its_own_type(tmp_path: Path) -> None:
+    # TipoA's a->b->a cancels out to its exact original schema and rows - a
+    # no-op the compiler should never see. TipoB has an unrelated column
+    # also named "a", authored as an explicit null on both its rows; only
+    # tb1 matches the trailing UPDATE's WHERE, so tb2's `a: null` should be
+    # left untouched. If the rename chain were tracked globally instead of
+    # per type, TipoA's cancelled a->a mapping would be mistaken for a
+    # structural rename on TipoB, deleting `a` bundle-wide regardless of
+    # selection - including on tb2, which the script never selected at all.
+    _write(tmp_path / "ta.md", "---\ntype: TipoA\na: 1\n---\n# TA\n")
+    _write(tmp_path / "tb1.md", "---\ntype: TipoB\na:\nx: 1\n---\n# TB1\n")
+    _write(tmp_path / "tb2.md", "---\ntype: TipoB\na:\nx: 2\n---\n# TB2\n")
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql=(
+            'ALTER TABLE "TipoA" RENAME COLUMN a TO b; '
+            'ALTER TABLE "TipoA" RENAME COLUMN b TO a; '
+            "UPDATE \"TipoB\" SET x = 'updated' WHERE x = '1'"
+        ),
+        write=True,
+    )
+
+    assert result["succeeded"] is True, result
+    assert _changed_paths(result) == ["tb1.md"]
+    assert "a: 1" in _read(tmp_path / "ta.md")
+    tb2_frontmatter = _read(tmp_path / "tb2.md").split("---")[1]
+    assert "a:" in tb2_frontmatter
+
+
+def test_write_recheck_agrees_with_baseline_on_an_excluded_directory(tmp_path: Path) -> None:
+    # An `.okfignore`-excluded directory must be pruned identically by the
+    # baseline walk (`_snapshot_bundle`) and the write-time recheck
+    # (`_snapshot_manifest`/`_build_candidate_tree`) - otherwise its files
+    # appear on only one side of the final manifest comparison and every
+    # valid write aborts with a false "bundle changed" conflict.
+    _write(tmp_path / ".okfignore", "ignored/\n")
+    _write(tmp_path / "ignored" / "x.md", "---\ntype: Rotina\nsetor: SKIP\n---\n# X\n")
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\nsetor: GAB\n---\n# R1\n")
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql="UPDATE \"Rotina\" SET setor = '#GAB#FSB' WHERE setor = 'GAB'",
+        write=True,
+    )
+
+    assert result["succeeded"] is True, result
+    text = _read(tmp_path / "r1.md")
+    assert "setor: '#GAB#FSB'" in text or "setor: #GAB#FSB" in text
+
+
+def test_structured_field_collision_check_is_case_insensitive(tmp_path: Path) -> None:
+    # "Tags" is structured (a list) on r2; DuckDB's identifier equality is
+    # ASCII-case-insensitive, so `ADD COLUMN tags` collides with it exactly
+    # as much as `ADD COLUMN Tags` would.
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\n---\n# R1\n")
+    _write(tmp_path / "r2.md", "---\ntype: Rotina\nTags:\n  - a\n  - b\n---\n# R2\n")
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql=('ALTER TABLE "Rotina" ADD COLUMN tags VARCHAR; UPDATE "Rotina" SET tags = \'x\''),
+        write=True,
+    )
+
+    assert result["succeeded"] is False
+    assert "structured" in _error(result)
+    assert "- a" in _read(tmp_path / "r2.md")
