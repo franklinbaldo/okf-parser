@@ -1,7 +1,7 @@
 ---
 type: RFC
 title: First-class TypeScript sibling implementation
-status: proposed
+status: accepted
 description: Define semantic parity, repository layout and incremental delivery for a native TypeScript okf-parser package
 ---
 

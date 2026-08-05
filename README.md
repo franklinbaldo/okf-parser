@@ -114,15 +114,15 @@ alone.
 `.okfignore` uses **`.gitignore` pattern semantics**, matched against
 POSIX-style paths relative to the bundle root:
 
-| pattern       | matches                             | does not match          |
-| ------------- | ----------------------------------- | ----------------------- |
-| `vendor`      | `vendor/a.md`, `libs/vendor/a.md`   | `equipe/a.md`           |
-| `/vendor`     | `vendor/a.md`                       | `libs/vendor/a.md`      |
-| `vendor/`     | `vendor/a.md` (directory only)      | a *file* named `vendor` |
-| `*.md`        | `README.md`, `items/tarefa.md`      | `items/tarefa.markdown` |
-| `/*.md`       | `README.md`                         | `items/tarefa.md`       |
-| `docs/**/x.md`| `docs/x.md`, `docs/a/b/x.md`        | `other/x.md`            |
-| `!vendor/kb`  | re-includes what an earlier pattern excluded |                |
+| pattern        | matches                                      | does not match          |
+| -------------- | -------------------------------------------- | ----------------------- |
+| `vendor`       | `vendor/a.md`, `libs/vendor/a.md`            | `equipe/a.md`           |
+| `/vendor`      | `vendor/a.md`                                | `libs/vendor/a.md`      |
+| `vendor/`      | `vendor/a.md` (directory only)               | a *file* named `vendor` |
+| `*.md`         | `README.md`, `items/tarefa.md`               | `items/tarefa.markdown` |
+| `/*.md`        | `README.md`                                  | `items/tarefa.md`       |
+| `docs/**/x.md` | `docs/x.md`, `docs/a/b/x.md`                 | `other/x.md`            |
+| `!vendor/kb`   | re-includes what an earlier pattern excluded |                         |
 
 - a pattern without a separator matches its name **at any depth**; a separator
   anchors it at the bundle root;
@@ -149,10 +149,10 @@ The same rules are shared with the TypeScript package through
 Before 0.14.0 every pattern was anchored at the bundle root and `!` was a
 literal character. Two rewrites cover it:
 
-| before        | after     | why                                              |
-| ------------- | --------- | ------------------------------------------------ |
-| `*.md`        | `/*.md`   | unanchored patterns now match at any depth        |
-| `vendor`      | `/vendor` | keep it root-only; leave as-is to match any depth |
+| before   | after     | why                                               |
+| -------- | --------- | ------------------------------------------------- |
+| `*.md`   | `/*.md`   | unanchored patterns now match at any depth        |
+| `vendor` | `/vendor` | keep it root-only; leave as-is to match any depth |
 
 A pattern that begins with a literal `!` now needs `\!`.
 

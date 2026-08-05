@@ -382,15 +382,15 @@ Published package versions are immutable. Recovery is forward-only.
 
 Example states:
 
-| PyPI | npm parser | npm DuckDB | Action |
-|---|---|---|---|
-| absent | absent | absent | publish all in order |
-| expected | absent | absent | skip PyPI; publish npm packages |
-| expected | expected | absent | publish DuckDB adapter |
-| expected | expected | expected | finalize GitHub Release |
-| conflict | any | any | stop permanently for this version |
-| any | conflict | any | stop permanently for this version |
-| any | any | conflict | stop permanently for this version |
+| PyPI     | npm parser | npm DuckDB | Action                            |
+| -------- | ---------- | ---------- | --------------------------------- |
+| absent   | absent     | absent     | publish all in order              |
+| expected | absent     | absent     | skip PyPI; publish npm packages   |
+| expected | expected   | absent     | publish DuckDB adapter            |
+| expected | expected   | expected   | finalize GitHub Release           |
+| conflict | any        | any        | stop permanently for this version |
+| any      | conflict   | any        | stop permanently for this version |
+| any      | any        | conflict   | stop permanently for this version |
 
 A failed job is retried through GitHub Actions. The workflow must not require a
 new tag or version merely because a transient network error occurred after a

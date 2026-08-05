@@ -1,6 +1,6 @@
 [project]
 name = "okf-parser"
-version = "0.14.0"
+version = "0.14.1"
 description = "Relational inspection and validation for Open Knowledge Format bundles"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -28,6 +28,7 @@ okf-parser-mcp = "okf_parser.cli:run_mcp_stdio"
 [dependency-groups]
 dev = [
   "pytest>=8,<10",
+  "pytest-cov>=6,<7",
   "ruff>=0.15,<0.16",
   "ty>=0.0.1a20,<0.1",
   "vulture>=2.14,<3",
@@ -47,6 +48,12 @@ exclude = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["src/okf_parser"]
+
+[tool.coverage.report]
+skip_covered = false
 
 [tool.ruff]
 line-length = 100
