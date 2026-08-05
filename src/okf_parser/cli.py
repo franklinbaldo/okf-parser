@@ -13,6 +13,7 @@ from pydantic import Field
 
 from okf_parser.duckdb import BundleExportError
 from okf_parser.service import (
+    apply_bundle,
     check_bundle,
     check_format,
     export_duckdb,
@@ -124,6 +125,32 @@ def format_command(
     """Check mdformat style, writing only when --write is explicit."""
     patterns = exclude or ()
     payload = write_format(path, patterns) if write else check_format(path, patterns)
+    return CliResult(payload, 0 if payload["succeeded"] else 1)
+
+
+@app.command
+def apply(  # noqa: PLR0913 - each argument is an independent public CLI flag.
+    path: str,
+    *,
+    sql: str | None = None,
+    type: str | None = None,  # noqa: A002 - the domain name for this flag is `type`.
+    field: str | None = None,
+    from_: Annotated[str | None, Parameter(name="from")] = None,
+    to: str | None = None,
+    write: bool = False,
+    exclude: RepeatableStrings = None,
+) -> CliResult[JsonPayload]:
+    """Mutate frontmatter fields via a bounded ALTER TABLE + UPDATE SQL script."""
+    payload = apply_bundle(
+        path,
+        sql=sql,
+        type_name=type,
+        field_name=field,
+        from_value=from_,
+        to_value=to,
+        write=write,
+        exclude=exclude or (),
+    )
     return CliResult(payload, 0 if payload["succeeded"] else 1)
 
 
