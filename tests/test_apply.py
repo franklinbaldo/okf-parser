@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import okf_parser.apply as apply_module
@@ -9,7 +10,6 @@ from okf_parser.apply import apply_bundle
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from pathlib import Path
 
     import pytest
 
@@ -507,22 +507,26 @@ def test_untouched_file_edited_before_write_aborts_as_a_conflict(
     _write(tmp_path / "r1.md", "---\ntype: Rotina\nsetor: GAB\n---\n# R1\n")
     _write(tmp_path / "r2.md", "---\ntype: Rotina\nsetor: OTHER\n---\n# R2\n")
 
-    real_signature = apply_module._file_signature  # noqa: SLF001
+    real_validate_path = apply_module.validate_path
 
-    def racing_signature(path: Path) -> tuple[int, int]:
-        # `_file_signature` for a concept file is only ever called during the
-        # write-time recheck (the baseline comes from `_snapshot_bundle`'s
-        # own read instead), so mutating on its first call for r2.md and
-        # then returning the now-current signature simulates a concurrent
-        # editor saving r2.md sometime after apply validated the bundle but
-        # before it re-checks the manifest right before writing.
-        if path.name == "r2.md":
-            (tmp_path / "r2.md").write_text(
-                "---\ntype: Rotina\nsetor: RACED\n---\n# R2\n", encoding="utf-8"
-            )
-        return real_signature(path)
+    def racing_validate_path(
+        path: Path,
+        exclude: Sequence[str] = (),
+        require_spec: str | None = None,
+        *,
+        normative_spec: bool = False,
+    ) -> ValidationReport:
+        # `validate_path` runs the baseline check once, right after
+        # `_snapshot_bundle` has already captured r2.md's signature, and
+        # well before apply re-walks the whole bundle right before writing
+        # - mutating r2.md right here simulates a concurrent editor saving
+        # it somewhere in that window.
+        (tmp_path / "r2.md").write_text(
+            "---\ntype: Rotina\nsetor: RACED\n---\n# R2\n", encoding="utf-8"
+        )
+        return real_validate_path(path, exclude, require_spec, normative_spec=normative_spec)
 
-    monkeypatch.setattr(apply_module, "_file_signature", racing_signature)
+    monkeypatch.setattr(apply_module, "validate_path", racing_validate_path)
 
     result = apply_bundle(
         str(tmp_path),
@@ -550,19 +554,19 @@ def test_document_edited_right_after_materialization_read_is_still_caught(
     _write(tmp_path / "r1.md", "---\ntype: Rotina\nsetor: GAB\n---\n# R1\n")
     _write(tmp_path / "r2.md", "---\ntype: Rotina\nsetor: OTHER\n---\n# R2\n")
 
-    real_read = apply_module._read_concept_bytes  # noqa: SLF001
+    real_read_bytes = Path.read_bytes
     mutated = {"done": False}
 
-    def racing_read(path: Path) -> bytes:
-        raw = real_read(path)
-        if path.name == "r2.md" and not mutated["done"]:
+    def racing_read(self: Path) -> bytes:
+        raw = real_read_bytes(self)
+        if self.name == "r2.md" and not mutated["done"]:
             mutated["done"] = True
             (tmp_path / "r2.md").write_text(
                 "---\ntype: Rotina\nsetor: GAB\n---\n# R2\n", encoding="utf-8"
             )
         return raw
 
-    monkeypatch.setattr(apply_module, "_read_concept_bytes", racing_read)
+    monkeypatch.setattr(Path, "read_bytes", racing_read)
 
     result = apply_bundle(
         str(tmp_path),
@@ -589,19 +593,19 @@ def test_same_size_replace_during_read_is_still_caught(
     """
     _write(tmp_path / "r1.md", "---\ntype: Rotina\nsetor: AAAAA\n---\n# R1\n")
 
-    real_read = apply_module._read_concept_bytes  # noqa: SLF001
+    real_read_bytes = Path.read_bytes
     mutated = {"done": False}
 
-    def racing_read(path: Path) -> bytes:
-        raw = real_read(path)
-        if path.name == "r1.md" and not mutated["done"]:
+    def racing_read(self: Path) -> bytes:
+        raw = real_read_bytes(self)
+        if self.name == "r1.md" and not mutated["done"]:
             mutated["done"] = True
             (tmp_path / "r1.md").write_text(
                 "---\ntype: Rotina\nsetor: BBBBB\n---\n# R1\n", encoding="utf-8"
             )
         return raw
 
-    monkeypatch.setattr(apply_module, "_read_concept_bytes", racing_read)
+    monkeypatch.setattr(Path, "read_bytes", racing_read)
 
     result = apply_bundle(
         str(tmp_path),

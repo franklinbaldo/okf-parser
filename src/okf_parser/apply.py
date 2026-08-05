@@ -168,10 +168,6 @@ class _Concept:
     raw: _RawDocument
 
 
-def _read_concept_bytes(path: Path) -> bytes:
-    return path.read_bytes()
-
-
 def _parse_concept(root: Path, path: Path, raw: bytes) -> _Concept | None:
     try:
         text = raw.decode("utf-8")
@@ -199,19 +195,7 @@ def _parse_concept(root: Path, path: Path, raw: bytes) -> _Concept | None:
 
 
 def _file_signature(path: Path) -> tuple[int, int]:
-    """(size, mtime_ns) for one file - the freshness check `_snapshot_manifest` uses."""
-    stat = path.stat()
-    return (stat.st_size, stat.st_mtime_ns)
-
-
-def _probe_file(path: Path) -> tuple[int, int]:
-    """(size, mtime_ns) for one file - the read-consistency check `_snapshot_bundle` uses.
-
-    Functionally identical to `_file_signature`; kept as a distinct name so
-    the two independent freshness checks (bracketing a concept read here,
-    versus the write-time recheck against the whole manifest) can be
-    exercised in isolation from each other.
-    """
+    """(size, mtime_ns) for one file - a freshness baseline, or to bracket a read."""
     stat = path.stat()
     return (stat.st_size, stat.st_mtime_ns)
 
@@ -268,9 +252,9 @@ def _snapshot_bundle(root: Path, exclude: Sequence[str]) -> _BundleSnapshot:
             # the two stats to agree means the recorded signature always
             # truly corresponds to the bytes just read, not to whichever
             # file existed at the moment of the second syscall.
-            before_stat = _probe_file(source)
-            raw = _read_concept_bytes(source)
-            after_stat = _probe_file(source)
+            before_stat = _file_signature(source)
+            raw = source.read_bytes()
+            after_stat = _file_signature(source)
             if before_stat != after_stat:
                 msg = f"file changed while apply was reading it: {posix}"
                 raise ApplyError(msg)
