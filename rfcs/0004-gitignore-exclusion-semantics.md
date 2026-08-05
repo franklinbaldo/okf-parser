@@ -89,8 +89,8 @@ migration table in the README:
 
 | before   | after     | why                                               |
 | -------- | --------- | ------------------------------------------------- |
-| `*.md`   | `/*.md`   | unanchored patterns now match at any depth         |
-| `vendor` | `/vendor` | keep it root-only; leave as-is to match any depth  |
+| `*.md`   | `/*.md`   | unanchored patterns now match at any depth        |
+| `vendor` | `/vendor` | keep it root-only; leave as-is to match any depth |
 
 A pattern beginning with a literal `!` now needs `\!`.
 
