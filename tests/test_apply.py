@@ -635,11 +635,10 @@ def test_type_named_like_the_internal_before_namespace_works_like_any_other_type
 def test_type_named_like_the_staging_variable_does_not_shadow_a_later_type(
     tmp_path: Path,
 ) -> None:
-    # The staging table for `okf_apply_stage_table` (materialized first,
-    # types are processed in sorted order) must not become the data source
-    # for the later-materialized "zzzz" type just because the two share a
-    # name - a random per-call staging name means there's nothing fixed to
-    # shadow, regardless of materialization order.
+    # A type literally named `okf_apply_stage_table` (materialized first,
+    # types are processed in sorted order) must not interfere with the
+    # later-materialized "zzzz" type - there's no intermediate staging
+    # relation under any name at all anymore for a real `type` to shadow.
     _write(
         tmp_path / "a.md",
         "---\ntype: okf_apply_stage_table\nx: from-stage-type\n---\n# A\n",

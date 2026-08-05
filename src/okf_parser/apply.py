@@ -22,13 +22,13 @@ import os
 import re
 import shutil
 import tempfile
-import uuid
 from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
+import ibis
 import pyarrow as pa
 from ruamel.yaml import YAML
 
@@ -367,26 +367,13 @@ def _build_table(
         ]
     )
     table = pa.table(columns, schema=schema)
-    # A per-call random name, not a fixed predictable one: DuckDB's
-    # replacement scan resolves a name by lookup order (real catalog table
-    # first, calling-frame variable second), so a *fixed* staging name -
-    # whether a registered relation or a Python local - can be shadowed by a
-    # real `type` materialized earlier under that exact name, silently
-    # feeding the wrong data into whatever gets built from it next. A random
-    # name collapses that risk to cryptographic near-impossibility, and even
-    # in that case `register()` raises a clean CatalogException rather than
-    # silently resolving to the wrong relation.
-    staging_name = f"__okf_apply_stage_{uuid.uuid4().hex}"
-    con.register(staging_name, table)
-    try:
-        # Both identifiers are quoted via _quote_ident, not interpolated raw.
-        query = (
-            f"CREATE TEMP TABLE {_quote_ident(table_name)} "  # noqa: S608
-            f"AS SELECT * FROM {_quote_ident(staging_name)}"
-        )
-        con.execute(query)
-    finally:
-        con.unregister(staging_name)
+    # ibis's `create_table` builds the CREATE TABLE statement itself (via
+    # sqlglot, properly quoting the identifier) and hands the Arrow table
+    # straight to DuckDB - no intermediate staging relation under any name,
+    # fixed or random, ever exists for a real `type` to shadow or collide
+    # with. A genuine collision still raises duckdb.CatalogException, same
+    # as any other CREATE TABLE.
+    ibis.duckdb.from_connection(con).create_table(table_name, obj=table, temp=True)
 
 
 @dataclass(frozen=True, slots=True)
