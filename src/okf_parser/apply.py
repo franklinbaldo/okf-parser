@@ -3,13 +3,16 @@
 `apply` materializes every concept type as its own DuckDB table (named for
 the exact authored ``type`` value, quoted) inside one in-memory database,
 then hands the caller's ``--sql`` to it: zero or more leading
-``ALTER TABLE ADD/DROP/RENAME COLUMN`` statements, followed by exactly one
-``UPDATE``, run as a single transaction. DuckDB's own parser and binder
-resolve every identifier; this module never re-derives "which type does
-this string mean" itself. What changed is discovered from a before/after
-diff of every table, validated, staged through a round-trip YAML writer,
-checked against the bundle's own baseline, and only then replaces real
-files.
+``ALTER TABLE`` statements, followed by exactly one ``UPDATE``, run as a
+single transaction. DuckDB's own parser, binder and catalog resolve every
+identifier and every ALTER's effect; this module never re-derives "what did
+the script mean to do." Instead, for whichever single type table the script
+touched, every concept's target frontmatter is *compiled directly from the
+final relational state* against the original document - a column absent (or
+NULL) from the final row means the key is absent from the document, a column
+present with a non-NULL value means the key holds exactly that value. The
+same final state always compiles to the same document, regardless of how
+many statements, or which ones, produced it.
 """
 
 from __future__ import annotations
@@ -29,10 +32,15 @@ import pyarrow as pa
 from ruamel.yaml import YAML
 
 from okf_parser.bundle import validate_path
-from okf_parser.discovery import IGNORED_DIRECTORIES, discover_markdown
+from okf_parser.discovery import IGNORED_DIRECTORIES, is_markdown_filename
 from okf_parser.exclusion import ExclusionRules
 from okf_parser.models import Severity
-from okf_parser.parser import DocumentParseError, concept_id, is_reserved_document, parse_document
+from okf_parser.parser import (
+    DocumentParseError,
+    concept_id,
+    is_reserved_document,
+    parse_document_text,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -41,32 +49,10 @@ _OKF_PREFIX = "__okf_"
 _IDENTITY_COLUMNS = ("__okf_path", "__okf_concept_id", "__okf_logical_key")
 _BODY_COLUMNS = ("__okf_body", "__okf_body_lines")
 _PROTECTED_COLUMNS = frozenset({*_IDENTITY_COLUMNS, *_BODY_COLUMNS})
-_IDENT = r'(?:"(?:[^"]|"")+"|\w+)'
-_ALTER_ADD_RE = re.compile(r"^\s*ALTER\s+TABLE\s+.+?\s+ADD\s+(?:COLUMN\s+)?", re.IGNORECASE)
-_ALTER_DROP_RE = re.compile(
-    rf"^\s*ALTER\s+TABLE\s+.+?\s+DROP\s+(?:COLUMN\s+)?(?P<column>{_IDENT})",
-    re.IGNORECASE,
-)
-_ALTER_RENAME_COLUMN_RE = re.compile(
-    rf"^\s*ALTER\s+TABLE\s+.+?\s+RENAME\s+COLUMN\s+(?P<from>{_IDENT})\s+TO\s+(?P<to>{_IDENT})",
-    re.IGNORECASE,
-)
 _FRONTMATTER_RE = re.compile(
     r"\A---[ \t]*\r?\n(.*?)(?:\r?\n)?---[ \t]*(?:\r?\n(.*))?\Z",
     re.DOTALL,
 )
-_ADD_COLUMN_TYPE_RE = re.compile(
-    r"^\s*ALTER\s+TABLE\s+.+?\s+ADD\s+(?:COLUMN\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"
-    r'(?:"(?:[^"]|"")+"|\w+)\s+(?P<type>\w+)',
-    re.IGNORECASE,
-)
-
-
-def _unquote_ident(raw: str) -> str:
-    raw = raw.strip()
-    if raw.startswith('"') and raw.endswith('"'):
-        return raw[1:-1].replace('""', '"')
-    return raw
 
 
 class ApplyError(ValueError):
@@ -166,31 +152,92 @@ class _Concept:
     concept_type: str
     frontmatter: dict[str, object]
     body: str
+    content_hash: str
 
 
-def _load_concepts(root: Path, exclude: Sequence[str]) -> list[_Concept]:
-    paths = discover_markdown(root, ExclusionRules.read(root, exclude))
+def _read_concept_bytes(path: Path) -> bytes:
+    return path.read_bytes()
+
+
+def _parse_concept(root: Path, path: Path, raw: bytes) -> _Concept | None:
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+    try:
+        parsed = parse_document_text(path, text)
+    except DocumentParseError:
+        return None
+    if not parsed.concept_type:
+        return None
+    return _Concept(
+        path=path,
+        relative=path.relative_to(root).as_posix(),
+        concept_id=concept_id(root, path),
+        concept_type=parsed.concept_type,
+        frontmatter=dict(parsed.frontmatter),
+        body=parsed.body,
+        content_hash=hashlib.sha256(raw).hexdigest(),
+    )
+
+
+def _file_signature(path: Path) -> tuple[int, int]:
+    """(size, mtime_ns) for one file - the freshness check `_snapshot_manifest` uses."""
+    stat = path.stat()
+    return (stat.st_size, stat.st_mtime_ns)
+
+
+@dataclass(frozen=True, slots=True)
+class _BundleSnapshot:
+    manifest: dict[str, tuple[int, int]]
+    concepts: list[_Concept]
+
+
+def _snapshot_bundle(root: Path, exclude: Sequence[str]) -> _BundleSnapshot:
+    """One coherent walk: every real file's freshness signature, concept bytes read once.
+
+    Reading a concept document's bytes and recording its manifest signature
+    in the very same visit - rather than as two separate filesystem passes
+    made minutes apart in wall-clock terms - closes (to the extent a normal
+    filesystem allows at all) the window where a concurrent edit between
+    "read for the SQL diff" and "record the freshness baseline" would let a
+    document be materialized against one version of its content while the
+    later write-time conflict check compares against a manifest that was
+    itself captured after the edit, and so never notices anything moved.
+    """
+    rules = ExclusionRules.read(root, exclude)
+    prunes = not rules.has_negation
+    manifest: dict[str, tuple[int, int]] = {}
     concepts: list[_Concept] = []
-    for path in paths:
-        if is_reserved_document(path):
-            continue
-        try:
-            parsed = parse_document(path)
-        except DocumentParseError:
-            continue
-        if not parsed.concept_type:
-            continue
-        concepts.append(
-            _Concept(
-                path=path,
-                relative=path.relative_to(root).as_posix(),
-                concept_id=concept_id(root, path),
-                concept_type=parsed.concept_type,
-                frontmatter=dict(parsed.frontmatter),
-                body=parsed.body,
+    for directory, directory_names, filenames in root.walk(follow_symlinks=False):
+        base = directory.relative_to(root)
+        directory_names[:] = [
+            name
+            for name in directory_names
+            if name not in IGNORED_DIRECTORIES
+            and not (directory / name).is_symlink()
+            and not (prunes and rules.excludes((base / name).as_posix(), is_dir=True))
+        ]
+        for name in filenames:
+            source = directory / name
+            if source.is_symlink():
+                continue
+            posix = (base / name).as_posix()
+            is_concept_candidate = (
+                is_markdown_filename(name)
+                and not rules.excludes(posix)
+                and not is_reserved_document(source)
             )
-        )
-    return concepts
+            if not is_concept_candidate:
+                manifest[posix] = _file_signature(source)
+                continue
+            raw = _read_concept_bytes(source)
+            stat = source.stat()
+            manifest[posix] = (len(raw), stat.st_mtime_ns)
+            concept = _parse_concept(root, source, raw)
+            if concept is not None:
+                concepts.append(concept)
+    return _BundleSnapshot(manifest=manifest, concepts=concepts)
 
 
 def _scalar_field_names(concepts: Sequence[_Concept]) -> list[str]:
@@ -213,27 +260,21 @@ def _scalar_field_names(concepts: Sequence[_Concept]) -> list[str]:
     return sorted(scalar_keys - structured_keys)
 
 
-def _check_reserved_and_collisions(type_name: str, field_names: Sequence[str]) -> None:
+def _check_reserved_field_names(type_name: str, field_names: Sequence[str]) -> None:
+    """Reject authored fields under the reserved `__okf_` prefix.
+
+    Checked ASCII-case-insensitively against this fixed ASCII literal only -
+    not a general identifier-collision emulation of DuckDB's own folding
+    rules, which `_materialize` verifies by inspecting the catalog after
+    table creation instead of by guessing at them here.
+    """
     for name in field_names:
-        if name.startswith(_OKF_PREFIX):
+        if name[: len(_OKF_PREFIX)].lower() == _OKF_PREFIX:
             msg = (
                 f'type "{type_name}" has an authored field colliding with the '
                 f"reserved __okf_ prefix: {name}"
             )
             raise ApplyError(msg)
-    # DuckDB folds unquoted and quoted identifiers alike for ASCII case only,
-    # not full Unicode casefolding (which conflates codepoints DuckDB itself
-    # treats as distinct, e.g. "ß" vs "ss") - .lower() matches that.
-    folded: dict[str, str] = {}
-    for name in field_names:
-        key = name.lower()
-        if key in folded:
-            msg = (
-                f'type "{type_name}" has fields that collide under case-insensitive '
-                f'identifier equality: "{folded[key]}" and "{name}"'
-            )
-            raise ApplyError(msg)
-        folded[key] = name
 
 
 def _build_table(
@@ -289,7 +330,7 @@ def _materialize(
     No pre-mutation snapshot is created as a table here: a real `type` could be
     authored with a name that collides with an internal snapshot table, and
     any table in this catalog is addressable by the caller's own `--sql`. The
-    pre-image instead lives entirely in Python (see `_snapshot_type`), never
+    pre-image instead lives entirely in Python (see `_snapshot_types`), never
     exposed to the script.
     """
     by_type: dict[str, list[_Concept]] = {}
@@ -299,7 +340,7 @@ def _materialize(
     fields_by_type: dict[str, list[str]] = {}
     for type_name, type_concepts in sorted(by_type.items()):
         field_names = _scalar_field_names(type_concepts)
-        _check_reserved_and_collisions(type_name, field_names)
+        _check_reserved_field_names(type_name, field_names)
         try:
             _build_table(con, type_name, field_names, type_concepts)
         except duckdb.CatalogException as exc:
@@ -308,6 +349,16 @@ def _materialize(
                 f"identifier equality: {exc}"
             )
             raise ApplyError(msg) from exc
+        # Defense in depth, not a re-implementation of DuckDB's folding rules:
+        # verify the catalog actually stored exactly the columns intended,
+        # in case DuckDB ever silently dedups or renames on its own.
+        created = set(_describe(con, type_name)) - _PROTECTED_COLUMNS
+        if created != set(field_names):
+            msg = (
+                f'type "{type_name}" columns were not stored as authored: '
+                f"expected {sorted(field_names)}, got {sorted(created)}"
+            )
+            raise ApplyError(msg)
         fields_by_type[type_name] = field_names
     return fields_by_type, by_type
 
@@ -332,15 +383,6 @@ def _snapshot_types(
     }
 
 
-@dataclass(frozen=True, slots=True)
-class _AlterEffect:
-    """A schema-level ALTER's effect on a document's presence of a key."""
-
-    action: str  # "drop" or "rename"
-    column: str
-    renamed_to: str | None = None
-
-
 def _extract_statements(sql: str) -> list[duckdb.Statement]:
     con = duckdb.connect()
     try:
@@ -356,76 +398,36 @@ def _extract_statements(sql: str) -> list[duckdb.Statement]:
     return statements
 
 
-def _parse_alter_statement(statement: duckdb.Statement) -> tuple[str, _AlterEffect | None]:
-    query = statement.query.strip().rstrip(";")
-    if not str(statement.type).endswith("ALTER"):
-        msg = (
-            "--sql may only contain leading ALTER TABLE statements before "
-            f"the final UPDATE, found: {query}"
-        )
-        raise ApplyError(msg)
-    is_add = _ALTER_ADD_RE.match(query) is not None
-    drop_match = _ALTER_DROP_RE.match(query)
-    rename_match = _ALTER_RENAME_COLUMN_RE.match(query)
-    if not (is_add or drop_match or rename_match):
-        msg = (
-            "--sql's leading statements must be ALTER TABLE ADD COLUMN, "
-            f"DROP COLUMN, or RENAME COLUMN, found: {query}"
-        )
-        raise ApplyError(msg)
-    if is_add:
-        type_match = _ADD_COLUMN_TYPE_RE.match(query)
-        column_type = type_match.group("type").upper() if type_match else ""
-        if column_type != "VARCHAR":
-            msg = f"ALTER TABLE ADD COLUMN must declare VARCHAR, found: {query}"
-            raise ApplyError(msg)
-        return query, None
-    if drop_match:
-        return query, _AlterEffect(action="drop", column=_unquote_ident(drop_match.group("column")))
-    assert rename_match is not None  # noqa: S101 - the earlier guard leaves only this case.
-    return query, _AlterEffect(
-        action="rename",
-        column=_unquote_ident(rename_match.group("from")),
-        renamed_to=_unquote_ident(rename_match.group("to")),
-    )
+def _parse_script(sql: str) -> tuple[list[str], str]:
+    """Validate the script's *shape* only: leading ALTERs, one trailing UPDATE.
 
-
-def _parse_script(sql: str) -> tuple[list[str], str, list[_AlterEffect]]:
+    What each ALTER actually does is never inspected here - DuckDB executes
+    it and the catalog says what changed, in `_execute_script`.
+    """
     *leading, trailing = _extract_statements(sql)
     if not str(trailing.type).endswith("UPDATE"):
         msg = "--sql must end with exactly one UPDATE statement"
         raise ApplyError(msg)
 
     alter_queries: list[str] = []
-    alter_effects: list[_AlterEffect] = []
     for statement in leading:
-        query, effect = _parse_alter_statement(statement)
+        query = statement.query.strip().rstrip(";")
+        if not str(statement.type).endswith("ALTER"):
+            msg = (
+                "--sql may only contain leading ALTER TABLE statements before "
+                f"the final UPDATE, found: {query}"
+            )
+            raise ApplyError(msg)
         alter_queries.append(query)
-        if effect is not None:
-            alter_effects.append(effect)
 
     update_query = trailing.query.strip().rstrip(";")
-    return alter_queries, update_query, alter_effects
-
-
-class _WriteNull:
-    """Sentinel: write a literal YAML null, as opposed to deleting the key.
-
-    Plain ``None`` means delete (RFC 0005's ``SET field = NULL`` contract).
-    A `RENAME COLUMN` on a field that was already authored as an explicit
-    YAML null must carry that null across under its new name, not delete it
-    - these need to be distinguishable in a diff that otherwise only ever
-    carries ``str | None``.
-    """
-
-
-_WRITE_NULL = _WriteNull()
+    return alter_queries, update_query
 
 
 @dataclass(frozen=True, slots=True)
 class _RowDiff:
     concept_id: str
-    changed_fields: dict[str, str | None | _WriteNull]
+    changed_fields: dict[str, str | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -473,24 +475,36 @@ def _run_transaction(
 def _find_touched_type(
     con: duckdb.DuckDBPyConnection, snapshots: dict[str, _TypeSnapshot]
 ) -> str | None:
-    changed_types = [
-        type_name
-        for type_name, snapshot in snapshots.items()
-        if _describe(con, type_name) != snapshot.schema
-        or _fetch_rows(con, type_name) != snapshot.rows
-    ]
+    try:
+        changed_types = [
+            type_name
+            for type_name, snapshot in snapshots.items()
+            if _describe(con, type_name) != snapshot.schema
+            or _fetch_rows(con, type_name) != snapshot.rows
+        ]
+    except duckdb.Error as exc:
+        msg = f"script failed: {exc}"
+        raise ApplyError(msg) from exc
     if len(changed_types) > 1:
         msg = f"script touched more than one type's table: {sorted(changed_types)}"
         raise ApplyError(msg)
     return changed_types[0] if changed_types else None
 
 
-def _check_result_schema(after_schema: dict[str, str], before_cols: set[str]) -> None:
+def _check_result_schema(after_schema: dict[str, str], before_schema: dict[str, str]) -> None:
     after_cols = set(after_schema)
+    before_cols = set(before_schema)
     missing_protected = _PROTECTED_COLUMNS - after_cols
     if missing_protected:
         msg = f"script removed protected columns: {sorted(missing_protected)}"
         raise ApplyError(msg)
+    for column in after_cols & before_cols:
+        if after_schema[column] != before_schema[column]:
+            msg = (
+                f'column "{column}" changed type from {before_schema[column]} '
+                f"to {after_schema[column]}"
+            )
+            raise ApplyError(msg)
     for column in after_cols - before_cols:
         if column.startswith(_OKF_PREFIX):
             msg = f'column "{column}" collides with the reserved __okf_ prefix'
@@ -514,44 +528,40 @@ def _check_result_rows(
                 raise ApplyError(msg)
 
 
-def _presence_forced_changes(
-    alter_effects: Sequence[_AlterEffect],
-    touched_concepts: Sequence[_Concept],
-    after_rows: dict[str, dict[str, object]],
-) -> dict[str, dict[str, str | None | _WriteNull]]:
-    """Force DROP/RENAME COLUMN to touch every doc where the key was present.
+def _compile_row_diff(
+    concept: _Concept, field_names: Sequence[str], after_row: dict[str, object]
+) -> dict[str, str | None]:
+    """Recompute one concept's target frontmatter purely from the final relation.
 
-    Includes an authored explicit YAML null. A value-only diff cannot see
-    this: an absent key and an authored
-    ``field: null`` both read back as SQL NULL, so if a column being dropped
-    or renamed held NULL on every row, before == after for that column and no
-    row diff would otherwise be produced - leaving the old key behind. A
-    rename additionally must carry a null value across as a null, not a
-    deletion - `_WRITE_NULL` marks that case.
+    Deliberately blind to *how* the final state was reached - a rename, a
+    drop-then-recreate, a chain of renames, and a direct value update that
+    happens to land on the same result all compile to the same diff, because
+    only ``(original document, final row)`` are ever consulted. A column
+    absent from the final schema, or present but SQL NULL, means the key is
+    absent from the document - RFC 0005's contract that NULL means absence,
+    applied uniformly whether NULL arrived via a `SET ... = NULL` or was
+    simply carried across untouched from an already-authored YAML null.
     """
-    forced: dict[str, dict[str, str | None | _WriteNull]] = {}
-    for effect in alter_effects:
-        for concept in touched_concepts:
-            if effect.column not in concept.frontmatter:
-                continue
-            entry = forced.setdefault(concept.concept_id, {})
-            entry[effect.column] = None
-            if effect.action == "rename" and effect.renamed_to is not None:
-                after_row = after_rows.get(concept.concept_id, {})
-                value = after_row.get(effect.renamed_to)
-                entry[effect.renamed_to] = value if isinstance(value, str) else _WRITE_NULL
-    return forced
+    diff: dict[str, str | None] = {}
+    for name in field_names:
+        value = after_row.get(name)
+        target = value if isinstance(value, str) else None
+        if target is None:
+            if name in concept.frontmatter:
+                diff[name] = None
+        elif concept.frontmatter.get(name) != target:
+            diff[name] = target
+    return diff
 
 
-def _execute_script(  # noqa: PLR0913 - each argument is a distinct execution input.
+def _execute_script(
     con: duckdb.DuckDBPyConnection,
     fields_by_type: dict[str, list[str]],
     concepts_by_type: dict[str, list[_Concept]],
     alter_queries: list[str],
-    alter_effects: list[_AlterEffect],
     update_query: str,
 ) -> _ScriptOutcome:
-    """Run the script transactionally and validate its result.
+    """Run the script transactionally and compile its result.
 
     Raises :class:`ApplyError` for any script failure or contract violation.
     Nothing about the real bundle is at risk at any point here: only the
@@ -564,50 +574,31 @@ def _execute_script(  # noqa: PLR0913 - each argument is a distinct execution in
     if touched is None:
         return _ScriptOutcome(touched_type=None)
 
-    before_cols = {*_PROTECTED_COLUMNS, *fields_by_type[touched]}
     after_schema = _describe(con, touched)
-    _check_result_schema(after_schema, before_cols)
+    _check_result_schema(after_schema, snapshots[touched].schema)
 
     before_rows = snapshots[touched].rows
     after_rows = _fetch_rows(con, touched)
     _check_result_rows(before_rows, after_rows)
 
-    # The union of before- and after-authored fields, not just after: a column
-    # dropped or renamed away must still be visited so its old key is deleted
-    # from frontmatter, even though it is no longer part of the after schema.
     field_names = sorted((set(after_schema) | set(fields_by_type[touched])) - _PROTECTED_COLUMNS)
-    changed_by_id: dict[str, dict[str, str | None | _WriteNull]] = {}
-    for row_id, before_row in before_rows.items():
-        after_row = after_rows[row_id]
-        diffs: dict[str, str | None | _WriteNull] = {
-            name: _as_text(after_row.get(name))
-            for name in field_names
-            if before_row.get(name) != after_row.get(name)
-        }
-        if diffs:
-            changed_by_id[row_id] = diffs
-
-    forced = _presence_forced_changes(alter_effects, concepts_by_type[touched], after_rows)
-    for row_id, forced_fields in forced.items():
-        changed_by_id.setdefault(row_id, {}).update(forced_fields)
-
     row_diffs = tuple(
-        _RowDiff(concept_id=row_id, changed_fields=changed_fields)
-        for row_id, changed_fields in changed_by_id.items()
+        _RowDiff(concept_id=concept.concept_id, changed_fields=diff)
+        for concept in concepts_by_type[touched]
+        for diff in (_compile_row_diff(concept, field_names, after_rows[concept.concept_id]),)
+        if diff
     )
     return _ScriptOutcome(touched_type=touched, row_diffs=row_diffs)
 
 
 def _apply_frontmatter_changes(
-    yaml: YAML, frontmatter_text: str, changes: dict[str, str | None | _WriteNull]
+    yaml: YAML, frontmatter_text: str, changes: dict[str, str | None]
 ) -> str:
     data = yaml.load(frontmatter_text)
     for key, value in changes.items():
         if value is None:
             if key in data:
                 del data[key]
-        elif isinstance(value, _WriteNull):
-            data[key] = None
         else:
             data[key] = value
     buffer = StringIO()
@@ -652,23 +643,24 @@ def apply_bundle(  # noqa: PLR0913 - each argument is an independent public CLI 
         sql = _build_sugar_sql(type_name, field_name, from_value, to_value)
 
     try:
-        alter_queries, update_query, alter_effects = _parse_script(sql)
+        alter_queries, update_query = _parse_script(sql)
+
+        # Captured first and together: the manifest baseline used for the
+        # write-time conflict check comes from the exact same walk, and for
+        # concept files the exact same bytes, that fed the SQL diff below -
+        # not a second, later, independent filesystem visit.
+        snapshot = _snapshot_bundle(root, exclude)
+        concepts = snapshot.concepts
 
         baseline = validate_path(root, exclude)
         baseline_keys = {
             (v.code, v.path, v.message) for v in baseline.violations if v.severity == Severity.ERROR
         }
 
-        concepts = _load_concepts(root, exclude)
-        # Hashed as of the same read that fed the SQL diff, not after: a file
-        # edited between this point and the later re-read for round-trip
-        # writeback must still be caught as a conflict, not silently
-        # overwritten with a diff computed against stale content.
-        read_hashes = {concept.relative: _sha256(concept.path) for concept in concepts}
         con = duckdb.connect()
         fields_by_type, concepts_by_type = _materialize(con, concepts)
         outcome = _execute_script(
-            con, fields_by_type, concepts_by_type, alter_queries, alter_effects, update_query
+            con, fields_by_type, concepts_by_type, alter_queries, update_query
         )
     except ApplyError as exc:
         return ApplyResult(succeeded=False, error=str(exc)).to_dict()
@@ -677,6 +669,7 @@ def apply_bundle(  # noqa: PLR0913 - each argument is an independent public CLI 
         return ApplyResult().to_dict()
 
     concepts_by_id = {c.concept_id: c for c in concepts}
+    content_hashes = {c.relative: c.content_hash for c in concepts}
     yaml = YAML()
     yaml.preserve_quotes = True
     yaml.width = 4096
@@ -706,16 +699,10 @@ def apply_bundle(  # noqa: PLR0913 - each argument is an independent public CLI 
     if not write:
         return ApplyResult(changed_paths=tuple(sorted(changed_paths))).to_dict()
 
-    touched_hashes = {rel: read_hashes[rel] for rel in candidates}
+    touched_hashes = {rel: content_hashes[rel] for rel in candidates}
     return _stage_validate_write(
-        root, exclude, candidates, baseline_keys, changed_paths, touched_hashes
+        root, exclude, candidates, baseline_keys, changed_paths, touched_hashes, snapshot.manifest
     )
-
-
-def _file_signature(path: Path) -> tuple[int, int]:
-    """(size, mtime_ns) for one file - the freshness check `_snapshot_manifest` uses."""
-    stat = path.stat()
-    return (stat.st_size, stat.st_mtime_ns)
 
 
 def _snapshot_manifest(root: Path) -> dict[str, tuple[int, int]]:
@@ -723,7 +710,8 @@ def _snapshot_manifest(root: Path) -> dict[str, tuple[int, int]]:
 
     Pruned the same way `discover_markdown` prunes: ignored directories and
     symlinks are skipped, not walked - keeping this manifest and the
-    candidate tree built from it looking at the same universe of files.
+    candidate tree built from it looking at the same universe of files. Used
+    only for the write-time recheck; the baseline comes from `_snapshot_bundle`.
     """
     manifest: dict[str, tuple[int, int]] = {}
     for directory, directory_names, filenames in root.walk(follow_symlinks=False):
@@ -748,9 +736,8 @@ def _stage_validate_write(  # noqa: PLR0913 - each argument is a distinct write-
     baseline_keys: set[tuple[str, str, str]],
     changed_paths: list[str],
     touched_hashes: dict[str, str],
+    baseline_manifest: dict[str, tuple[int, int]],
 ) -> dict[str, object]:
-    baseline_manifest = _snapshot_manifest(root)
-
     with tempfile.TemporaryDirectory(prefix="okf-apply-") as tmp:
         candidate_root = Path(tmp) / "bundle"
         candidate_root.mkdir()

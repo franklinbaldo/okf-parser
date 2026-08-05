@@ -261,7 +261,11 @@ def test_drop_column_deletes_an_explicit_null_key(tmp_path: Path) -> None:
     assert "prazo" not in _read(tmp_path / "r1.md")
 
 
-def test_rename_column_carries_an_explicit_null_key(tmp_path: Path) -> None:
+def test_rename_column_of_an_explicit_null_key_leaves_it_absent(tmp_path: Path) -> None:
+    # NULL always means "absent" (RFC 0005's contract), applied uniformly:
+    # an authored explicit YAML null carried across a rename compiles to no
+    # key at all under either the old or the new name, the same as any other
+    # NULL that reaches the final relation, not a literal `prazo_dias: null`.
     _write(tmp_path / "r1.md", "---\ntype: Rotina\nprazo:\n---\n# R1\n")
 
     result = apply_bundle(
@@ -275,8 +279,84 @@ def test_rename_column_carries_an_explicit_null_key(tmp_path: Path) -> None:
 
     assert result["succeeded"] is True, result
     text = _read(tmp_path / "r1.md")
-    assert "prazo_dias" in text
-    assert "prazo:" not in text.split("---")[1]
+    assert "prazo" not in text.split("---")[1]
+    assert "prazo_dias" not in text.split("---")[1]
+
+
+def test_rename_then_update_to_null_deletes_the_key(tmp_path: Path) -> None:
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\nprazo: 30\n---\n# R1\n")
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql=(
+            'ALTER TABLE "Rotina" RENAME COLUMN prazo TO prazo_dias; '
+            'UPDATE "Rotina" SET prazo_dias = NULL'
+        ),
+        write=True,
+    )
+
+    assert result["succeeded"] is True, result
+    text = _read(tmp_path / "r1.md")
+    assert "prazo" not in text.split("---")[1]
+    assert "prazo_dias" not in text.split("---")[1]
+
+
+def test_chained_renames_compile_to_only_the_final_column(tmp_path: Path) -> None:
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\na: 30\n---\n# R1\n")
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql=(
+            'ALTER TABLE "Rotina" RENAME COLUMN a TO b; '
+            'ALTER TABLE "Rotina" RENAME COLUMN b TO c; '
+            'UPDATE "Rotina" SET c = c WHERE FALSE'
+        ),
+        write=True,
+    )
+
+    assert result["succeeded"] is True, result
+    text = _read(tmp_path / "r1.md")
+    assert "c: '30'" in text or "c: 30" in text
+    assert "a:" not in text.split("---")[1]
+    assert "b:" not in text.split("---")[1]
+
+
+def test_alter_on_one_type_then_update_on_another_is_rejected(tmp_path: Path) -> None:
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\na: 30\n---\n# R1\n")
+    _write(tmp_path / "o1.md", "---\ntype: Outro\nx: 1\n---\n# O1\n")
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql=('ALTER TABLE "Rotina" RENAME COLUMN a TO b; UPDATE "Outro" SET x = \'2\''),
+        write=True,
+    )
+
+    assert result["succeeded"] is False
+    assert "touched more than one type" in _error(result)
+
+
+def test_canceling_alters_on_one_type_do_not_block_an_update_on_another(tmp_path: Path) -> None:
+    # a->b->a nets to Rotina's exact original schema and rows: the compiled
+    # result depends only on the final relational state, not the sequence of
+    # statements that produced it, so a no-op pair on one type must not be
+    # mistaken for "this script touched two types."
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\na: 30\n---\n# R1\n")
+    _write(tmp_path / "o1.md", "---\ntype: Outro\nx: 1\n---\n# O1\n")
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql=(
+            'ALTER TABLE "Rotina" RENAME COLUMN a TO b; '
+            'ALTER TABLE "Rotina" RENAME COLUMN b TO a; '
+            "UPDATE \"Outro\" SET x = '2'"
+        ),
+        write=True,
+    )
+
+    assert result["succeeded"] is True, result
+    assert _changed_paths(result) == ["o1.md"]
+    assert "x: '2'" in _read(tmp_path / "o1.md") or "x: 2" in _read(tmp_path / "o1.md")
+    assert "a: 30" in _read(tmp_path / "r1.md")
 
 
 def test_field_structured_on_one_document_is_unwritable_on_every_document(
@@ -330,24 +410,63 @@ def test_untouched_file_edited_before_write_aborts_as_a_conflict(
     _write(tmp_path / "r2.md", "---\ntype: Rotina\nsetor: OTHER\n---\n# R2\n")
 
     real_signature = apply_module._file_signature  # noqa: SLF001
-    seen_r2 = {"count": 0}
 
     def racing_signature(path: Path) -> tuple[int, int]:
-        # Simulates a concurrent editor saving r2.md right after `apply`
-        # takes its first (baseline) look at it, so the second (pre-write)
-        # look sees a bundle that has moved on. The baseline signature is
-        # captured *before* the race so it reflects the pre-race content.
-        if path.name != "r2.md":
-            return real_signature(path)
-        seen_r2["count"] += 1
-        signature = real_signature(path)
-        if seen_r2["count"] == 1:
+        # `_file_signature` for a concept file is only ever called during the
+        # write-time recheck (the baseline comes from `_snapshot_bundle`'s
+        # own read instead), so mutating on its first call for r2.md and
+        # then returning the now-current signature simulates a concurrent
+        # editor saving r2.md sometime after apply validated the bundle but
+        # before it re-checks the manifest right before writing.
+        if path.name == "r2.md":
             (tmp_path / "r2.md").write_text(
                 "---\ntype: Rotina\nsetor: RACED\n---\n# R2\n", encoding="utf-8"
             )
-        return signature
+        return real_signature(path)
 
     monkeypatch.setattr(apply_module, "_file_signature", racing_signature)
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql="UPDATE \"Rotina\" SET setor = '#GAB#FSB' WHERE setor = 'GAB'",
+        write=True,
+    )
+
+    assert result["succeeded"] is False
+    assert "r2.md" in _str_list(result, "conflict_paths")
+    assert "setor: GAB" in _read(tmp_path / "r1.md")
+
+
+def test_document_edited_right_after_materialization_read_is_still_caught(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The manifest baseline and the bytes fed to the SQL diff are the same read.
+
+    r2 reads as `setor: OTHER` at the instant apply materializes it, so it
+    correctly never matches the WHERE clause below and is excluded from the
+    relational result. But the file changes to `setor: GAB` immediately
+    after that read - if the freshness baseline were captured separately
+    (and later) from the bytes used for materialization, that edit could go
+    unnoticed and the write would silently apply a partial migration. The
+    baseline instead comes from the very same visit that read the bytes, so
+    the later write-time recheck still catches the drift and aborts.
+    """
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\nsetor: GAB\n---\n# R1\n")
+    _write(tmp_path / "r2.md", "---\ntype: Rotina\nsetor: OTHER\n---\n# R2\n")
+
+    real_read = apply_module._read_concept_bytes  # noqa: SLF001
+    mutated = {"done": False}
+
+    def racing_read(path: Path) -> bytes:
+        raw = real_read(path)
+        if path.name == "r2.md" and not mutated["done"]:
+            mutated["done"] = True
+            (tmp_path / "r2.md").write_text(
+                "---\ntype: Rotina\nsetor: GAB\n---\n# R2\n", encoding="utf-8"
+            )
+        return raw
+
+    monkeypatch.setattr(apply_module, "_read_concept_bytes", racing_read)
 
     result = apply_bundle(
         str(tmp_path),
