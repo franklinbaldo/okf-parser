@@ -2,7 +2,7 @@
 type: RFC
 title: Relational writes to frontmatter fields
 status: proposed
-description: Define an `apply` command that mutates frontmatter fields through one parsed SQL UPDATE against a table named for the exact authored type, with round-trip fidelity, dry-run, and stage-then-validate-then-write semantics
+description: Define an `apply` command that mutates frontmatter fields by handing a bounded ALTER TABLE + UPDATE script to an in-memory DuckDB database of exact-type tables, with round-trip fidelity, dry-run, and stage-then-validate-then-write semantics
 ---
 
 # RFC 0005: Relational writes to frontmatter fields
@@ -10,15 +10,18 @@ description: Define an `apply` command that mutates frontmatter fields through o
 ## Summary
 
 Add `okf-parser apply PATH --sql 'UPDATE "Rotina" SET ... WHERE ...'`, a
-command that mutates frontmatter fields in place across a bundle. The SQL
-table name **is** the exact authored `type` value, quoted — not a flag, not
-a derived slug. `type` is a bundle's canonical producer-defined identity
-(the README already treats it that way for everything else this tool does);
-the relational surface preserves that instead of introducing a second,
-lossy identity layer beside it. `apply` materializes exactly one type per
-invocation, mirroring how `schema_contract.py` already compiles one
+command that mutates frontmatter fields in place across a bundle. `apply`
+materializes every concept type into its own table, named for the exact
+authored `type` value, quoted, inside one in-memory DuckDB database — one
+table per type, mirroring how `schema_contract.py` already compiles one
 `TypeContract` per type rather than reconciling every type's fields into one
-shape — the table just happens to be named after the type it holds.
+shape. The caller's `--sql` is handed to that database mostly as-is: DuckDB
+itself parses it, resolves the target identifier (Unicode, quoting, case
+folding, all of it), and executes the statements. `apply` does not
+reimplement any part of a SQL parser or identifier resolver — it validates
+the script's *shape* (zero or more leading `ALTER TABLE ADD/DROP/RENAME COLUMN` statements, one trailing `UPDATE`, via DuckDB's own
+`extract_statements()`) and derives everything else, including which type
+was touched, from a before/after diff of the tables it built.
 
 `apply` reuses the existing relational compilation (`duckdb`, `schema`) to
 select and express the mutation, but writes back through a purpose-built
@@ -74,10 +77,10 @@ bundle) would have to reconcile shapes that were never meant to agree, and a
 `WHERE` clause that meant to scope one type could silently match rows of
 another that happens to share a field name.
 
-**Materializing one type at a time** removes the reconciliation instead of
-managing it — each invocation's staging table only ever holds one type's
-fields, mirroring `schema_contract.py`'s one-`TypeContract`-per-type
-discovery. Two earlier drafts got the *identifier* wrong before landing here:
+**One table per type** removes the reconciliation instead of managing it —
+each table only ever holds one type's fields, mirroring `schema_contract.py`'s
+one-`TypeContract`-per-type discovery. Two earlier drafts got the
+*identifier* wrong before landing here:
 
 - **Named the table by the type's slug** (the same function `type_specs.py`
   derives type-spec document paths with), so `UPDATE rotina SET ...` would
@@ -98,15 +101,15 @@ discovery. Two earlier drafts got the *identifier* wrong before landing here:
 
 So the table name **is** the exact authored `type` value, always as a
 quoted identifier: `UPDATE "Revisão Ciência" SET ...`. No flag, no slug, no
-normalization — `apply` parses the single `UPDATE` target directly out of
-the `--sql` text (unescaping a doubled `"` the standard SQL way), and that
-exact string is both the table name it compiles and the value it matches
-against the authored `type` field. Implementation must quote by doubling
-embedded `"` and must never interpolate a caller- or bundle-derived string
-as an unquoted identifier.
+normalization, and — per a further round of review — no custom parsing
+either: `apply` builds one table per distinct `type` value observed in the
+bundle inside a single in-memory DuckDB connection, then hands the caller's
+`--sql` straight to that connection. DuckDB's own binder resolves whatever
+identifier the statement names, Unicode and all; `apply` never re-derives
+"which type does this string mean" itself.
 
-Within the materialized table, the writable namespace is the selected
-type's authored frontmatter keys, each exactly once, plus filesystem-derived
+Within each materialized table, the writable namespace is that type's
+authored frontmatter keys, each exactly once, plus filesystem-derived
 identity under a reserved `__okf_*` prefix (`__okf_path`, `__okf_concept_id`,
 `__okf_logical_key`) that cannot collide with an authored key. `apply`
 refuses to run against any type where an observed key already starts with
@@ -114,20 +117,17 @@ refuses to run against any type where an observed key already starts with
 
 DuckDB identifiers are **case-insensitive even when quoted** — a genuine
 DuckDB quirk, not standard SQL, confirmed against its own test suite earlier
-in review — so this collision guard has to run twice, once for columns and
-once for the table itself. Two distinct YAML keys that only differ by case
-(`setor` / `Setor`) cannot become two separate writable columns; quoting
-handles spaces, punctuation, and reserved words in a key fine (any string is
-a valid quoted identifier), only case-folding is the problem, and `apply`
-refuses to compile a table where two observed keys collide under it, naming
-both. The same limitation applies one level up: two distinct producer-
-defined `type` values differing only by case (`"Rotina"` / `"ROTINA"`)
-cannot address two different tables either. Before compiling, `apply`
-extracts the exact type string the SQL names, then checks it against every
-*other* distinct `type` value observed anywhere in the bundle for a
-case-insensitive collision; if one exists, `apply` refuses — deterministically,
-naming both types — rather than silently compiling whichever of the two
-DuckDB happens to resolve the identifier to.
+in review. For columns, that still needs an explicit check: two distinct
+YAML keys that only differ by case (`setor` / `Setor`) cannot become two
+separate writable columns, and `apply` refuses to compile a table where two
+observed keys collide under it, naming both. For **type** identity, though,
+materializing every type up front means the collision surfaces for free:
+creating `CREATE TABLE "Rotina" ...` and then `CREATE TABLE "ROTINA" ...` in
+the same DuckDB connection is DuckDB's own "table already exists" error,
+because the two fold to one identifier. `apply` catches that specific error
+during setup and reports it as a named collision between the two
+producer-defined types, rather than either silently overwriting one table or
+surfacing DuckDB's generic message unexplained.
 
 A concept with no `type` at all, or a reserved document (`index.md`,
 `log.md`; see `RESERVED_FILENAMES` in `parser.py`), matches no `type`
@@ -136,39 +136,25 @@ untyped concept is visible.
 
 ## Decision
 
-### 1. The `UPDATE` target names the exact type; `apply` compiles that one table
+### 1. Materialize every type as a table; let DuckDB run the whole script
 
 DuckDB's `UPDATE` only targets tables, not views — `UPDATE v1 ...` against a
-view is a binder error. `apply` parses `--sql` before anything else runs and
-extracts the target identifier of its single `UPDATE` statement directly
-from the SQL text — unquoting a doubled `"` the standard way, bypassing
-DuckDB's own case-folded identifier resolution so the exact authored casing
-is recovered, not a folded approximation of it. That exact string is the
-type `apply` filters concepts on (Python-level string equality against the
-authored `type` field, not a SQL comparison) and the name it compiles a
-**temporary table** as (`CREATE TEMP TABLE "Rotina" AS ...`), unnesting
-`frontmatter_json` into one column per authored key observed on the
-selected concepts, using `schema_contract.py`'s existing per-type discovery.
-`apply` never materializes the whole bundle — a mutation scoped to one type
-never touches the concepts of any other, which is also what keeps the cost
-bounded on a large bundle.
+view is a binder error. `apply` builds one **temporary table per distinct
+`type` value** observed in the bundle, all inside a single in-memory DuckDB
+connection, each named for its type as an exact quoted identifier
+(`CREATE TEMP TABLE "Rotina" AS ...`) and unnesting `frontmatter_json` into
+one column per authored key observed on concepts of that type, using
+`schema_contract.py`'s existing per-type discovery. A second, untouched copy
+of every table — an internal `_before` set, never exposed to the caller's
+SQL — is kept alongside for step 2's diff.
 
-Zero concepts currently matching that exact type is not an error — the
-table compiles empty, and the caller's `UPDATE` legitimately affects zero
-rows. This is a deliberate choice, not an oversight: it is what makes
-rerunning a migration after it has already converged (decision 6) a no-op
-instead of a failure, at the cost of `apply` being unable to distinguish
-"this type genuinely has nothing left to migrate" from "the caller mistyped
-the type name in the SQL." Dry-run mitigates the mistyped case — a
-`--write`-less run reports zero candidates either way, so a caller checking
-before writing sees it.
-
-A second, untouched copy of the same rows — an internal `_before` pair, never
-exposed to the caller's SQL — is materialized alongside it, so step 2 has an
-immutable pre-image to diff against regardless of what the mutation does.
-
-This is what makes the issue's examples work, scoped to one type instead of
-the whole bundle:
+`apply` does not parse identifiers out of `--sql` at all, and does not
+decide up front which type is being mutated. The caller's SQL is handed to
+the same connection essentially as written; DuckDB's own parser and binder
+resolve whatever table the statement names, Unicode and case-folding
+included. Which type actually changed is discovered **after** execution, by
+diffing every table against its `_before` copy (decision 2) — not declared
+beforehand by `apply` reading the SQL text.
 
 ```bash
 okf-parser apply ./bundle --sql "
@@ -187,26 +173,45 @@ part of this design:
 okf-parser apply ./bundle --type "Rotina" --field setor --from "GAB" --to "#GAB#FSB"
 ```
 
-`--field/--from/--to` is the one place `--type` still exists as a flag: the
-sugar has no SQL statement to parse a target identifier out of, so it needs
-its own explicit way to say which type. The `--sql` form never takes
-`--type` — the identifier in the `UPDATE` already says it, and giving the
-same information two names that could disagree is worse than one.
-`--field/--from/--to` is sugar for a one-column
-`UPDATE "TYPE" SET field = to WHERE field = from`; it exists because the SQL
-form makes the trivial case verbose, not because selection needs a second
-implementation.
+`--field/--from/--to` compiles to exactly the SQL form would
+(`UPDATE "TYPE" SET field = to WHERE field = from`) and is executed through
+the identical path — no host-side special case, so it has no capability the
+SQL form lacks (in particular, see 1c: it cannot introduce a field that
+does not already exist as a column any more than raw SQL can). `--type` is
+required only here, because the sugar has no `UPDATE` statement to read the
+target identifier out of.
 
-### 1a. `--sql` accepts exactly one parsed `UPDATE`, nothing else
+### 1a. `--sql` is a bounded migration script: leading `ALTER TABLE`, one trailing `UPDATE`
 
-`apply` rejects `--sql` unless it is a single `UPDATE` statement targeting
-exactly one table (extracted per decision 1): no semicolon-separated second
-statement, no DDL, no `DELETE`/`INSERT`, no statement naming more than one
-table. This is not a stylistic preference — decision 4's target-column
-validation and step 2's bounded diff both assume the mutation is exactly one
-`UPDATE` against the one table `apply` compiled; arbitrary SQL could touch
-unrelated tables or run side effects the diff never sees. The parse step is
-what makes that assumption an enforced contract instead of a hope.
+An `UPDATE` alone cannot introduce a field no selected document has yet —
+that is not SQL semantics, and 1c's earlier draft (`apply` synthesizing a
+column by parsing the `SET` list) was exactly the kind of custom SQL
+handling this design otherwise avoids. The SQL-correct way to add a field is
+`ALTER TABLE ... ADD COLUMN`, executed in the same connection before the
+`UPDATE`. So `--sql` accepts a short, structurally bounded script rather
+than a single statement: zero or more leading statements, each classified
+by DuckDB's own statement-type introspection (`extract_statements()`) as an
+`ALTER TABLE` using only `ADD COLUMN`, `DROP COLUMN`, or `RENAME COLUMN`,
+followed by exactly one trailing statement classified as `UPDATE`. Anything
+else — a second `UPDATE`, `DELETE`/`INSERT`, any DDL besides those three
+`ALTER TABLE` forms, a script with no trailing `UPDATE` — is rejected before
+anything runs.
+
+The whole script executes as one DuckDB transaction. `ALTER TABLE` is
+transactional in DuckDB, so a script that fails partway (a later statement
+errors, an added column's type is later rejected by 1c's scalar-only rule)
+rolls back cleanly inside the in-memory connection; nothing about the real
+bundle is ever at risk, since nothing has touched a real file yet at this
+point regardless.
+
+Bounding the script's *shape* is necessary but not sufficient — the earlier
+draft also bounded it to naming exactly one table, by parsing the target
+identifier. This design gets the same bound without parsing: after the
+script runs, `apply` diffs **every** table (schema and rows) against its
+`_before` copy. If more than one table differs at all, `apply` refuses to
+write anything — a script that reaches across types was never a supported
+shape, and this is where that gets caught, structurally, rather than by
+inspecting identifiers before execution.
 
 ### 1b. Undecided: what happens when the mutation changes `type` itself
 
@@ -234,16 +239,15 @@ does not yet pick between two ways to handle it, and is not marked
   full candidate bundle in decision 5) is what would catch a destination
   type without a matching spec, if `--require-spec` is in play.
 
-  This is also what makes decision 1's "zero rows is a valid, successful
-  no-op" rule load-bearing rather than incidental: the *first* run of the
-  invocation above selects every concept whose exact `type` is
-  `"Revisao Ciencia"` and migrates it. Running the identical invocation a
-  second time selects **zero** concepts — none have that exact `type` any
-  more — compiles an empty table under that same name, and the `UPDATE`
-  affects nothing. A true no-op, without `apply` doing anything extra to
-  guarantee it — and unlike the slug-named-table draft, there is no "unknown
-  table" failure mode to hit here at all, because the table name is always
-  exactly what the caller wrote, present or not.
+  This is where an earlier draft's idempotency argument stops holding, and
+  the honest statement replaces it rather than being quietly dropped:
+  because decision 1 now materializes a table only for types **currently**
+  observed in the bundle, running the invocation above a second time — after
+  every `"Revisao Ciencia"` concept has already migrated — finds no table
+  named `"Revisao Ciencia"` at all, and the `UPDATE` fails with DuckDB's own
+  "table does not exist" error, not a graceful zero-row no-op. `apply` does
+  not promise that literally rerunning a converged `--sql` invocation
+  succeeds; decision 6 states precisely what it does promise instead.
 
 - **Forbid it.** `type` becomes read-only inside `apply`, like `__okf_path`.
   Bulk type rename gets a dedicated command
@@ -255,17 +259,32 @@ column unless a table migration is explicitly not possible for some other
 reason surfaced during review; §6 (idempotency) and the write path in
 decision 5 do not change under either choice, only what `apply` accepts.
 
-### 1c. v1 scope: top-level scalars only, explicit presence, explicit null contract
+### 1c. v1 scope: top-level scalars only, explicit schema changes, explicit null contract
 
 "One column per authored key observed anywhere on concepts of that type"
-(decision 1) leaves three things undefined that must not stay implicit:
+(decision 1) leaves several things undefined that must not stay implicit:
 
-- **A column for a field no selected document has yet.** Backfilling
-  (motivation case 3) means `SET timestamp = ...` has to bind even when no
-  document being touched has a `timestamp` key at all. `apply` parses every
-  name in the `--sql` statement's `SET` list (the same parse step as 1a) and
-  creates a `VARCHAR` column, `NULL` by default, for any target not already
-  discovered — a mutation is allowed to introduce a field, not only edit one.
+- **Introducing a field.** Backfilling (motivation case 3) needs a field no
+  selected document has yet. That is not something a plain `UPDATE` can do —
+  `SET timestamp = ...` fails to bind against a column that does not exist,
+  which is ordinary SQL, not a defect. 1a's leading `ALTER TABLE ... ADD COLUMN "timestamp" VARCHAR` is the supported way to introduce a field, run
+  once ahead of the `UPDATE` that populates it. `apply` does not read the
+  `SET` list and synthesize a column behind the caller's back — an earlier
+  draft did exactly that, and review correctly called it custom SQL handling
+  the design should not need. `ADD COLUMN` must specify `VARCHAR`; any other
+  type is rejected — see the scalar-only rule below.
+- **Removing a field bundle-wide versus per-row.** `ALTER TABLE ... DROP COLUMN` removes a field from every concept of a type at once, regardless
+  of `WHERE` — the SQL-level, bulk operation. `SET field = NULL` remains the
+  row-level operation, deleting the key only from rows the `WHERE` clause
+  matches. The two are not redundant: a bundle-wide field removal (a
+  deprecated key gone from the type's own spec) and a per-row backfill gap
+  (an authored `null` versus a genuinely absent key on specific documents)
+  are different operations with different blast radii, and this design gives
+  each an explicit one instead of overloading `SET ... = NULL` to mean both.
+- **Renaming a field bundle-wide.** `ALTER TABLE ... RENAME COLUMN` is now
+  available for the same reason `ADD`/`DROP COLUMN` are — motivation case 1
+  ("a field spelled differently across documents") is a rename, not a value
+  rewrite, and SQL already has the right verb for it.
 - **Absent key versus authored `field: null`.** Both collapse to SQL `NULL`
   in a flattened column, which is fine for reading but ambiguous for
   writing: does `SET field = NULL` delete the key, or author a literal YAML
@@ -277,18 +296,25 @@ decision 5 do not change under either choice, only what `apply` accepts.
   `schema_contract.py` already infers), each represented as `VARCHAR` with
   lexical semantics identical to how `parser.py` already preserves scalar
   spelling on read. A field whose observed value is a YAML list or mapping on
-  any selected document is excluded from the table entirely; `SET` naming it
-  is rejected at the 1a parse step, the same way a `__okf_*` target is.
-  Structured writes are real future work, not silently unsupported.
+  any selected document is excluded from the table entirely, and any `ADD COLUMN` naming a non-`VARCHAR` type is rejected once the script's result is
+  inspected (decision 4) — not by parsing the script beforehand, consistent
+  with 1a's "run it, then validate the outcome" posture. Structured writes
+  are real future work, not silently unsupported.
 
-### 2. Diff before write, one document at a time
+### 2. Diff before write: every table, schema and rows, one document at a time
 
-After the `UPDATE` runs, `apply` diffs each staged row against its `_before`
-counterpart per `__okf_concept_id`. Only documents with at least one changed
-column (or, if 1b resolves to "let it migrate," a changed `type`) are
-candidates for writing. The diff, not the SQL statement, is what a
+After the script runs, `apply` diffs **every** materialized table against
+its `_before` copy — both its schema (which columns exist, and their types:
+this is what 1a's "at most one table differs" rule and decision 4's
+protected-column and scalar-type checks are computed from) and its rows,
+keyed by `__okf_concept_id`. Only documents with at least one changed column
+value (or, if 1b resolves to "let it migrate," a changed `type`) are
+candidates for writing. The diff, not the script text, is what a
 `--write`-less run reports — this keeps the dry-run output meaningful even
-when the mutation's `WHERE` clause matches nothing.
+when the mutation's `WHERE` clause matches nothing, and it is also the only
+place `apply` learns which table (therefore which type) was actually
+mutated, since nothing upstream of this step ever parsed that out of the
+SQL.
 
 ### 3. Round-trip fidelity through a real YAML round-trip loader
 
@@ -325,14 +351,30 @@ blocker in one pass, so a caller sees the full list before deciding anything.
 A future `--allow-partial` could opt into the weaker per-document-skip
 behavior explicitly; it is not the default.
 
-### 4. Refuse non-writable columns
+### 4. Refuse non-writable columns and non-scalar types — after execution, not before
 
 `__okf_path`, `__okf_concept_id`, and `__okf_logical_key` are derived from
-the filesystem, not authored. `SET __okf_path = ...` is a rename, a different
-and unimplemented operation. The `--sql` parse step (1a) rejects any `UPDATE`
-whose target list includes a `__okf_*` column, before running anything, with
-an error naming the column — the caller's SQL never gets a chance to touch
-filesystem identity.
+the filesystem, not authored; `SET __okf_path = ...` is a rename, a
+different and unimplemented operation. Consistent with 1a and 1c's posture,
+`apply` does not parse the script to forbid this in advance — the whole
+script already ran, inside the ephemeral in-memory connection, touching
+nothing real. Instead `apply` inspects the outcome (decision 2's schema and
+row diff) and refuses to write anything if any of the following holds:
+
+- the set of `__okf_*` columns present differs at all from before (an
+  `ALTER TABLE` added, dropped, or renamed one);
+- any row's `__okf_path`, `__okf_concept_id`, or `__okf_logical_key` *value*
+  differs from before (a plain `UPDATE` targeted one, which the column still
+  structurally allowing does not make legitimate);
+- any `ADD COLUMN`/`RENAME COLUMN` in the resulting schema is typed anything
+  other than `VARCHAR` (1c's scalar-only rule);
+- row identity or cardinality changed — a row's `__okf_concept_id` present
+  before is missing after, or vice versa, which a bare `UPDATE` should never
+  produce and is checked as a defensive invariant rather than assumed.
+
+Any of these discards the whole in-memory result and reports why; nothing
+about the real bundle is touched either way, since decision 5 has not begun
+yet at this point.
 
 ### 5. Validate before writing: snapshot, stage, validate against baseline, then replace
 
@@ -427,13 +469,23 @@ does not block — when `--sql` contains an obviously non-deterministic
 construct (`current_timestamp`, `now()`, `random()`), since those are the
 common way an author accidentally defeats their own `WHERE` guard.
 
+Nor does `apply` promise that literally *rerunning* a script that already
+succeeded will run at all, let alone as a no-op: 1b's type-rename example
+hits a "table does not exist" error on a converged rerun, and a script whose
+leading `ALTER TABLE ... ADD COLUMN` already ran once will hit DuckDB's own
+"column already exists" error the second time. Both are honest failures
+from DuckDB's own catalog, surfaced as-is, not something `apply` smooths
+over — the guarantee above is about what `apply` itself never adds to a
+diff, not about a script being safe to blindly rerun.
+
 ### CLI and MCP surface
 
 - `okf-parser apply PATH --sql "..." [--write] [--exclude PATTERN]...`, where
-  `--sql`'s single `UPDATE` target names the exact type, and
-  `PATH --type TYPE --field FIELD --from ... --to ...` as the sugar form,
-  where `--type` plays that same role since there is no `UPDATE` to read it
-  from — both dry-run by default;
+  `--sql` is zero or more leading `ALTER TABLE` statements plus one trailing
+  `UPDATE` (decision 1a), and `PATH --type TYPE --field FIELD --from ... --to ...`
+  as the sugar form, where `--type` is required only there, since the sugar
+  has no SQL statement to read a target identifier out of — both dry-run by
+  default;
 - no MCP tool: consistent with `duckdb`, every other write operation is
   CLI-only because the MCP surface is read-only by design (see `docs/cli.md`);
 - output payload shape mirrors `format`'s `{"changed_paths", "skipped_paths", "succeeded", "written"}`, plus `apply`-specific keys: `validation` (the
@@ -489,18 +541,35 @@ separate flag beside `--sql` meant two places could disagree about which
 type was meant (they never structurally could in this draft, since nothing
 in the SQL referenced type — but it was still one more piece of state to
 keep in sync for no benefit over reading it straight out of the `UPDATE`
-statement). Naming the table for the exact authored `type` value keeps the
-one thing this draft got right — materialize only the one type being
-mutated — without a flag that duplicates information the SQL already states.
+statement).
 
-### Allow arbitrary DuckDB SQL, not just one parsed `UPDATE`
+### Have `apply` parse `--sql` to extract the target identifier and synthesize new columns
 
-Rejected. Arbitrary SQL could target a table other than the one the parsed
-`UPDATE` names, run multiple statements with independent side effects, or
-use DDL — none of which the diff in step 2 or the target-column check in
-1a/4 is built to bound. Restricting `--sql` to one parsed `UPDATE` against
-the one designated staging table is what makes those two guarantees actual
-guarantees instead of best-effort.
+Rejected — this was this RFC's fourth draft, materializing only the one type
+named by a hand-rolled extraction of the `UPDATE` target (unescaping quoted
+identifiers, checking case-insensitive collisions against every other type)
+and auto-creating a `VARCHAR` column for any unrecognized `SET` target.
+Review's point: `okf-parser` re-implementing slices of what DuckDB's own
+parser, binder, and catalog already do — Unicode identifier resolution,
+case-folding, "does this column exist" — is duplicated, error-prone logic
+for no benefit DuckDB doesn't already provide. Materializing every type
+up front and handing the script to DuckDB mostly as-is (decision 1),
+bounding its *shape* via `extract_statements()` instead of its identifiers
+(decision 1a), and discovering what changed from a diff instead of a
+pre-declared target (decision 2) replaces custom parsing with DuckDB doing
+the parsing it was already going to do internally regardless.
+
+### Allow arbitrary DuckDB SQL, not a bounded `ALTER TABLE` + `UPDATE` script
+
+Rejected. Arbitrary SQL could run multiple `UPDATE`s or `DELETE`/`INSERT`
+statements with independent side effects the diff in step 2 was not built to
+attribute to one bounded operation, or DDL that reshapes something other
+than the three `ALTER TABLE` forms 1c's scalar-only contract can validate.
+Bounding `--sql` to leading `ALTER TABLE ADD/DROP/RENAME COLUMN` statements
+plus one trailing `UPDATE` (1a) is deliberately generous enough to cover
+every motivating case in this RFC without opening the door to statements
+decision 2's diff and decision 4's post-execution checks were not designed
+to reason about.
 
 ### Cross-file atomicity for the final replace pass
 
@@ -513,8 +582,10 @@ file replacements in a large batch, which could leave a batch of
 already-validated, individually-atomic writes partially applied. A manifest
 of pending replacements resumable after a crash would close that gap;
 deferred because a partial-but-individually-valid write, resumed by rerunning
-`apply` (idempotent per decision 6), is a materially smaller failure mode
-than the ones decision 5 now closes: publishing an invalid bundle, or
+`apply` with a `WHERE` clause the caller wrote to be convergent (decision 6
+only promises `apply`'s own machinery adds no incidental diff, not that any
+script is safe to blindly rerun), is a materially smaller failure mode than
+the ones decision 5 now closes: publishing an invalid bundle, or
 overwriting an edit `apply` never saw.
 
 ## Open questions
@@ -528,6 +599,13 @@ overwriting an edit `apply` never saw.
   on a bundle the size that motivated #26 (45,705 documents): hardlinking is
   cheap in principle on a POSIX filesystem, but this needs measuring, not
   assuming, before the design is accepted.
+- Benchmarked cost of materializing **every** distinct type as a table
+  (decision 1), not only the one a script touches, on that same bundle. This
+  RFC deliberately chose implementation simplicity (let DuckDB resolve
+  identifiers, no custom parsing) over the narrower "materialize one type,
+  lazily" cost bound an earlier draft had; whether that trade is still
+  acceptable at 45,705 documents needs the same measurement the hardlink
+  question does, not an assumption either way.
 - 1b (table rename semantics for `type`) is still genuinely undecided and is
   what keeps this RFC at `proposed`; everything else above is a stated
   decision, not an open question.
