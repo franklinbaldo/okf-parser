@@ -29,7 +29,6 @@ from typing import TYPE_CHECKING
 
 import duckdb
 import ibis
-import pyarrow as pa
 from ruamel.yaml import YAML
 
 from okf_parser.bundle import validate_path
@@ -45,6 +44,10 @@ from okf_parser.parser import (
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    import ibis.backends.duckdb as ibis_duckdb
+
+    IbisConnection = ibis_duckdb.Backend
 
 _OKF_PREFIX = "__okf_"
 _IDENTITY_COLUMNS = ("__okf_path", "__okf_concept_id", "__okf_logical_key")
@@ -329,7 +332,7 @@ def _check_reserved_field_names(type_name: str, field_names: Sequence[str]) -> N
 
 
 def _build_table(
-    con: duckdb.DuckDBPyConnection,
+    con: IbisConnection,
     table_name: str,
     field_names: Sequence[str],
     concepts: Sequence[_Concept],
@@ -355,25 +358,25 @@ def _build_table(
             value = concept.frontmatter.get(name)
             columns[name].append(value if isinstance(value, str) else None)
 
-    schema = pa.schema(
-        [
-            pa.field("__okf_path", pa.string()),
-            pa.field("__okf_concept_id", pa.string()),
-            pa.field("__okf_logical_key", pa.string()),
-            pa.field("__okf_body", pa.string()),
-            pa.field("__okf_body_lines", pa.list_(pa.string())),
-            pa.field("__okf_frontmatter", pa.string()),
-            *(pa.field(name, pa.string()) for name in field_names),
-        ]
+    schema = ibis.schema(
+        {
+            "__okf_path": "string",
+            "__okf_concept_id": "string",
+            "__okf_logical_key": "string",
+            "__okf_body": "string",
+            "__okf_body_lines": "array<string>",
+            "__okf_frontmatter": "string",
+            **dict.fromkeys(field_names, "string"),
+        }
     )
-    table = pa.table(columns, schema=schema)
+    table = ibis.memtable(columns, schema=schema)
     # ibis's `create_table` builds the CREATE TABLE statement itself (via
-    # sqlglot, properly quoting the identifier) and hands the Arrow table
-    # straight to DuckDB - no intermediate staging relation under any name,
-    # fixed or random, ever exists for a real `type` to shadow or collide
-    # with. A genuine collision still raises duckdb.CatalogException, same
-    # as any other CREATE TABLE.
-    ibis.duckdb.from_connection(con).create_table(table_name, obj=table, temp=True)
+    # sqlglot, properly quoting the identifier) and hands the in-memory
+    # table straight to DuckDB - no intermediate staging relation under any
+    # name, fixed or random, ever exists for a real `type` to shadow or
+    # collide with. A genuine collision still raises duckdb.CatalogException,
+    # same as any other CREATE TABLE.
+    con.create_table(table_name, obj=table, temp=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -383,9 +386,7 @@ class _MaterializeResult:
     structured_by_type: dict[str, frozenset[str]]
 
 
-def _materialize(
-    con: duckdb.DuckDBPyConnection, concepts: Sequence[_Concept]
-) -> _MaterializeResult:
+def _materialize(con: IbisConnection, concepts: Sequence[_Concept]) -> _MaterializeResult:
     """Build one table per type inside the script's catalog; return its field names.
 
     No pre-mutation snapshot is created as a table here: a real `type` could be
@@ -436,26 +437,26 @@ def _materialize(
 @dataclass(frozen=True, slots=True)
 class _TypeSnapshot:
     schema: dict[str, str]
-    table: pa.Table
+    table: ibis.Table
 
 
 def _snapshot_types(
-    con: duckdb.DuckDBPyConnection, fields_by_type: dict[str, list[str]]
+    con: IbisConnection, fields_by_type: dict[str, list[str]]
 ) -> dict[str, _TypeSnapshot]:
     """Capture every type table's schema and full relation before the script runs.
 
-    Held only in Python (as Arrow, DuckDB's own zero-copy interchange
-    format), never as a queryable table in `con`'s catalog, so the caller's
-    `--sql` cannot address, corrupt, or collide a type against it. Kept as a
-    relation rather than a dict-of-dicts so comparing it against the
-    post-script state is DuckDB's own `EXCEPT`/`JOIN`, not a hand-rolled
-    Python equality walk over every row.
+    Held only in Python, as a detached `ibis.memtable` (data pulled off
+    `con` and owned independently), never as a queryable table in `con`'s
+    catalog, so the caller's `--sql` cannot address, corrupt, or collide a
+    type against it. Kept as a relation rather than a dict-of-dicts so
+    comparing it against the post-script state is Ibis's own
+    `difference`/`join`, not a hand-rolled Python equality walk over every
+    row.
     """
     return {
         type_name: _TypeSnapshot(
             schema=_describe(con, type_name),
-            # table_name is quoted via _quote_ident, not interpolated raw.
-            table=con.execute(f"SELECT * FROM {_quote_ident(type_name)}").to_arrow_table(),  # noqa: S608
+            table=ibis.memtable(con.table(type_name).execute()),
         )
         for type_name in fields_by_type
     }
@@ -514,20 +515,15 @@ class _ScriptOutcome:
     row_diffs: tuple[_RowDiff, ...] = ()
 
 
-def _describe(con: duckdb.DuckDBPyConnection, table: str) -> dict[str, str]:
-    rows = con.execute(f"DESCRIBE {_quote_ident(table)}").fetchall()
+def _describe(con: IbisConnection, table: str) -> dict[str, str]:
+    rows = con.raw_sql(f"DESCRIBE {_quote_ident(table)}").fetchall()
     return {row[0]: row[1] for row in rows}
 
 
-def _fetch_rows(con: duckdb.DuckDBPyConnection, table: str) -> dict[str, dict[str, object]]:
-    # table is quoted via _quote_ident, not interpolated raw.
-    query = f"SELECT * FROM {_quote_ident(table)}"  # noqa: S608
-    cursor = con.execute(query)
-    columns = [d[0] for d in cursor.description]
+def _fetch_rows(con: IbisConnection, table: str) -> dict[str, dict[str, object]]:
     rows: dict[str, dict[str, object]] = {}
-    for record in cursor.fetchall():
-        row = dict(zip(columns, record, strict=True))
-        rows[row["__okf_concept_id"]] = row
+    for record in con.table(table).to_pyarrow().to_pylist():
+        rows[record["__okf_concept_id"]] = record
     return rows
 
 
@@ -575,7 +571,7 @@ def _check_alter_shape(
 
 
 def _run_transaction(
-    con: duckdb.DuckDBPyConnection,
+    con: IbisConnection,
     type_names: Sequence[str],
     alter_queries: list[str],
     update_query: str,
@@ -597,51 +593,47 @@ def _run_transaction(
     row at all.
     """
     renamed: dict[str, str] = {}
-    con.execute("BEGIN TRANSACTION")
+    con.raw_sql("BEGIN TRANSACTION")
     try:
         for query in alter_queries:
             before = {t: _describe(con, t) for t in type_names}
-            con.execute(query)
+            con.raw_sql(query)
             after = {t: _describe(con, t) for t in type_names}
             rename = _check_alter_shape(before, after, query)
             if rename is not None:
                 old_name, new_name = rename
                 origin = next((k for k, v in renamed.items() if v == old_name), old_name)
                 renamed[origin] = new_name
-        cursor = con.execute(f"{update_query} RETURNING __okf_concept_id")
+        cursor = con.raw_sql(f"{update_query} RETURNING __okf_concept_id")
         selected_ids = frozenset(row[0] for row in cursor.fetchall())
     except duckdb.Error as exc:
-        con.execute("ROLLBACK")
+        con.raw_sql("ROLLBACK")
         msg = f"script failed: {exc}"
         raise ApplyError(msg) from exc
     except ApplyError:
-        con.execute("ROLLBACK")
+        con.raw_sql("ROLLBACK")
         raise
-    con.execute("COMMIT")
+    con.raw_sql("COMMIT")
     return selected_ids, renamed
 
 
-def _relation_differs(
-    scratch: duckdb.DuckDBPyConnection,
-    before: pa.Table,  # noqa: ARG001 - referenced by name in the SQL text, not directly.
-    after: pa.Table,  # noqa: ARG001 - referenced by name in the SQL text, not directly.
-) -> bool:
-    """Whether two same-shaped Arrow relations hold different rows.
+def _relation_differs(before: ibis.Table, after: ibis.Table) -> bool:
+    """Whether two same-shaped relations hold different rows.
 
-    `before`/`after` are referenced by name in the SQL text below and
-    resolved by DuckDB's replacement scan against this function's own local
-    variables - never registered under a name anything else could address.
-    `EXCEPT` is exactly the "did anything change" question; there's no
-    reason to fetch every row into Python just to walk a dict equality.
+    Compared as Ibis expressions - `before` a detached `ibis.memtable`,
+    `after` a live view of the post-script table - which Ibis itself
+    resolves against whichever backend executes the expression, needing no
+    explicit registration. `difference` is exactly the "did anything
+    change" question; there's no reason to fetch every row into Python
+    just to walk an equality.
     """
-    if scratch.sql("SELECT * FROM before EXCEPT SELECT * FROM after").fetchone() is not None:
+    if before.difference(after).count().execute() > 0:
         return True
-    return scratch.sql("SELECT * FROM after EXCEPT SELECT * FROM before").fetchone() is not None
+    return after.difference(before).count().execute() > 0
 
 
 def _find_touched_type(
-    con: duckdb.DuckDBPyConnection,
-    scratch: duckdb.DuckDBPyConnection,
+    con: IbisConnection,
     snapshots: dict[str, _TypeSnapshot],
 ) -> str | None:
     try:
@@ -651,9 +643,7 @@ def _find_touched_type(
             if after_schema != snapshot.schema:
                 changed_types.append(type_name)
                 continue
-            # table_name is quoted via _quote_ident, not interpolated raw.
-            after_table = con.execute(f"SELECT * FROM {_quote_ident(type_name)}").to_arrow_table()  # noqa: S608
-            if _relation_differs(scratch, snapshot.table, after_table):
+            if _relation_differs(snapshot.table, con.table(type_name)):
                 changed_types.append(type_name)
     except duckdb.Error as exc:
         msg = f"script failed: {exc}"
@@ -716,33 +706,31 @@ def _check_result_schema(
             raise ApplyError(msg)
 
 
-def _check_result_rows(
-    scratch: duckdb.DuckDBPyConnection,
-    before: pa.Table,  # noqa: ARG001 - referenced by name in the SQL text, not directly.
-    after: pa.Table,  # noqa: ARG001 - referenced by name in the SQL text, not directly.
-) -> None:
-    """Row identity/cardinality and protected-column tamper checks, via SQL.
+def _check_result_rows(before: ibis.Table, after: ibis.Table) -> None:
+    """Row identity/cardinality and protected-column tamper checks, via Ibis.
 
-    `before`/`after` are resolved by DuckDB's replacement scan against this
-    function's own parameters, the same as `_relation_differs`.
+    `before` is a detached `ibis.memtable`, `after` a live view of the
+    post-script table - the same pairing as `_relation_differs`, needing no
+    explicit registration.
     """
-    changed_cardinality = scratch.sql(
-        "SELECT __okf_concept_id FROM before EXCEPT SELECT __okf_concept_id FROM after "
-        "UNION ALL "
-        "SELECT __okf_concept_id FROM after EXCEPT SELECT __okf_concept_id FROM before"
-    ).fetchone()
-    if changed_cardinality is not None:
+    before_ids = before.select("__okf_concept_id")
+    after_ids = after.select("__okf_concept_id")
+    changed_cardinality = before_ids.difference(after_ids).union(after_ids.difference(before_ids))
+    if changed_cardinality.count().execute() > 0:
         msg = "script changed row identity or cardinality"
         raise ApplyError(msg)
+
+    after_aliased = after.select(**{f"{name}__after": after[name] for name in after.columns})
+    joined = before.join(
+        after_aliased,
+        before["__okf_concept_id"] == after_aliased["__okf_concept_id__after"],
+    )
     for column in sorted(_PROTECTED_COLUMNS):
-        quoted = _quote_ident(column)
         # column is one of the fixed _PROTECTED_COLUMNS names, not caller input.
-        tampered = scratch.sql(
-            f"SELECT b.__okf_concept_id FROM before b JOIN after a USING (__okf_concept_id) "  # noqa: S608
-            f"WHERE b.{quoted} IS DISTINCT FROM a.{quoted} LIMIT 1"
-        ).fetchone()
-        if tampered is not None:
-            msg = f'row "{tampered[0]}" changed protected column "{column}"'
+        tampered = joined.filter(~joined[column].identical_to(joined[f"{column}__after"]))
+        row = tampered.select("__okf_concept_id").limit(1).execute()
+        if not row.empty:
+            msg = f'row "{row.iloc[0, 0]}" changed protected column "{column}"'
             raise ApplyError(msg)
 
 
@@ -832,7 +820,7 @@ def _compile_row_diff(  # noqa: PLR0913 - each argument is a distinct compile in
 
 
 def _execute_script(
-    con: duckdb.DuckDBPyConnection,
+    con: IbisConnection,
     materialized: _MaterializeResult,
     alter_queries: list[str],
     update_query: str,
@@ -849,27 +837,21 @@ def _execute_script(
     )
     renamed_from = {new_name: old_name for old_name, new_name in renamed.items()}
 
-    scratch = duckdb.connect()
-    try:
-        touched = _find_touched_type(con, scratch, snapshots)
-        selected_type = _type_of_selected(materialized.concepts_by_type, selected_ids)
-        if touched is None:
-            touched = selected_type
-        elif selected_type is not None and selected_type != touched:
-            msg = f"script touched more than one type's table: {sorted({touched, selected_type})}"
-            raise ApplyError(msg)
-        if touched is None:
-            return _ScriptOutcome(touched_type=None)
+    touched = _find_touched_type(con, snapshots)
+    selected_type = _type_of_selected(materialized.concepts_by_type, selected_ids)
+    if touched is None:
+        touched = selected_type
+    elif selected_type is not None and selected_type != touched:
+        msg = f"script touched more than one type's table: {sorted({touched, selected_type})}"
+        raise ApplyError(msg)
+    if touched is None:
+        return _ScriptOutcome(touched_type=None)
 
-        after_schema = _describe(con, touched)
-        structured = materialized.structured_by_type[touched]
-        _check_result_schema(after_schema, snapshots[touched].schema, structured)
+    after_schema = _describe(con, touched)
+    structured = materialized.structured_by_type[touched]
+    _check_result_schema(after_schema, snapshots[touched].schema, structured)
 
-        # table_name is quoted via _quote_ident, not interpolated raw.
-        after_table = con.execute(f"SELECT * FROM {_quote_ident(touched)}").to_arrow_table()  # noqa: S608
-        _check_result_rows(scratch, snapshots[touched].table, after_table)
-    finally:
-        scratch.close()
+    _check_result_rows(snapshots[touched].table, con.table(touched))
 
     after_rows = _fetch_rows(con, touched)
     field_names = materialized.fields_by_type[touched]
@@ -959,7 +941,7 @@ def apply_bundle(  # noqa: PLR0913 - each argument is an independent public CLI 
             (v.code, v.path, v.message) for v in baseline.violations if v.severity == Severity.ERROR
         }
 
-        con = duckdb.connect()
+        con = ibis.duckdb.connect()
         materialized = _materialize(con, concepts)
         outcome = _execute_script(con, materialized, alter_queries, update_query)
     except ApplyError as exc:
