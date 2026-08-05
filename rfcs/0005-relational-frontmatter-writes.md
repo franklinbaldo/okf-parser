@@ -109,11 +109,15 @@ identifier the statement names, Unicode and all; `apply` never re-derives
 "which type does this string mean" itself.
 
 Within each materialized table, the writable namespace is that type's
-authored frontmatter keys, each exactly once, plus filesystem-derived
-identity under a reserved `__okf_*` prefix (`__okf_path`, `__okf_concept_id`,
-`__okf_logical_key`) that cannot collide with an authored key. `apply`
-refuses to run against any type where an observed key already starts with
-`__okf_`, rather than silently shadowing it.
+authored frontmatter keys, each exactly once, plus structural columns the
+parser itself owns, under a reserved `__okf_*` prefix — filesystem-derived
+identity (`__okf_path`, `__okf_concept_id`, `__okf_logical_key`) and, per
+1d below, the document body — none of which can collide with an authored
+key. `apply` refuses to run against any type where an observed key already
+starts with `__okf_`, rather than silently shadowing it. The prefix's scope
+is deliberately broader than "filesystem identity": it means *any* column
+`apply` itself puts in the table, as opposed to one unnested from authored
+frontmatter.
 
 DuckDB identifiers are **case-insensitive even when quoted** — a genuine
 DuckDB quirk, not standard SQL, confirmed against its own test suite earlier
@@ -142,11 +146,12 @@ DuckDB's `UPDATE` only targets tables, not views — `UPDATE v1 ...` against a
 view is a binder error. `apply` builds one **temporary table per distinct
 `type` value** observed in the bundle, all inside a single in-memory DuckDB
 connection, each named for its type as an exact quoted identifier
-(`CREATE TEMP TABLE "Rotina" AS ...`) and unnesting `frontmatter_json` into
-one column per authored key observed on concepts of that type, using
-`schema_contract.py`'s existing per-type discovery. A second, untouched copy
-of every table — an internal `_before` set, never exposed to the caller's
-SQL — is kept alongside for step 2's diff.
+(`CREATE TEMP TABLE "Rotina" AS ...`), unnesting `frontmatter_json` into one
+column per authored key observed on concepts of that type using
+`schema_contract.py`'s existing per-type discovery, plus the reserved
+`__okf_*` columns (identity per decision 4, body per 1d). A second, untouched
+copy of every table — an internal `_before` set, never exposed to the
+caller's SQL — is kept alongside for step 2's diff.
 
 `apply` does not parse identifiers out of `--sql` at all, and does not
 decide up front which type is being mutated. The caller's SQL is handed to
@@ -301,20 +306,71 @@ decision 5 do not change under either choice, only what `apply` accepts.
   with 1a's "run it, then validate the outcome" posture. Structured writes
   are real future work, not silently unsupported.
 
+### 1d. Read-only body columns for content-aware queries
+
+A concept is frontmatter *and* Markdown body — `models.py`'s
+`ParsedDocument` and `ConceptRecord` already model it that way, and
+`bundle.concepts` already carries a `body` column (`bundle.py`,
+`_CONCEPT_SCHEMA`). Exposing it in `apply`'s materialized tables adds no new
+entity to the domain; it makes something already modeled queryable
+alongside frontmatter instead of leaving it an opaque blob a caller can only
+read one document at a time.
+
+Every table gets two additional reserved columns, read-only, alongside the
+`__okf_*` identity columns:
+
+- `__okf_body VARCHAR` — the exact Markdown body, byte-for-byte, as
+  `ParsedDocument.body` already holds it;
+
+- `__okf_body_lines VARCHAR[]` — a derived, line-split projection of
+  `__okf_body`, one array element per line, for `unnest`-based queries:
+
+  ```sql
+  SELECT __okf_path, generate_subscripts(__okf_body_lines, 1) AS line_number,
+         unnest(__okf_body_lines) AS line
+    FROM "Rotina"
+   WHERE list_contains(list_transform(__okf_body_lines, l -> contains(l, 'TODO')), true);
+  ```
+
+Not `body`, unqualified: `bundle.concepts` already uses that name for its
+own promoted column, and nothing stops a producer from also having a
+frontmatter key literally called `body` — the same collision class decision
+1's "why not `concept_type` next to `type`" already ruled out once. The
+`__okf_` prefix sidesteps it the same way it does for identity.
+
+`__okf_body` is the source; `__okf_body_lines` is a convenience index over
+it, not a second representation. The split is deliberately lossy — it
+cannot by itself distinguish a trailing newline's presence or `LF` from
+`CRLF`, which is exactly why `__okf_body` stays canonical and no write path
+is defined in terms of the line array.
+
+**Both are read-only in this RFC.** Allowing `SET __okf_body_lines[3] = '...'` would turn this proposal from relational writes to frontmatter into
+a transactional Markdown editor — body reconstruction, line-ending
+policy, list/heading/fenced-block editing, and byte-for-byte preservation
+of everything decision 3 already promises for frontmatter would all need
+answers this RFC does not have. Decision 4's post-execution check extends
+to both: any `ALTER TABLE` touching `__okf_body`/`__okf_body_lines`, or any
+row where either value differs from its `_before` copy, discards the
+result the same way tampering with `__okf_path` does. Writable body
+content is real future work, explicitly out of this RFC's scope, not a gap
+left open by omission.
+
 ### 2. Diff before write: every table, schema and rows, one document at a time
 
 After the script runs, `apply` diffs **every** materialized table against
 its `_before` copy — both its schema (which columns exist, and their types:
 this is what 1a's "at most one table differs" rule and decision 4's
 protected-column and scalar-type checks are computed from) and its rows,
-keyed by `__okf_concept_id`. Only documents with at least one changed column
-value (or, if 1b resolves to "let it migrate," a changed `type`) are
-candidates for writing. The diff, not the script text, is what a
-`--write`-less run reports — this keeps the dry-run output meaningful even
-when the mutation's `WHERE` clause matches nothing, and it is also the only
-place `apply` learns which table (therefore which type) was actually
-mutated, since nothing upstream of this step ever parsed that out of the
-SQL.
+keyed by `__okf_concept_id`. Only documents with at least one changed
+*authored-column* value (or, if 1b resolves to "let it migrate," a changed
+`type`) are candidates for writing; a changed `__okf_*` value is never a
+write candidate — decision 4 treats that as a reject condition for the
+whole result, not a document to stage. The diff, not the script text, is
+what a `--write`-less run reports — this keeps the dry-run output
+meaningful even when the mutation's `WHERE` clause matches nothing, and it
+is also the only place `apply` learns which table (therefore which type)
+was actually mutated, since nothing upstream of this step ever parsed that
+out of the SQL.
 
 ### 3. Round-trip fidelity through a real YAML round-trip loader
 
@@ -353,21 +409,25 @@ behavior explicitly; it is not the default.
 
 ### 4. Refuse non-writable columns and non-scalar types — after execution, not before
 
-`__okf_path`, `__okf_concept_id`, and `__okf_logical_key` are derived from
-the filesystem, not authored; `SET __okf_path = ...` is a rename, a
-different and unimplemented operation. Consistent with 1a and 1c's posture,
-`apply` does not parse the script to forbid this in advance — the whole
-script already ran, inside the ephemeral in-memory connection, touching
-nothing real. Instead `apply` inspects the outcome (decision 2's schema and
-row diff) and refuses to write anything if any of the following holds:
+`__okf_path`, `__okf_concept_id`, `__okf_logical_key`, `__okf_body`, and
+`__okf_body_lines` are all derived or parser-owned, not authored; `SET __okf_path = ...` is a rename, `SET __okf_body = ...` is the transactional
+Markdown editor 1d explicitly declines to be — neither is an implemented
+operation. Consistent with 1a and 1c's posture, `apply` does not parse the
+script to forbid this in advance — the whole script already ran, inside the
+ephemeral in-memory connection, touching nothing real. Instead `apply`
+inspects the outcome (decision 2's schema and row diff) and refuses to
+write anything if any of the following holds:
 
 - the set of `__okf_*` columns present differs at all from before (an
-  `ALTER TABLE` added, dropped, or renamed one);
-- any row's `__okf_path`, `__okf_concept_id`, or `__okf_logical_key` *value*
-  differs from before (a plain `UPDATE` targeted one, which the column still
-  structurally allowing does not make legitimate);
-- any `ADD COLUMN`/`RENAME COLUMN` in the resulting schema is typed anything
-  other than `VARCHAR` (1c's scalar-only rule);
+  `ALTER TABLE` added, dropped, or renamed one — including `__okf_body` or
+  `__okf_body_lines`);
+- any row's `__okf_path`, `__okf_concept_id`, `__okf_logical_key`,
+  `__okf_body`, or `__okf_body_lines` *value* differs from before (a plain
+  `UPDATE` targeted one, which the column still structurally allowing does
+  not make legitimate);
+- any `ADD COLUMN`/`RENAME COLUMN` in the resulting schema, other than the
+  parser-owned `__okf_*` columns, is typed anything other than `VARCHAR`
+  (1c's scalar-only rule);
 - row identity or cardinality changed — a row's `__okf_concept_id` present
   before is missing after, or vice versa, which a bare `UPDATE` should never
   produce and is checked as a defensive invariant rather than assumed.
