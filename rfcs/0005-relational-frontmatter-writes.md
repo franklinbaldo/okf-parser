@@ -660,9 +660,17 @@ overwriting an edit `apply` never saw.
   lazily" cost bound an earlier draft had; whether that trade is still
   acceptable at 45,705 documents needs the same measurement the hardlink
   question does, not an assumption either way.
-- 1b (table rename semantics for `type`) is still genuinely undecided and is
-  what keeps this RFC at `proposed`; everything else above is a stated
-  decision, not an open question.
+
+## Resolved questions
+
+- **Resolved — mutation of `type`:** `apply` may update the authored `type`
+  field. The source table is selected using the pre-mutation `type` value.
+  After the migration converges, rerunning the identical SQL may fail
+  because that source type — and therefore its DuckDB table — may no longer
+  exist. RFC 0005 does not promise identical-script rerun success; it
+  guarantees only that `apply` introduces no incidental filesystem diff
+  beyond the relational result (see decision 6). See §1b for the full
+  decision.
 
 Richer, spec-declared typing and documentation (real DuckDB column types
 and `COMMENT ON` metadata sourced from an optional `.okf/specs` document,
