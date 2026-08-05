@@ -1,7 +1,7 @@
 ---
 type: RFC
 title: Relational writes to frontmatter fields
-status: proposed
+status: accepted
 description: Define an `apply` command that mutates frontmatter fields by handing a bounded ALTER TABLE + UPDATE script to an in-memory DuckDB database of exact-type tables, with round-trip fidelity, dry-run, and stage-then-validate-then-write semantics
 ---
 
@@ -171,8 +171,8 @@ okf-parser apply ./bundle --sql "
 
 A simpler surface without `WHERE` is also offered for the common case, so a
 caller who only needs an unconditional field change does not need to write
-SQL — though see 1b for why a rename of `type` itself is not yet a settled
-part of this design:
+SQL — see 1b for why a rename of `type` itself goes through `--sql`, not
+this sugar, since it is a migration rather than a same-table value change:
 
 ```bash
 okf-parser apply ./bundle --type "Rotina" --field setor --from "GAB" --to "#GAB#FSB"
@@ -218,51 +218,43 @@ write anything — a script that reaches across types was never a supported
 shape, and this is where that gets caught, structurally, rather than by
 inspecting identifiers before execution.
 
-### 1b. Undecided: what happens when the mutation changes `type` itself
+### 1b. Decided: a mutation that changes `type` migrates the document
 
 Motivation case 2 above — renaming `"Revisao Ciencia"` to `"Revisão Ciência"`
-in bulk — is a `type` rewrite. Since the table is named for the *pre*-mutation
-type, `type` inside it is, mechanically, an ordinary column like any other —
-the open question is whether `apply` lets `SET` touch it at all. This RFC
-does not yet pick between two ways to handle it, and is not marked
-`accepted` until it does:
+in bulk — is a `type` rewrite. Since the table is named for the
+*pre*-mutation type, `type` inside it is, mechanically, an ordinary column
+like any other, and `apply` lets `SET` touch it like any other column:
 
-- **Let it migrate.**
+```bash
+okf-parser apply ./bundle --sql "
+  UPDATE \"Revisao Ciencia\" SET type = 'Revisão Ciência'
+" --write
+```
 
-  ```bash
-  okf-parser apply ./bundle --sql "
-    UPDATE \"Revisao Ciencia\" SET type = 'Revisão Ciência'
-  " --write
-  ```
+The table name already selected every row with the exact old value, so the
+`UPDATE` needs no `WHERE` at all for the pure-rename case. At write time
+(decision 5), `apply` determines each document's destination purely by its
+post-mutation `type` value, independent of the table it was staged under
+for this invocation — this falls out of diffing by `__okf_concept_id`, not
+a new mechanism. `check` (already run against the full candidate bundle in
+decision 5) is what would catch a destination type without a matching spec,
+if `--require-spec` is in play.
 
-  The table name already selected every row with the exact old value, so
-  the `UPDATE` needs no `WHERE` at all for the pure-rename case. At write
-  time (decision 5), `apply` determines each document's destination purely
-  by its post-mutation `type` value, independent of the table it was staged
-  under for this invocation — this falls out of diffing by
-  `__okf_concept_id`, not a new mechanism. `check` (already run against the
-  full candidate bundle in decision 5) is what would catch a destination
-  type without a matching spec, if `--require-spec` is in play.
+This is where an earlier draft's idempotency argument stopped holding, and
+the honest statement replaces it rather than being quietly dropped: because
+decision 1 materializes a table only for types **currently** observed in
+the bundle, running the invocation above a second time — after every
+`"Revisao Ciencia"` concept has already migrated — finds no table named
+`"Revisao Ciencia"` at all, and the `UPDATE` fails with DuckDB's own "table
+does not exist" error, not a graceful zero-row no-op. `apply` does not
+promise that literally rerunning a converged `--sql` invocation succeeds;
+decision 6 states precisely what it does promise instead.
 
-  This is where an earlier draft's idempotency argument stops holding, and
-  the honest statement replaces it rather than being quietly dropped:
-  because decision 1 now materializes a table only for types **currently**
-  observed in the bundle, running the invocation above a second time — after
-  every `"Revisao Ciencia"` concept has already migrated — finds no table
-  named `"Revisao Ciencia"` at all, and the `UPDATE` fails with DuckDB's own
-  "table does not exist" error, not a graceful zero-row no-op. `apply` does
-  not promise that literally rerunning a converged `--sql` invocation
-  succeeds; decision 6 states precisely what it does promise instead.
-
-- **Forbid it.** `type` becomes read-only inside `apply`, like `__okf_path`.
-  Bulk type rename gets a dedicated command
-  (`okf-parser rename-type FROM TO`, out of this RFC's scope) instead of
-  being one case of a general `UPDATE`.
-
-The rest of this RFC is written assuming `type` behaves like any other
-column unless a table migration is explicitly not possible for some other
-reason surfaced during review; §6 (idempotency) and the write path in
-decision 5 do not change under either choice, only what `apply` accepts.
+The alternative — forbidding `SET type = ...` and requiring a dedicated
+`rename-type` command instead — was rejected: it would make the general
+`UPDATE` surface unable to express motivation case 2, the RFC's own
+second motivating example, for no safety gain the diffing-by-concept-id
+mechanism doesn't already provide for free.
 
 ### 1c. v1 scope: top-level scalars only, explicit schema changes, explicit null contract
 
@@ -362,13 +354,15 @@ its `_before` copy — both its schema (which columns exist, and their types:
 this is what 1a's "at most one table differs" rule and decision 4's
 protected-column and scalar-type checks are computed from) and its rows,
 keyed by `__okf_concept_id`. Only documents with at least one changed
-*authored-column* value (or, if 1b resolves to "let it migrate," a changed
-`type`) are candidates for writing; a changed `__okf_*` value is never a
-write candidate — decision 4 treats that as a reject condition for the
-whole result, not a document to stage. The diff, not the script text, is
-what a `--write`-less run reports — this keeps the dry-run output
-meaningful even when the mutation's `WHERE` clause matches nothing, and it
-is also the only place `apply` learns which table (therefore which type)
+*authored-column* value are candidates for writing — `type` is an ordinary
+authored column per 1b, so a row whose `type` changed is a write candidate
+the same way a row whose `setor` changed is, nothing special-cased. A
+changed `__okf_*` value is never a write candidate — decision 4 treats that
+as a reject condition for the whole result, not a document to stage. The
+diff, not the script text, is what a `--write`-less run reports — this
+keeps the dry-run output meaningful even when the mutation's `WHERE` clause
+matches nothing, and it is also the only place `apply` learns which table
+(therefore which type)
 was actually mutated, since nothing upstream of this step ever parsed that
 out of the SQL.
 
