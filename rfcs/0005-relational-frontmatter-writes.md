@@ -670,6 +670,14 @@ overwriting an edit `apply` never saw.
   what keeps this RFC at `proposed`; everything else above is a stated
   decision, not an open question.
 
+Richer, spec-declared typing and documentation (real DuckDB column types
+and `COMMENT ON` metadata sourced from an optional `.okf/specs` document,
+with `ALTER TABLE` writing back to the spec that declared a type) is
+deliberately not designed here — it is large enough on its own, with its
+own round-trip and validation needs for a second document, to warrant its
+own proposal. See RFC 0006, which depends on this RFC's `ALTER TABLE`
+mechanism and should not be accepted before it.
+
 `apply` ships Python-first. TypeScript parity is explicitly not a
 precondition for accepting or implementing this RFC: the TypeScript package
 has no native DuckDB dependency outside the separate `typescript-duckdb`
