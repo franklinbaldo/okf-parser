@@ -9,7 +9,7 @@ description: Define an `apply` command that mutates frontmatter fields through o
 
 ## Summary
 
-Add `okf-parser apply PATH --sql "UPDATE __okf_staging SET ... WHERE ..."`, a
+Add `okf-parser apply PATH --sql "UPDATE concepts SET ... WHERE ..."`, a
 command that mutates frontmatter fields in place across a bundle. It reuses
 the existing relational compilation (`duckdb`, `schema`) to select and
 express the mutation, but writes back through a purpose-built round-trip YAML
@@ -63,6 +63,14 @@ prefix does that: `__okf_path`, `__okf_concept_id`, `__okf_logical_key`.
 `apply` refuses to run against any bundle where an observed frontmatter key
 already starts with `__okf_`, rather than silently shadowing it.
 
+The **table** name needs no such reservation: nothing an author writes in
+frontmatter can ever become a table identifier in the `--sql` the caller
+supplies, so there is no collision to guard against, only a name to pick.
+`apply` calls it `concepts`, matching the name `duckdb`, `inventory` and
+`graph` already use for the same relation elsewhere in the CLI — the `__okf_`
+prefix is reserved for what genuinely needs protecting, not applied
+everywhere for symmetry.
+
 So `apply` cannot run the caller's SQL against `bundle.concepts` as-is. It
 must compile a differently-shaped staging relation first.
 
@@ -72,24 +80,24 @@ must compile a differently-shaped staging relation first.
 
 DuckDB's `UPDATE` only targets tables, not views — `UPDATE v1 ...` against a
 view is a binder error. Before running the caller's SQL, `apply` builds a
-**temporary table** (`CREATE TEMP TABLE __okf_staging AS ...`) that unnests
+**temporary table** (`CREATE TEMP TABLE concepts AS ...`) that unnests
 `frontmatter_json` into one column per authored key observed anywhere in the
 selected concepts, using the same key/type discovery `schema_contract.py`
 performs for `schema --infer-types`, applied here to shape columns instead of
 a JSON Schema. Filesystem identity is included under the `__okf_*` names
 above; there are no separate "promoted" columns.
 
-A second, untouched copy of the same rows — `__okf_before`, never exposed to
+A second, untouched copy of the same rows — `concepts_before`, never exposed to
 the caller's SQL — is materialized alongside it, so step 2 has an immutable
 pre-image to diff against regardless of what the mutation does.
 
-The caller's `UPDATE __okf_staging SET ... WHERE ...` runs against the
+The caller's `UPDATE concepts SET ... WHERE ...` runs against the
 staging table. This is what makes the issue's examples work as written,
 modulo the table name:
 
 ```bash
 okf-parser apply ./bundle --sql "
-  UPDATE __okf_staging
+  UPDATE concepts
      SET setor = '#GAB#FSB'
    WHERE setor IS NULL AND __okf_path LIKE 'rotinas/%'
 " --write
@@ -108,7 +116,7 @@ because selection needs a second implementation.
 ### 1a. `--sql` accepts exactly one parsed `UPDATE`, nothing else
 
 `apply` parses `--sql` before executing anything and rejects it unless it is
-a single `UPDATE` statement whose target is `__okf_staging`: no semicolon-
+a single `UPDATE` statement whose target is `concepts`: no semicolon-
 separated second statement, no DDL, no `DELETE`/`INSERT`, no statement naming
 a different table. This is not a stylistic preference — step 1a's target-
 column validation (below) and step 2's bounded diff both assume the mutation
@@ -118,8 +126,8 @@ step is what makes that assumption an enforced contract instead of a hope.
 
 ### 2. Diff before write, one document at a time
 
-After the `UPDATE` runs, `apply` diffs each `__okf_staging` row against its
-`__okf_before` counterpart per `__okf_concept_id`. Only documents with at
+After the `UPDATE` runs, `apply` diffs each `concepts` row against its
+`concepts_before` counterpart per `__okf_concept_id`. Only documents with at
 least one changed column are candidates for writing. The diff, not the SQL
 statement, is what a `--write`-less run reports — this keeps the dry-run
 output meaningful even when the mutation's `WHERE` clause matches nothing.
@@ -245,7 +253,7 @@ ergonomics the issue explicitly wanted to avoid by choosing
 
 ### Allow arbitrary DuckDB SQL, not just one parsed `UPDATE`
 
-Rejected. Arbitrary SQL could target a table other than `__okf_staging`,
+Rejected. Arbitrary SQL could target a table other than `concepts`,
 run multiple statements with independent side effects, or use DDL — none of
 which the diff in step 2 or the target-column check in 1a/4 is built to
 bound. Restricting `--sql` to one parsed `UPDATE` against the designated
