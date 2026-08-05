@@ -48,7 +48,8 @@ if TYPE_CHECKING:
 _OKF_PREFIX = "__okf_"
 _IDENTITY_COLUMNS = ("__okf_path", "__okf_concept_id", "__okf_logical_key")
 _BODY_COLUMNS = ("__okf_body", "__okf_body_lines")
-_PROTECTED_COLUMNS = frozenset({*_IDENTITY_COLUMNS, *_BODY_COLUMNS})
+_FRONTMATTER_TEXT_COLUMNS = ("__okf_frontmatter",)
+_PROTECTED_COLUMNS = frozenset({*_IDENTITY_COLUMNS, *_BODY_COLUMNS, *_FRONTMATTER_TEXT_COLUMNS})
 _FRONTMATTER_RE = re.compile(
     r"\A---[ \t]*\r?\n(.*?)(?:\r?\n)?---[ \t]*(?:\r?\n(.*))?\Z",
     re.DOTALL,
@@ -151,6 +152,7 @@ class _Concept:
     concept_id: str
     concept_type: str
     frontmatter: dict[str, object]
+    frontmatter_text: str
     body: str
     content_hash: str
 
@@ -164,18 +166,25 @@ def _parse_concept(root: Path, path: Path, raw: bytes) -> _Concept | None:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
         return None
+    normalized = text.removeprefix("﻿")
     try:
         parsed = parse_document_text(path, text)
     except DocumentParseError:
         return None
     if not parsed.concept_type:
         return None
+    # Same pattern parser.py itself matches with; kept raw (not reformatted)
+    # for the read-only __okf_frontmatter column, distinct from `frontmatter`
+    # (the parsed mapping used to build the writable columns).
+    match = _FRONTMATTER_RE.match(normalized)
+    frontmatter_text = match.group(1) if match else ""
     return _Concept(
         path=path,
         relative=path.relative_to(root).as_posix(),
         concept_id=concept_id(root, path),
         concept_type=parsed.concept_type,
         frontmatter=dict(parsed.frontmatter),
+        frontmatter_text=frontmatter_text,
         body=parsed.body,
         content_hash=hashlib.sha256(raw).hexdigest(),
     )
@@ -183,6 +192,18 @@ def _parse_concept(root: Path, path: Path, raw: bytes) -> _Concept | None:
 
 def _file_signature(path: Path) -> tuple[int, int]:
     """(size, mtime_ns) for one file - the freshness check `_snapshot_manifest` uses."""
+    stat = path.stat()
+    return (stat.st_size, stat.st_mtime_ns)
+
+
+def _probe_file(path: Path) -> tuple[int, int]:
+    """(size, mtime_ns) for one file - the read-consistency check `_snapshot_bundle` uses.
+
+    Functionally identical to `_file_signature`; kept as a distinct name so
+    the two independent freshness checks (bracketing a concept read here,
+    versus the write-time recheck against the whole manifest) can be
+    exercised in isolation from each other.
+    """
     stat = path.stat()
     return (stat.st_size, stat.st_mtime_ns)
 
@@ -231,23 +252,46 @@ def _snapshot_bundle(root: Path, exclude: Sequence[str]) -> _BundleSnapshot:
             if not is_concept_candidate:
                 manifest[posix] = _file_signature(source)
                 continue
+            # stat both sides of the read, not just after it: a same-size
+            # replace landing between `read_bytes()` and a single trailing
+            # `stat()` would record (old bytes' length, new mtime) - a
+            # signature that happens to still match a same-size file at the
+            # final recheck, so the stale read is never caught. Requiring
+            # the two stats to agree means the recorded signature always
+            # truly corresponds to the bytes just read, not to whichever
+            # file existed at the moment of the second syscall.
+            before_stat = _probe_file(source)
             raw = _read_concept_bytes(source)
-            stat = source.stat()
-            manifest[posix] = (len(raw), stat.st_mtime_ns)
+            after_stat = _probe_file(source)
+            if before_stat != after_stat:
+                msg = f"file changed while apply was reading it: {posix}"
+                raise ApplyError(msg)
+            manifest[posix] = after_stat
             concept = _parse_concept(root, source, raw)
             if concept is not None:
                 concepts.append(concept)
     return _BundleSnapshot(manifest=manifest, concepts=concepts)
 
 
-def _scalar_field_names(concepts: Sequence[_Concept]) -> list[str]:
-    """Top-level authored keys that are scalar on every document that has them.
+@dataclass(frozen=True, slots=True)
+class _FieldKinds:
+    """A type's authored keys, split by whether every observed value is scalar."""
+
+    scalar: list[str]
+    structured: frozenset[str]
+
+
+def _field_kinds(concepts: Sequence[_Concept]) -> _FieldKinds:
+    """Split a type's authored keys into scalar-everywhere and structured-somewhere.
 
     A key observed as a list or map on even one document is excluded from the
     writable namespace entirely, on every document of that type - not just
     NULLed out on the documents where it's structured - so a value that would
     otherwise be silently overwritten or dropped never becomes reachable from
-    SQL in the first place.
+    SQL in the first place. `structured` is kept (not just discarded) so a
+    later `ADD COLUMN` can't reintroduce one of these names as an ordinary
+    writable column and have the compiler overwrite or delete the original
+    structured value.
     """
     scalar_keys: set[str] = set()
     structured_keys: set[str] = set()
@@ -257,7 +301,9 @@ def _scalar_field_names(concepts: Sequence[_Concept]) -> list[str]:
                 scalar_keys.add(key)
             else:
                 structured_keys.add(key)
-    return sorted(scalar_keys - structured_keys)
+    return _FieldKinds(
+        scalar=sorted(scalar_keys - structured_keys), structured=frozenset(structured_keys)
+    )
 
 
 def _check_reserved_field_names(type_name: str, field_names: Sequence[str]) -> None:
@@ -289,6 +335,7 @@ def _build_table(
         "__okf_logical_key": [],
         "__okf_body": [],
         "__okf_body_lines": [],
+        "__okf_frontmatter": [],
     }
     for name in field_names:
         columns[name] = []
@@ -298,6 +345,7 @@ def _build_table(
         columns["__okf_logical_key"].append(concept.concept_id)
         columns["__okf_body"].append(concept.body)
         columns["__okf_body_lines"].append(concept.body.splitlines())
+        columns["__okf_frontmatter"].append(concept.frontmatter_text)
         for name in field_names:
             value = concept.frontmatter.get(name)
             columns[name].append(value if isinstance(value, str) else None)
@@ -309,22 +357,32 @@ def _build_table(
             pa.field("__okf_logical_key", pa.string()),
             pa.field("__okf_body", pa.string()),
             pa.field("__okf_body_lines", pa.list_(pa.string())),
+            pa.field("__okf_frontmatter", pa.string()),
             *(pa.field(name, pa.string()) for name in field_names),
         ]
     )
-    table = pa.table(columns, schema=schema)
-    con.register("__okf_stage", table)
-    try:
-        # table_name is quoted via _quote_ident, not interpolated raw.
-        query = f"CREATE TEMP TABLE {_quote_ident(table_name)} AS SELECT * FROM __okf_stage"  # noqa: S608
-        con.execute(query)
-    finally:
-        con.unregister("__okf_stage")
+    # A local Python variable, referenced by name in the SQL string below:
+    # DuckDB's replacement scan finds it via the calling frame, so nothing is
+    # ever registered into the catalog under a predictable name a real
+    # `type` could collide with (the `_before`-table problem, one level
+    # earlier in the pipeline). Ruff can't see that reference inside the
+    # f-string, hence the unused-variable suppression.
+    okf_apply_stage_table = pa.table(columns, schema=schema)  # noqa: F841
+    # table_name is quoted via _quote_ident, not interpolated raw.
+    query = f"CREATE TEMP TABLE {_quote_ident(table_name)} AS SELECT * FROM okf_apply_stage_table"  # noqa: S608
+    con.execute(query)
+
+
+@dataclass(frozen=True, slots=True)
+class _MaterializeResult:
+    fields_by_type: dict[str, list[str]]
+    concepts_by_type: dict[str, list[_Concept]]
+    structured_by_type: dict[str, frozenset[str]]
 
 
 def _materialize(
     con: duckdb.DuckDBPyConnection, concepts: Sequence[_Concept]
-) -> tuple[dict[str, list[str]], dict[str, list[_Concept]]]:
+) -> _MaterializeResult:
     """Build one table per type inside the script's catalog; return its field names.
 
     No pre-mutation snapshot is created as a table here: a real `type` could be
@@ -338,11 +396,12 @@ def _materialize(
         by_type.setdefault(concept.concept_type, []).append(concept)
 
     fields_by_type: dict[str, list[str]] = {}
+    structured_by_type: dict[str, frozenset[str]] = {}
     for type_name, type_concepts in sorted(by_type.items()):
-        field_names = _scalar_field_names(type_concepts)
-        _check_reserved_field_names(type_name, field_names)
+        kinds = _field_kinds(type_concepts)
+        _check_reserved_field_names(type_name, kinds.scalar)
         try:
-            _build_table(con, type_name, field_names, type_concepts)
+            _build_table(con, type_name, kinds.scalar, type_concepts)
         except duckdb.CatalogException as exc:
             msg = (
                 f'type "{type_name}" collides with another type under DuckDB '
@@ -353,14 +412,19 @@ def _materialize(
         # verify the catalog actually stored exactly the columns intended,
         # in case DuckDB ever silently dedups or renames on its own.
         created = set(_describe(con, type_name)) - _PROTECTED_COLUMNS
-        if created != set(field_names):
+        if created != set(kinds.scalar):
             msg = (
                 f'type "{type_name}" columns were not stored as authored: '
-                f"expected {sorted(field_names)}, got {sorted(created)}"
+                f"expected {sorted(kinds.scalar)}, got {sorted(created)}"
             )
             raise ApplyError(msg)
-        fields_by_type[type_name] = field_names
-    return fields_by_type, by_type
+        fields_by_type[type_name] = kinds.scalar
+        structured_by_type[type_name] = kinds.structured
+    return _MaterializeResult(
+        fields_by_type=fields_by_type,
+        concepts_by_type=by_type,
+        structured_by_type=structured_by_type,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -457,18 +521,62 @@ def _fetch_rows(con: duckdb.DuckDBPyConnection, table: str) -> dict[str, dict[st
     return rows
 
 
+def _check_alter_shape(
+    before: dict[str, dict[str, str]], after: dict[str, dict[str, str]], query: str
+) -> None:
+    """Reject any ALTER whose catalog delta isn't a single add/drop/rename column.
+
+    The RFC promises leading statements are limited to
+    ``ADD/DROP/RENAME COLUMN``; DuckDB's grammar allows other `ALTER TABLE`
+    forms (a type change, a constraint, a default) that a name/type diff
+    wouldn't otherwise notice, since `DESCRIBE` only reports name and type.
+    Checked against the real catalog per statement, not by parsing the SQL.
+    """
+    changed_types = [type_name for type_name in before if before[type_name] != after[type_name]]
+    if len(changed_types) != 1:
+        msg = f"ALTER statement must affect exactly one type's table: {query}"
+        raise ApplyError(msg)
+    type_name = changed_types[0]
+    before_cols, after_cols = before[type_name], after[type_name]
+    removed = set(before_cols) - set(after_cols)
+    added = set(after_cols) - set(before_cols)
+    kept_retyped = {
+        column
+        for column in set(before_cols) & set(after_cols)
+        if before_cols[column] != after_cols[column]
+    }
+    if kept_retyped:
+        msg = f"ALTER statement changed an existing column's type: {query}"
+        raise ApplyError(msg)
+    is_add = not removed and len(added) == 1
+    is_drop = len(removed) == 1 and not added
+    is_rename = len(removed) == 1 and len(added) == 1
+    if not (is_add or is_drop or is_rename):
+        msg = f"ALTER statement must add, drop, or rename exactly one column: {query}"
+        raise ApplyError(msg)
+
+
 def _run_transaction(
-    con: duckdb.DuckDBPyConnection, alter_queries: list[str], update_query: str
+    con: duckdb.DuckDBPyConnection,
+    type_names: Sequence[str],
+    alter_queries: list[str],
+    update_query: str,
 ) -> None:
     con.execute("BEGIN TRANSACTION")
     try:
         for query in alter_queries:
+            before = {t: _describe(con, t) for t in type_names}
             con.execute(query)
+            after = {t: _describe(con, t) for t in type_names}
+            _check_alter_shape(before, after, query)
         con.execute(update_query)
     except duckdb.Error as exc:
         con.execute("ROLLBACK")
         msg = f"script failed: {exc}"
         raise ApplyError(msg) from exc
+    except ApplyError:
+        con.execute("ROLLBACK")
+        raise
     con.execute("COMMIT")
 
 
@@ -491,7 +599,9 @@ def _find_touched_type(
     return changed_types[0] if changed_types else None
 
 
-def _check_result_schema(after_schema: dict[str, str], before_schema: dict[str, str]) -> None:
+def _check_result_schema(
+    after_schema: dict[str, str], before_schema: dict[str, str], structured: frozenset[str]
+) -> None:
     after_cols = set(after_schema)
     before_cols = set(before_schema)
     missing_protected = _PROTECTED_COLUMNS - after_cols
@@ -506,8 +616,18 @@ def _check_result_schema(after_schema: dict[str, str], before_schema: dict[str, 
             )
             raise ApplyError(msg)
     for column in after_cols - before_cols:
-        if column.startswith(_OKF_PREFIX):
+        # ASCII-case-insensitive, matching the authored-side reserved-prefix
+        # check: DuckDB folds unquoted/quoted ASCII case, so "__OKF_custom"
+        # is exactly as reserved as "__okf_custom".
+        if column[: len(_OKF_PREFIX)].lower() == _OKF_PREFIX:
             msg = f'column "{column}" collides with the reserved __okf_ prefix'
+            raise ApplyError(msg)
+        if column in structured:
+            msg = (
+                f'column "{column}" reintroduces "{column}", which is structured '
+                "(list/map) on at least one document of this type and is never "
+                "a writable column"
+            )
             raise ApplyError(msg)
         if after_schema[column].upper() != "VARCHAR":
             msg = f'column "{column}" must be VARCHAR, got {after_schema[column]}'
@@ -529,35 +649,52 @@ def _check_result_rows(
 
 
 def _compile_row_diff(
-    concept: _Concept, field_names: Sequence[str], after_row: dict[str, object]
+    concept: _Concept,
+    field_names: Sequence[str],
+    removed_columns: frozenset[str],
+    before_row: dict[str, object],
+    after_row: dict[str, object],
 ) -> dict[str, str | None]:
     """Recompute one concept's target frontmatter purely from the final relation.
 
     Deliberately blind to *how* the final state was reached - a rename, a
     drop-then-recreate, a chain of renames, and a direct value update that
     happens to land on the same result all compile to the same diff, because
-    only ``(original document, final row)`` are ever consulted. A column
-    absent from the final schema, or present but SQL NULL, means the key is
-    absent from the document - RFC 0005's contract that NULL means absence,
-    applied uniformly whether NULL arrived via a `SET ... = NULL` or was
-    simply carried across untouched from an already-authored YAML null.
+    only the relation's own before/after values are ever consulted, never the
+    script's text. Two cases:
+
+    - a column no longer in the final schema at all (dropped, or renamed
+      away) deletes its key wherever it was authored, unconditionally - a
+      structural, bundle-wide change, independent of any row's value;
+    - a column still in the final schema (kept, or newly added) only
+      touches a row whose *own* before/after value actually differs -
+      `SET x = x` and a row an `UPDATE ... WHERE` never matched both leave
+      that row's key exactly as authored, even if its value happens to be
+      NULL. NULL still means absent per RFC 0005's contract, applied only
+      to a value that is genuinely part of this change.
     """
     diff: dict[str, str | None] = {}
     for name in field_names:
-        value = after_row.get(name)
-        target = value if isinstance(value, str) else None
+        if name in removed_columns:
+            if name in concept.frontmatter:
+                diff[name] = None
+            continue
+        before_value = before_row.get(name)
+        after_value = after_row.get(name)
+        if before_value == after_value:
+            continue
+        target = after_value if isinstance(after_value, str) else None
         if target is None:
             if name in concept.frontmatter:
                 diff[name] = None
-        elif concept.frontmatter.get(name) != target:
+        else:
             diff[name] = target
     return diff
 
 
 def _execute_script(
     con: duckdb.DuckDBPyConnection,
-    fields_by_type: dict[str, list[str]],
-    concepts_by_type: dict[str, list[_Concept]],
+    materialized: _MaterializeResult,
     alter_queries: list[str],
     update_query: str,
 ) -> _ScriptOutcome:
@@ -567,25 +704,36 @@ def _execute_script(
     Nothing about the real bundle is at risk at any point here: only the
     ephemeral in-memory database is touched.
     """
-    snapshots = _snapshot_types(con, fields_by_type)
-    _run_transaction(con, alter_queries, update_query)
+    snapshots = _snapshot_types(con, materialized.fields_by_type)
+    _run_transaction(con, list(materialized.fields_by_type), alter_queries, update_query)
 
     touched = _find_touched_type(con, snapshots)
     if touched is None:
         return _ScriptOutcome(touched_type=None)
 
     after_schema = _describe(con, touched)
-    _check_result_schema(after_schema, snapshots[touched].schema)
+    structured = materialized.structured_by_type[touched]
+    _check_result_schema(after_schema, snapshots[touched].schema, structured)
 
     before_rows = snapshots[touched].rows
     after_rows = _fetch_rows(con, touched)
     _check_result_rows(before_rows, after_rows)
 
-    field_names = sorted((set(after_schema) | set(fields_by_type[touched])) - _PROTECTED_COLUMNS)
+    field_names = materialized.fields_by_type[touched]
+    all_field_names = sorted((set(after_schema) | set(field_names)) - _PROTECTED_COLUMNS)
+    removed_columns = frozenset(snapshots[touched].schema) - set(after_schema) - _PROTECTED_COLUMNS
     row_diffs = tuple(
         _RowDiff(concept_id=concept.concept_id, changed_fields=diff)
-        for concept in concepts_by_type[touched]
-        for diff in (_compile_row_diff(concept, field_names, after_rows[concept.concept_id]),)
+        for concept in materialized.concepts_by_type[touched]
+        for diff in (
+            _compile_row_diff(
+                concept,
+                all_field_names,
+                removed_columns,
+                before_rows[concept.concept_id],
+                after_rows[concept.concept_id],
+            ),
+        )
         if diff
     )
     return _ScriptOutcome(touched_type=touched, row_diffs=row_diffs)
@@ -658,10 +806,8 @@ def apply_bundle(  # noqa: PLR0913 - each argument is an independent public CLI 
         }
 
         con = duckdb.connect()
-        fields_by_type, concepts_by_type = _materialize(con, concepts)
-        outcome = _execute_script(
-            con, fields_by_type, concepts_by_type, alter_queries, update_query
-        )
+        materialized = _materialize(con, concepts)
+        outcome = _execute_script(con, materialized, alter_queries, update_query)
     except ApplyError as exc:
         return ApplyResult(succeeded=False, error=str(exc)).to_dict()
 

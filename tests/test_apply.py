@@ -377,6 +377,44 @@ def test_field_structured_on_one_document_is_unwritable_on_every_document(
     assert "- a" in _read(tmp_path / "r2.md")
 
 
+def test_add_column_cannot_reintroduce_a_structured_field_name(tmp_path: Path) -> None:
+    # "tags" is excluded from the writable namespace because it's a list on
+    # r2 - an ADD COLUMN of the same name must not create a second, ordinary
+    # "tags" column that the compiler would then use to overwrite or delete
+    # the original structured value.
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\n---\n# R1\n")
+    _write(tmp_path / "r2.md", "---\ntype: Rotina\ntags:\n  - a\n  - b\n---\n# R2\n")
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql=('ALTER TABLE "Rotina" ADD COLUMN tags VARCHAR; UPDATE "Rotina" SET tags = \'x\''),
+        write=True,
+    )
+
+    assert result["succeeded"] is False
+    assert "structured" in _error(result)
+    assert "- a" in _read(tmp_path / "r2.md")
+
+
+def test_update_on_one_row_does_not_touch_an_unrelated_rows_null_field(tmp_path: Path) -> None:
+    # r2's WHERE never matches, so nothing about r2 should change - not even
+    # canonicalizing its authored `campo: null` to absence, which would be
+    # an incidental side effect of recompiling every row of the touched
+    # type rather than only the ones the script actually changed.
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\nsetor: GAB\n---\n# R1\n")
+    _write(tmp_path / "r2.md", "---\ntype: Rotina\nsetor: OTHER\ncampo:\n---\n# R2\n")
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql="UPDATE \"Rotina\" SET setor = '#GAB#FSB' WHERE setor = 'GAB'",
+        write=True,
+    )
+
+    assert result["succeeded"] is True, result
+    assert _changed_paths(result) == ["r1.md"]
+    assert _read(tmp_path / "r2.md") == "---\ntype: Rotina\nsetor: OTHER\ncampo:\n---\n# R2\n"
+
+
 def test_adding_a_reserved_okf_prefixed_column_is_rejected(tmp_path: Path) -> None:
     _write(tmp_path / "r1.md", "---\ntype: Rotina\n---\n# R1\n")
     original = _read(tmp_path / "r1.md")
@@ -392,6 +430,42 @@ def test_adding_a_reserved_okf_prefixed_column_is_rejected(tmp_path: Path) -> No
 
     assert result["succeeded"] is False
     assert "__okf_" in _error(result)
+    assert _read(tmp_path / "r1.md") == original
+
+
+def test_adding_an_okf_prefixed_column_is_rejected_case_insensitively(tmp_path: Path) -> None:
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\n---\n# R1\n")
+    original = _read(tmp_path / "r1.md")
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql=(
+            'ALTER TABLE "Rotina" ADD COLUMN "__OKF_custom" VARCHAR; '
+            "UPDATE \"Rotina\" SET __OKF_custom = 'x'"
+        ),
+        write=True,
+    )
+
+    assert result["succeeded"] is False
+    assert "__okf_" in _error(result)
+    assert _read(tmp_path / "r1.md") == original
+
+
+def test_alter_column_type_change_is_rejected(tmp_path: Path) -> None:
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\nsetor: GAB\n---\n# R1\n")
+    original = _read(tmp_path / "r1.md")
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql=(
+            'ALTER TABLE "Rotina" ALTER COLUMN setor SET DATA TYPE INTEGER USING 0; '
+            'UPDATE "Rotina" SET __okf_path = __okf_path WHERE FALSE'
+        ),
+        write=True,
+    )
+
+    assert result["succeeded"] is False
+    assert "changed an existing column's type" in _error(result)
     assert _read(tmp_path / "r1.md") == original
 
 
@@ -440,16 +514,14 @@ def test_untouched_file_edited_before_write_aborts_as_a_conflict(
 def test_document_edited_right_after_materialization_read_is_still_caught(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The manifest baseline and the bytes fed to the SQL diff are the same read.
+    """The read that feeds the SQL diff is bracketed by two consistency stats.
 
-    r2 reads as `setor: OTHER` at the instant apply materializes it, so it
-    correctly never matches the WHERE clause below and is excluded from the
-    relational result. But the file changes to `setor: GAB` immediately
-    after that read - if the freshness baseline were captured separately
-    (and later) from the bytes used for materialization, that edit could go
-    unnoticed and the write would silently apply a partial migration. The
-    baseline instead comes from the very same visit that read the bytes, so
-    the later write-time recheck still catches the drift and aborts.
+    r2 changes to `setor: GAB` immediately after `apply` reads its bytes for
+    materialization - if the freshness signature were derived from a
+    `stat()` made separately from that read, a same-timing coincidence could
+    let the stale read go unnoticed. Requiring the stat taken right before
+    the read to match the one taken right after catches the drift the
+    instant it happens, rather than only much later at write time.
     """
     _write(tmp_path / "r1.md", "---\ntype: Rotina\nsetor: GAB\n---\n# R1\n")
     _write(tmp_path / "r2.md", "---\ntype: Rotina\nsetor: OTHER\n---\n# R2\n")
@@ -475,8 +547,46 @@ def test_document_edited_right_after_materialization_read_is_still_caught(
     )
 
     assert result["succeeded"] is False
-    assert "r2.md" in _str_list(result, "conflict_paths")
+    assert "changed while apply was reading it" in _error(result)
     assert "setor: GAB" in _read(tmp_path / "r1.md")
+
+
+def test_same_size_replace_during_read_is_still_caught(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A same-length swap between the two consistency stats is not invisible.
+
+    Deriving the manifest signature's size component from `len(raw)` (the
+    bytes actually read) instead of a separate `stat()` would let a
+    same-size replace slip through undetected: the recorded size would
+    still match reality even though the content differs. Bracketing the
+    read with two identical `stat()` calls catches this by mtime alone,
+    independent of whether the replacement happens to be the same length.
+    """
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\nsetor: AAAAA\n---\n# R1\n")
+
+    real_read = apply_module._read_concept_bytes  # noqa: SLF001
+    mutated = {"done": False}
+
+    def racing_read(path: Path) -> bytes:
+        raw = real_read(path)
+        if path.name == "r1.md" and not mutated["done"]:
+            mutated["done"] = True
+            (tmp_path / "r1.md").write_text(
+                "---\ntype: Rotina\nsetor: BBBBB\n---\n# R1\n", encoding="utf-8"
+            )
+        return raw
+
+    monkeypatch.setattr(apply_module, "_read_concept_bytes", racing_read)
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql="UPDATE \"Rotina\" SET setor = 'CCCCC' WHERE setor = 'AAAAA'",
+        write=True,
+    )
+
+    assert result["succeeded"] is False
+    assert "changed while apply was reading it" in _error(result)
 
 
 def test_type_named_like_the_internal_before_namespace_works_like_any_other_type(
