@@ -8,9 +8,12 @@ import okf_parser.apply as apply_module
 from okf_parser.apply import apply_bundle
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
 
     import pytest
+
+    from okf_parser.bundle import ValidationReport
 
 
 def _write(path: Path, text: str) -> None:
@@ -451,6 +454,27 @@ def test_adding_an_okf_prefixed_column_is_rejected_case_insensitively(tmp_path: 
     assert _read(tmp_path / "r1.md") == original
 
 
+def test_a_structured_okf_prefixed_key_is_rejected_too(tmp_path: Path) -> None:
+    # __okf_custom is structured here (a list), so it never becomes a
+    # writable column at all - but it's still a collision with the reserved
+    # prefix and must be refused up front, not silently hidden behind the
+    # internal column of the same name.
+    _write(
+        tmp_path / "r1.md",
+        "---\ntype: Rotina\n__okf_custom:\n  - a\n  - b\n---\n# R1\n",
+    )
+    original = _read(tmp_path / "r1.md")
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql='UPDATE "Rotina" SET __okf_path = __okf_path WHERE FALSE',
+    )
+
+    assert result["succeeded"] is False
+    assert "__okf_" in _error(result)
+    assert _read(tmp_path / "r1.md") == original
+
+
 def test_alter_column_type_change_is_rejected(tmp_path: Path) -> None:
     _write(tmp_path / "r1.md", "---\ntype: Rotina\nsetor: GAB\n---\n# R1\n")
     original = _read(tmp_path / "r1.md")
@@ -606,6 +630,112 @@ def test_type_named_like_the_internal_before_namespace_works_like_any_other_type
     assert result["succeeded"] is True, result
     text = _read(tmp_path / "r1.md")
     assert "setor: '#GAB#FSB'" in text or "setor: #GAB#FSB" in text
+
+
+def test_type_named_like_the_staging_variable_does_not_shadow_a_later_type(
+    tmp_path: Path,
+) -> None:
+    # The staging table for `okf_apply_stage_table` (materialized first,
+    # types are processed in sorted order) must not become the data source
+    # for the later-materialized "zzzz" type just because the two share a
+    # name - a random per-call staging name means there's nothing fixed to
+    # shadow, regardless of materialization order.
+    _write(
+        tmp_path / "a.md",
+        "---\ntype: okf_apply_stage_table\nx: from-stage-type\n---\n# A\n",
+    )
+    _write(tmp_path / "z.md", "---\ntype: zzzz\nx: from-zzzz\n---\n# Z\n")
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql="UPDATE \"zzzz\" SET x = 'updated' WHERE x = 'from-zzzz'",
+        write=True,
+    )
+
+    assert result["succeeded"] is True, result
+    assert _changed_paths(result) == ["z.md"]
+    assert "x: updated" in _read(tmp_path / "z.md") or "x: 'updated'" in _read(tmp_path / "z.md")
+    assert "x: from-stage-type" in _read(tmp_path / "a.md")
+
+
+def test_candidate_is_built_from_snapshot_bytes_not_a_transient_live_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A transient edit that reverts before the final hash check must not leak in.
+
+    1. `_snapshot_bundle` reads A (with `note: keep-me-A`).
+    2. Before the final hash recheck, the file is briefly B (`note:
+       keep-me-B`), then reverted to A.
+    3. The final hash check sees A again and lets the write through.
+
+    If the candidate were rendered from a *second* live read anywhere in
+    between (instead of exclusively from the bytes step 1 already
+    captured), it could have caught B in that window and published a
+    transformed B - which never belonged to the snapshot the migration was
+    validated against - while `note` still reads `keep-me-A` in the final
+    output only if the candidate genuinely never went back to the
+    filesystem for content.
+    """
+    _write(
+        tmp_path / "r1.md",
+        "---\ntype: Rotina\nsetor: GAB\nnote: keep-me-A\n---\n# R1\n",
+    )
+
+    real_validate_path = apply_module.validate_path
+    calls = {"count": 0}
+
+    def racing_validate_path(
+        path: Path,
+        exclude: Sequence[str] = (),
+        require_spec: str | None = None,
+        *,
+        normative_spec: bool = False,
+    ) -> ValidationReport:
+        calls["count"] += 1
+        if calls["count"] == 1:  # right after the baseline check, before the
+            # candidate is built - the exact window a fresh read of the real
+            # path (instead of the snapshot's bytes) would have been vulnerable
+            # to, before the fix.
+            (tmp_path / "r1.md").write_text(
+                "---\ntype: Rotina\nsetor: GAB\nnote: keep-me-B\n---\n# R1\n",
+                encoding="utf-8",
+            )
+            (tmp_path / "r1.md").write_text(
+                "---\ntype: Rotina\nsetor: GAB\nnote: keep-me-A\n---\n# R1\n",
+                encoding="utf-8",
+            )
+        return real_validate_path(path, exclude, require_spec, normative_spec=normative_spec)
+
+    monkeypatch.setattr(apply_module, "validate_path", racing_validate_path)
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql="UPDATE \"Rotina\" SET setor = '#GAB#FSB' WHERE setor = 'GAB'",
+        write=True,
+    )
+
+    assert result["succeeded"] is True, result
+    text = _read(tmp_path / "r1.md")
+    assert "setor: '#GAB#FSB'" in text or "setor: #GAB#FSB" in text
+    assert "note: keep-me-A" in text
+
+
+def test_update_selecting_an_already_null_field_deletes_it(tmp_path: Path) -> None:
+    # `campo` is NULL both before and after: a before/after value comparison
+    # alone can't tell "this row was selected and explicitly set to NULL"
+    # from "this row was never selected" - RETURNING resolves the ambiguity.
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\nsetor: GAB\ncampo:\n---\n# R1\n")
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql="UPDATE \"Rotina\" SET setor = 'NOVO', campo = NULL WHERE setor = 'GAB'",
+        write=True,
+    )
+
+    assert result["succeeded"] is True, result
+    text = _read(tmp_path / "r1.md")
+    assert "setor: NOVO" in text
+    assert "campo" not in text.split("---")[1]
 
 
 def test_write_preserves_bom_and_crlf(tmp_path: Path) -> None:

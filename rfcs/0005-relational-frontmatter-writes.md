@@ -347,6 +347,19 @@ result the same way tampering with `__okf_path` does. Writable body
 content is real future work, explicitly out of this RFC's scope, not a gap
 left open by omission.
 
+A third reserved, read-only column joins them for the same reason:
+
+- `__okf_frontmatter VARCHAR` — the exact raw YAML frontmatter block, as
+  authored, byte-for-byte (between the `---` delimiters, before parsing).
+
+Not a projection of the promoted scalar columns: those already expose
+every scalar key individually and typed as `VARCHAR`, so `__okf_frontmatter`
+exists for the case those columns can't cover — searching or pattern-matching
+across the *whole* frontmatter block at once (a structured field, a comment,
+a key not yet promoted because it's absent from the selected concepts),
+the same motivation as `__okf_body` for the Markdown side. Same posture:
+read-only, protected the same way, no write path defined for it.
+
 ### 2. Diff before write: every table, schema and rows, one document at a time
 
 After the script runs, `apply` diffs **every** materialized table against

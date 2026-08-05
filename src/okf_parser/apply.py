@@ -22,6 +22,7 @@ import os
 import re
 import shutil
 import tempfile
+import uuid
 from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
@@ -101,11 +102,18 @@ class _RawDocument:
     body_text: str
 
 
-def _read_raw(path: Path) -> _RawDocument | None:
-    raw = path.read_bytes()
-    bom = b"\xef\xbb\xbf" if raw.startswith(b"\xef\xbb\xbf") else b""
+def _parse_raw(data: bytes) -> _RawDocument | None:
+    """Split already-read bytes for lossless round-tripping.
+
+    Deliberately takes bytes, not a path: every candidate this module writes
+    must be built from the same bytes the SQL diff was computed against
+    (captured once in `_snapshot_bundle`), never from a fresh read of the
+    real file made later in the pipeline - that second, later read is
+    exactly the gap a concurrent edit could hide in.
+    """
+    bom = b"\xef\xbb\xbf" if data.startswith(b"\xef\xbb\xbf") else b""
     try:
-        text = raw[len(bom) :].decode("utf-8")
+        text = data[len(bom) :].decode("utf-8")
     except UnicodeDecodeError:
         return None
     crlf = "\r\n" in text
@@ -152,9 +160,9 @@ class _Concept:
     concept_id: str
     concept_type: str
     frontmatter: dict[str, object]
-    frontmatter_text: str
     body: str
     content_hash: str
+    raw: _RawDocument
 
 
 def _read_concept_bytes(path: Path) -> bytes:
@@ -166,27 +174,24 @@ def _parse_concept(root: Path, path: Path, raw: bytes) -> _Concept | None:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
         return None
-    normalized = text.removeprefix("﻿")
     try:
         parsed = parse_document_text(path, text)
     except DocumentParseError:
         return None
     if not parsed.concept_type:
         return None
-    # Same pattern parser.py itself matches with; kept raw (not reformatted)
-    # for the read-only __okf_frontmatter column, distinct from `frontmatter`
-    # (the parsed mapping used to build the writable columns).
-    match = _FRONTMATTER_RE.match(normalized)
-    frontmatter_text = match.group(1) if match else ""
+    raw_document = _parse_raw(raw)
+    if raw_document is None:
+        return None
     return _Concept(
         path=path,
         relative=path.relative_to(root).as_posix(),
         concept_id=concept_id(root, path),
         concept_type=parsed.concept_type,
         frontmatter=dict(parsed.frontmatter),
-        frontmatter_text=frontmatter_text,
         body=parsed.body,
         content_hash=hashlib.sha256(raw).hexdigest(),
+        raw=raw_document,
     )
 
 
@@ -345,7 +350,7 @@ def _build_table(
         columns["__okf_logical_key"].append(concept.concept_id)
         columns["__okf_body"].append(concept.body)
         columns["__okf_body_lines"].append(concept.body.splitlines())
-        columns["__okf_frontmatter"].append(concept.frontmatter_text)
+        columns["__okf_frontmatter"].append(concept.raw.frontmatter_text)
         for name in field_names:
             value = concept.frontmatter.get(name)
             columns[name].append(value if isinstance(value, str) else None)
@@ -361,16 +366,27 @@ def _build_table(
             *(pa.field(name, pa.string()) for name in field_names),
         ]
     )
-    # A local Python variable, referenced by name in the SQL string below:
-    # DuckDB's replacement scan finds it via the calling frame, so nothing is
-    # ever registered into the catalog under a predictable name a real
-    # `type` could collide with (the `_before`-table problem, one level
-    # earlier in the pipeline). Ruff can't see that reference inside the
-    # f-string, hence the unused-variable suppression.
-    okf_apply_stage_table = pa.table(columns, schema=schema)  # noqa: F841
-    # table_name is quoted via _quote_ident, not interpolated raw.
-    query = f"CREATE TEMP TABLE {_quote_ident(table_name)} AS SELECT * FROM okf_apply_stage_table"  # noqa: S608
-    con.execute(query)
+    table = pa.table(columns, schema=schema)
+    # A per-call random name, not a fixed predictable one: DuckDB's
+    # replacement scan resolves a name by lookup order (real catalog table
+    # first, calling-frame variable second), so a *fixed* staging name -
+    # whether a registered relation or a Python local - can be shadowed by a
+    # real `type` materialized earlier under that exact name, silently
+    # feeding the wrong data into whatever gets built from it next. A random
+    # name collapses that risk to cryptographic near-impossibility, and even
+    # in that case `register()` raises a clean CatalogException rather than
+    # silently resolving to the wrong relation.
+    staging_name = f"__okf_apply_stage_{uuid.uuid4().hex}"
+    con.register(staging_name, table)
+    try:
+        # Both identifiers are quoted via _quote_ident, not interpolated raw.
+        query = (
+            f"CREATE TEMP TABLE {_quote_ident(table_name)} "  # noqa: S608
+            f"AS SELECT * FROM {_quote_ident(staging_name)}"
+        )
+        con.execute(query)
+    finally:
+        con.unregister(staging_name)
 
 
 @dataclass(frozen=True, slots=True)
@@ -399,7 +415,10 @@ def _materialize(
     structured_by_type: dict[str, frozenset[str]] = {}
     for type_name, type_concepts in sorted(by_type.items()):
         kinds = _field_kinds(type_concepts)
-        _check_reserved_field_names(type_name, kinds.scalar)
+        # Checked against every authored key, not just the scalar-writable
+        # ones: a structured key under the reserved prefix is just as much a
+        # collision, even though it never becomes a column at all.
+        _check_reserved_field_names(type_name, [*kinds.scalar, *kinds.structured])
         try:
             _build_table(con, type_name, kinds.scalar, type_concepts)
         except duckdb.CatalogException as exc:
@@ -430,19 +449,27 @@ def _materialize(
 @dataclass(frozen=True, slots=True)
 class _TypeSnapshot:
     schema: dict[str, str]
-    rows: dict[str, dict[str, object]]
+    table: pa.Table
 
 
 def _snapshot_types(
     con: duckdb.DuckDBPyConnection, fields_by_type: dict[str, list[str]]
 ) -> dict[str, _TypeSnapshot]:
-    """Capture every type table's schema and rows before the script runs.
+    """Capture every type table's schema and full relation before the script runs.
 
-    Held only in Python, never as a queryable table in `con`'s catalog, so the
-    caller's `--sql` cannot address, corrupt, or collide a type against it.
+    Held only in Python (as Arrow, DuckDB's own zero-copy interchange
+    format), never as a queryable table in `con`'s catalog, so the caller's
+    `--sql` cannot address, corrupt, or collide a type against it. Kept as a
+    relation rather than a dict-of-dicts so comparing it against the
+    post-script state is DuckDB's own `EXCEPT`/`JOIN`, not a hand-rolled
+    Python equality walk over every row.
     """
     return {
-        type_name: _TypeSnapshot(schema=_describe(con, type_name), rows=_fetch_rows(con, type_name))
+        type_name: _TypeSnapshot(
+            schema=_describe(con, type_name),
+            # table_name is quoted via _quote_ident, not interpolated raw.
+            table=con.execute(f"SELECT * FROM {_quote_ident(type_name)}").to_arrow_table(),  # noqa: S608
+        )
         for type_name in fields_by_type
     }
 
@@ -505,10 +532,6 @@ def _describe(con: duckdb.DuckDBPyConnection, table: str) -> dict[str, str]:
     return {row[0]: row[1] for row in rows}
 
 
-def _as_text(value: object) -> str | None:
-    return value if isinstance(value, str) else None
-
-
 def _fetch_rows(con: duckdb.DuckDBPyConnection, table: str) -> dict[str, dict[str, object]]:
     # table is quoted via _quote_ident, not interpolated raw.
     query = f"SELECT * FROM {_quote_ident(table)}"  # noqa: S608
@@ -523,7 +546,7 @@ def _fetch_rows(con: duckdb.DuckDBPyConnection, table: str) -> dict[str, dict[st
 
 def _check_alter_shape(
     before: dict[str, dict[str, str]], after: dict[str, dict[str, str]], query: str
-) -> None:
+) -> tuple[str, str] | None:
     """Reject any ALTER whose catalog delta isn't a single add/drop/rename column.
 
     The RFC promises leading statements are limited to
@@ -531,6 +554,9 @@ def _check_alter_shape(
     forms (a type change, a constraint, a default) that a name/type diff
     wouldn't otherwise notice, since `DESCRIBE` only reports name and type.
     Checked against the real catalog per statement, not by parsing the SQL.
+    Returns ``(old_name, new_name)`` when the statement was a rename, so the
+    caller can track a value's structural carry across it - ``None``
+    otherwise.
     """
     changed_types = [type_name for type_name in before if before[type_name] != after[type_name]]
     if len(changed_types) != 1:
@@ -554,6 +580,11 @@ def _check_alter_shape(
     if not (is_add or is_drop or is_rename):
         msg = f"ALTER statement must add, drop, or rename exactly one column: {query}"
         raise ApplyError(msg)
+    if is_rename:
+        (old_name,) = removed
+        (new_name,) = added
+        return (old_name, new_name)
+    return None
 
 
 def _run_transaction(
@@ -561,15 +592,37 @@ def _run_transaction(
     type_names: Sequence[str],
     alter_queries: list[str],
     update_query: str,
-) -> None:
+) -> tuple[frozenset[str], dict[str, str]]:
+    """Run the script; return selected concept IDs and the rename chain.
+
+    `RETURNING __okf_concept_id` is the only reliable source for "which rows
+    did the trailing UPDATE's WHERE select": a row the WHERE matched but
+    whose SET didn't actually change any value looks, in a before/after
+    comparison, identical to a row the WHERE never touched. Asking DuckDB
+    directly instead of parsing the SET list keeps the "no SQL intent
+    parsing" property the rest of this module holds to.
+
+    The rename chain (old column name -> its current name, folded through
+    every leading `RENAME COLUMN`) is tracked the same way - from each
+    statement's own catalog delta, never its text - because a renamed
+    column's value is carried structurally to every row that had the old
+    name, independent of whether the trailing UPDATE's `WHERE` selected that
+    row at all.
+    """
+    renamed: dict[str, str] = {}
     con.execute("BEGIN TRANSACTION")
     try:
         for query in alter_queries:
             before = {t: _describe(con, t) for t in type_names}
             con.execute(query)
             after = {t: _describe(con, t) for t in type_names}
-            _check_alter_shape(before, after, query)
-        con.execute(update_query)
+            rename = _check_alter_shape(before, after, query)
+            if rename is not None:
+                old_name, new_name = rename
+                origin = next((k for k, v in renamed.items() if v == old_name), old_name)
+                renamed[origin] = new_name
+        cursor = con.execute(f"{update_query} RETURNING __okf_concept_id")
+        selected_ids = frozenset(row[0] for row in cursor.fetchall())
     except duckdb.Error as exc:
         con.execute("ROLLBACK")
         msg = f"script failed: {exc}"
@@ -578,18 +631,43 @@ def _run_transaction(
         con.execute("ROLLBACK")
         raise
     con.execute("COMMIT")
+    return selected_ids, renamed
+
+
+def _relation_differs(
+    scratch: duckdb.DuckDBPyConnection,
+    before: pa.Table,  # noqa: ARG001 - referenced by name in the SQL text, not directly.
+    after: pa.Table,  # noqa: ARG001 - referenced by name in the SQL text, not directly.
+) -> bool:
+    """Whether two same-shaped Arrow relations hold different rows.
+
+    `before`/`after` are referenced by name in the SQL text below and
+    resolved by DuckDB's replacement scan against this function's own local
+    variables - never registered under a name anything else could address.
+    `EXCEPT` is exactly the "did anything change" question; there's no
+    reason to fetch every row into Python just to walk a dict equality.
+    """
+    if scratch.sql("SELECT * FROM before EXCEPT SELECT * FROM after").fetchone() is not None:
+        return True
+    return scratch.sql("SELECT * FROM after EXCEPT SELECT * FROM before").fetchone() is not None
 
 
 def _find_touched_type(
-    con: duckdb.DuckDBPyConnection, snapshots: dict[str, _TypeSnapshot]
+    con: duckdb.DuckDBPyConnection,
+    scratch: duckdb.DuckDBPyConnection,
+    snapshots: dict[str, _TypeSnapshot],
 ) -> str | None:
     try:
-        changed_types = [
-            type_name
-            for type_name, snapshot in snapshots.items()
-            if _describe(con, type_name) != snapshot.schema
-            or _fetch_rows(con, type_name) != snapshot.rows
-        ]
+        changed_types = []
+        for type_name, snapshot in snapshots.items():
+            after_schema = _describe(con, type_name)
+            if after_schema != snapshot.schema:
+                changed_types.append(type_name)
+                continue
+            # table_name is quoted via _quote_ident, not interpolated raw.
+            after_table = con.execute(f"SELECT * FROM {_quote_ident(type_name)}").to_arrow_table()  # noqa: S608
+            if _relation_differs(scratch, snapshot.table, after_table):
+                changed_types.append(type_name)
     except duckdb.Error as exc:
         msg = f"script failed: {exc}"
         raise ApplyError(msg) from exc
@@ -597,6 +675,23 @@ def _find_touched_type(
         msg = f"script touched more than one type's table: {sorted(changed_types)}"
         raise ApplyError(msg)
     return changed_types[0] if changed_types else None
+
+
+def _type_of_selected(
+    concepts_by_type: dict[str, list[_Concept]], selected_ids: frozenset[str]
+) -> str | None:
+    """Which type owns any of the UPDATE's `RETURNING`-selected concept IDs.
+
+    A row the WHERE matched but whose SET didn't change any stored value is
+    invisible to `_find_touched_type`'s before/after comparison - this is
+    the fallback that still recognizes its type as touched.
+    """
+    if not selected_ids:
+        return None
+    for type_name, concepts in concepts_by_type.items():
+        if any(concept.concept_id in selected_ids for concept in concepts):
+            return type_name
+    return None
 
 
 def _check_result_schema(
@@ -635,43 +730,92 @@ def _check_result_schema(
 
 
 def _check_result_rows(
-    before_rows: dict[str, dict[str, object]], after_rows: dict[str, dict[str, object]]
+    scratch: duckdb.DuckDBPyConnection,
+    before: pa.Table,  # noqa: ARG001 - referenced by name in the SQL text, not directly.
+    after: pa.Table,  # noqa: ARG001 - referenced by name in the SQL text, not directly.
 ) -> None:
-    if before_rows.keys() != after_rows.keys():
+    """Row identity/cardinality and protected-column tamper checks, via SQL.
+
+    `before`/`after` are resolved by DuckDB's replacement scan against this
+    function's own parameters, the same as `_relation_differs`.
+    """
+    changed_cardinality = scratch.sql(
+        "SELECT __okf_concept_id FROM before EXCEPT SELECT __okf_concept_id FROM after "
+        "UNION ALL "
+        "SELECT __okf_concept_id FROM after EXCEPT SELECT __okf_concept_id FROM before"
+    ).fetchone()
+    if changed_cardinality is not None:
         msg = "script changed row identity or cardinality"
         raise ApplyError(msg)
-    for row_id, before_row in before_rows.items():
-        after_row = after_rows[row_id]
-        for column in _PROTECTED_COLUMNS:
-            if before_row.get(column) != after_row.get(column):
-                msg = f'row "{row_id}" changed protected column "{column}"'
-                raise ApplyError(msg)
+    for column in sorted(_PROTECTED_COLUMNS):
+        quoted = _quote_ident(column)
+        # column is one of the fixed _PROTECTED_COLUMNS names, not caller input.
+        tampered = scratch.sql(
+            f"SELECT b.__okf_concept_id FROM before b JOIN after a USING (__okf_concept_id) "  # noqa: S608
+            f"WHERE b.{quoted} IS DISTINCT FROM a.{quoted} LIMIT 1"
+        ).fetchone()
+        if tampered is not None:
+            msg = f'row "{tampered[0]}" changed protected column "{column}"'
+            raise ApplyError(msg)
 
 
-def _compile_row_diff(
+class _NotApplicable:
+    """Sentinel: this field needs no diff entry at all - distinct from `None` (delete)."""
+
+
+_NOT_APPLICABLE = _NotApplicable()
+
+
+def _compile_field_value(final_value: object, *, was_present: bool) -> str | None | _NotApplicable:
+    """Unconditionally compile one field's target: a delete only if it was ever authored."""
+    target = final_value if isinstance(final_value, str) else None
+    if target is None:
+        return None if was_present else _NOT_APPLICABLE
+    return target
+
+
+def _compile_changed_field_value(
+    final_value: object, *, was_present: bool, current_value: object
+) -> str | None | _NotApplicable:
+    """Same as `_compile_field_value`, but skip emitting an entry that changes nothing."""
+    target = final_value if isinstance(final_value, str) else None
+    if target is None:
+        return None if was_present else _NOT_APPLICABLE
+    return _NOT_APPLICABLE if current_value == target else target
+
+
+def _compile_row_diff(  # noqa: PLR0913 - each argument is a distinct compile input.
     concept: _Concept,
     field_names: Sequence[str],
     removed_columns: frozenset[str],
-    before_row: dict[str, object],
+    renamed_from: dict[str, str],
     after_row: dict[str, object],
+    *,
+    selected: bool,
 ) -> dict[str, str | None]:
     """Recompute one concept's target frontmatter purely from the final relation.
 
     Deliberately blind to *how* the final state was reached - a rename, a
     drop-then-recreate, a chain of renames, and a direct value update that
-    happens to land on the same result all compile to the same diff, because
-    only the relation's own before/after values are ever consulted, never the
-    script's text. Two cases:
+    happens to land on the same result all compile to the same diff. Three
+    cases:
 
     - a column no longer in the final schema at all (dropped, or renamed
       away) deletes its key wherever it was authored, unconditionally - a
       structural, bundle-wide change, independent of any row's value;
-    - a column still in the final schema (kept, or newly added) only
-      touches a row whose *own* before/after value actually differs -
-      `SET x = x` and a row an `UPDATE ... WHERE` never matched both leave
-      that row's key exactly as authored, even if its value happens to be
-      NULL. NULL still means absent per RFC 0005's contract, applied only
-      to a value that is genuinely part of this change.
+    - a column that is the final name of a rename chain (`renamed_from`
+      maps it back to the original key) is likewise structural: every row
+      that authored the *old* key gets the final value, independent of the
+      trailing UPDATE's `WHERE` - a rename is a schema operation, not a row
+      selection;
+    - any other column still in the final schema (kept, or newly added via
+      `ADD COLUMN`) only touches a row the UPDATE actually selected, per
+      `RETURNING`. Within a selected row, a final NULL always means "delete
+      this key" - even one that was already NULL before the script ran,
+      which a before/after value comparison alone cannot distinguish from
+      "this row was never selected at all." A row the `WHERE` never matched
+      is left exactly as authored, even if one of its fields happens to be
+      NULL too.
     """
     diff: dict[str, str | None] = {}
     for name in field_names:
@@ -679,16 +823,24 @@ def _compile_row_diff(
             if name in concept.frontmatter:
                 diff[name] = None
             continue
-        before_value = before_row.get(name)
-        after_value = after_row.get(name)
-        if before_value == after_value:
-            continue
-        target = after_value if isinstance(after_value, str) else None
-        if target is None:
-            if name in concept.frontmatter:
-                diff[name] = None
+        origin = renamed_from.get(name)
+        if origin is not None:
+            # The new name never existed before this script, so there's no
+            # existing value of *this* key to compare against - only
+            # whether the old key was ever authored at all.
+            entry = _compile_field_value(
+                after_row.get(name), was_present=origin in concept.frontmatter
+            )
+        elif selected:
+            entry = _compile_changed_field_value(
+                after_row.get(name),
+                was_present=name in concept.frontmatter,
+                current_value=concept.frontmatter.get(name),
+            )
         else:
-            diff[name] = target
+            entry = _NOT_APPLICABLE
+        if not isinstance(entry, _NotApplicable):
+            diff[name] = entry
     return diff
 
 
@@ -705,20 +857,34 @@ def _execute_script(
     ephemeral in-memory database is touched.
     """
     snapshots = _snapshot_types(con, materialized.fields_by_type)
-    _run_transaction(con, list(materialized.fields_by_type), alter_queries, update_query)
+    selected_ids, renamed = _run_transaction(
+        con, list(materialized.fields_by_type), alter_queries, update_query
+    )
+    renamed_from = {new_name: old_name for old_name, new_name in renamed.items()}
 
-    touched = _find_touched_type(con, snapshots)
-    if touched is None:
-        return _ScriptOutcome(touched_type=None)
+    scratch = duckdb.connect()
+    try:
+        touched = _find_touched_type(con, scratch, snapshots)
+        selected_type = _type_of_selected(materialized.concepts_by_type, selected_ids)
+        if touched is None:
+            touched = selected_type
+        elif selected_type is not None and selected_type != touched:
+            msg = f"script touched more than one type's table: {sorted({touched, selected_type})}"
+            raise ApplyError(msg)
+        if touched is None:
+            return _ScriptOutcome(touched_type=None)
 
-    after_schema = _describe(con, touched)
-    structured = materialized.structured_by_type[touched]
-    _check_result_schema(after_schema, snapshots[touched].schema, structured)
+        after_schema = _describe(con, touched)
+        structured = materialized.structured_by_type[touched]
+        _check_result_schema(after_schema, snapshots[touched].schema, structured)
 
-    before_rows = snapshots[touched].rows
+        # table_name is quoted via _quote_ident, not interpolated raw.
+        after_table = con.execute(f"SELECT * FROM {_quote_ident(touched)}").to_arrow_table()  # noqa: S608
+        _check_result_rows(scratch, snapshots[touched].table, after_table)
+    finally:
+        scratch.close()
+
     after_rows = _fetch_rows(con, touched)
-    _check_result_rows(before_rows, after_rows)
-
     field_names = materialized.fields_by_type[touched]
     all_field_names = sorted((set(after_schema) | set(field_names)) - _PROTECTED_COLUMNS)
     removed_columns = frozenset(snapshots[touched].schema) - set(after_schema) - _PROTECTED_COLUMNS
@@ -730,8 +896,9 @@ def _execute_script(
                 concept,
                 all_field_names,
                 removed_columns,
-                before_rows[concept.concept_id],
+                renamed_from,
                 after_rows[concept.concept_id],
+                selected=concept.concept_id in selected_ids,
             ),
         )
         if diff
@@ -825,14 +992,17 @@ def apply_bundle(  # noqa: PLR0913 - each argument is an independent public CLI 
     candidates: dict[str, tuple[_RawDocument, str, Path]] = {}
     for row in outcome.row_diffs:
         concept = concepts_by_id[row.concept_id]
-        raw = _read_raw(concept.path)
-        if raw is None or not _round_trips_losslessly(yaml, raw.frontmatter_text):
+        # Built from the snapshot's own bytes (`concept.raw`), not a fresh
+        # read of the real path: the candidate must reflect exactly what the
+        # SQL diff was computed against, not whatever happens to be on disk
+        # by the time this loop runs.
+        if not _round_trips_losslessly(yaml, concept.raw.frontmatter_text):
             skipped_paths.append(concept.relative)
             continue
         new_frontmatter_text = _apply_frontmatter_changes(
-            yaml, raw.frontmatter_text, row.changed_fields
+            yaml, concept.raw.frontmatter_text, row.changed_fields
         )
-        candidates[concept.relative] = (raw, new_frontmatter_text, concept.path)
+        candidates[concept.relative] = (concept.raw, new_frontmatter_text, concept.path)
         changed_paths.append(concept.relative)
 
     if skipped_paths:
