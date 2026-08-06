@@ -53,6 +53,15 @@ back into the declaration file (deferred to RFC 0007). Each of those is a
 serialization or evaluation problem that does not have to be solved for a
 declared type to be useful today.
 
+**A declared column is never the only copy of a document's data.**
+Underneath every declared column sits a hidden, unconditionally lossless
+`VARCHAR` column holding the field exactly as authored; the declared
+column is a DuckDB *generated* column computed from it. Casting a document
+into a physical type can round, truncate, or fail outright — that is
+inherent to what a physical type is — but it never has to be the thing
+that decides whether the original text survives. Decision 5 is where this
+is built and why two earlier drafts of the cast rule needed it.
+
 ## Motivation
 
 `check --require-spec` (0.14.0) established that a type's specification
@@ -281,111 +290,146 @@ cast rule compares timestamp values, and leaving the session timezone
 ambient would make whether a column types depend on the machine running the
 command.
 
-### 5. Casting is all-or-nothing, per column
+### 5. Raw is the truth; typed is a generated projection over it
 
-For each declared column, the compiler casts the whole column with
-`TRY_CAST`. If **every** non-null value converts, the column materializes
-with its declared type. If **any** non-null value yields `NULL`, the
-**entire column** falls back to `VARCHAR` — never partially typed, never
-typed with the offending rows nulled out.
+Two review rounds tried to make one physical column serve two jobs at
+once — carry the document's exact content, and carry a physical type —
+and broke on both a numeric and a temporal counterexample each time. A
+`DECIMAL(38,10)` carrier accepted `'1.00000000001'` as `BIGINT` (verified
+— the carrier's own limit hid the very digit it existed to catch), and a
+`TIMESTAMP`/`TIMESTAMPTZ` round-trip couldn't see a nanosecond-precision
+input at all, because DuckDB's own timestamp storage is microsecond and
+both sides of the comparison were truncated identically before comparing.
+Every fix widened the carrier; every wider carrier had its own edge one
+step further out. That is not a bug to patch again — it is what happens
+when one column is asked to be both the lossless record and the physical
+value.
 
-The threshold is deliberately absolute rather than proportional: a column
-whose type depends on the ratio of bad values is a column whose type
-changes when a document is added, which is worse for a consumer than a
-column that is simply `VARCHAR` until the data is clean. One bad value in
-ten thousand degrades the column, and the diagnostic says exactly that —
-declared type, physical type used, failure count, first offending value and
-the document holding it.
-
-**`TRY_CAST` alone is not enough, and an earlier draft of this decision was
-wrong to say it was.** `TRY_CAST` nulls a conversion that *fails*; it says
-nothing about a conversion that *succeeds while losing information*.
-Verified against DuckDB 1.5.5:
-
-```text
-TRY_CAST('1.5' AS INTEGER)                      -> 2          rounds
-TRY_CAST('12.34567' AS DECIMAL(18,4))           -> 12.3457    rounds
-TRY_CAST('2024-05-10T14:30:00Z' AS DATE)        -> 2024-05-10 truncates
-TRY_CAST('2024-05-10 14:30:00+03' AS TIMESTAMP) -> 14:30:00   drops the offset
-```
-
-Every one of those is a silent lie about the data. So the rule has a
-second half: **exact-carrier comparison**. A value casts cleanly when
-`TRY_CAST` succeeds *and* the typed value still equals the original when
-both are compared in a carrier that is exact for the declared type's
-family:
-
-| Declared family | Accepted when |
-| --- | --- |
-| integer (`BIGINT`) | `TRY_CAST(v AS DECIMAL(38,10)) = CAST(TRY_CAST(v AS BIGINT) AS DECIMAL(38,10))` |
-| fixed-point (`DECIMAL(p,s)`) | `TRY_CAST(v AS DECIMAL(38,10)) = CAST(TRY_CAST(v AS DECIMAL(p,s)) AS DECIMAL(38,10))` |
-| `DATE` | `TRY_CAST(v AS TIMESTAMP)` is null, or equals `CAST(TRY_CAST(v AS DATE) AS TIMESTAMP)` |
-| `TIMESTAMP` (naive) | `TRY_CAST(v AS TIMESTAMPTZ) = CAST(TRY_CAST(v AS TIMESTAMP) AS TIMESTAMPTZ)` |
-| `T[]` | `T`'s own predicate applied element-wise, via `list_transform` — never `TRY_CAST` on the list |
-| `VARCHAR`, `BOOLEAN`, `UUID`, `TIMESTAMPTZ` | `TRY_CAST` alone — no lossy path exists from text |
-| `DOUBLE` | `TRY_CAST` alone — see below |
-
-`DOUBLE` is the one deliberate exception. Binary floating point cannot
-represent most decimal fractions exactly, so an exact-carrier predicate
-would reject `'0.1'`, and a producer who declares `DOUBLE` has asked for
-approximate representation by choosing the type. `DECIMAL(p,s)` is the
-type for a value whose exactness matters, and its predicate enforces that.
-
-**The carrier is `DECIMAL(38,10)`, not `DOUBLE`, and this matters.** An
-earlier draft used `DOUBLE`, which is not exact past ~15 significant
-digits, so the carrier destroyed the very difference it was there to
-detect: `'9007199254740992.4'` declared `BIGINT` casts to
-`9007199254740992` and the `DOUBLE` comparison **accepted** it (verified).
-With the `DECIMAL(38,10)` carrier the same value is rejected, as are
-`'9007199254740993.7'` and `'1.5'`, while `'001'`, `' 5 '`, and `'1.0'`
-still pass. A value too large or too precise for `DECIMAL(38,10)` makes
-`TRY_CAST` return `NULL`, the comparison yields `NULL`, and the column
-degrades — conservative in exactly the right direction.
-
-**Arrays are element-wise, not whole-list.** DuckDB casts list children
-individually, so `TRY_CAST(['1.5','2'] AS BIGINT[])` succeeds and yields
-`[2, 2]` (verified) — the same rounding, one level down, and an earlier
-draft's "arrays need `TRY_CAST` alone" would have accepted it. The
-predicate for `T[]` is `T`'s predicate mapped over the elements:
+So this RFC now keeps two, and only the compiler-facing surface changes:
+a hidden `VARCHAR` column carrying the document's text exactly as
+authored, and the declared column as a **generated column** computed from
+it:
 
 ```sql
-list_reduce(
-  list_transform(v, x -> CAST(<predicate for T on x> AS INT)),
-  (a, b) -> a * b
-) = 1
+"custo" DECIMAL(18,4) GENERATED ALWAYS AS (TRY_CAST(__okf_raw_custo AS DECIMAL(18,4)))
 ```
 
-Four scalar predicates plus one recursion rule, each expressible as one
-SQL comparison over the whole column. The rule **rejects loss and accepts
-normalization**, which is the distinction that matters — verified
-behaviour of the table above:
+`__okf_raw_custo` is not something a declaration writes — it is
+synthesized by the compiler for every declared column, named under the
+`__okf_` prefix `apply` already reserves and rejects from authored fields
+(`apply.py:_check_reserved_field_names`), so a declaration or a document
+using that name collides with an existing rule rather than a new one.
+
+This buys three things at once, verified rather than assumed:
+
+- **The write guard is DuckDB's, not ours.** `UPDATE t SET custo = 5`
+  against a generated column fails at bind time —
+  `Binder Error: Can't update column "custo" because it is a generated
+  column!` (verified) — which replaces the row-level Python guard the
+  previous draft needed with a property the database enforces before
+  `apply` ever runs its own checks. Decision 7a is now this fact, not a
+  bespoke comparison.
+- **No cast is ever "wrong."** `TRY_CAST` truncating a nanosecond
+  timestamp to microseconds, or rounding `'1.5'` to `2`, is no longer a
+  silent lie about the data — the lie was only possible when the rounded
+  value *replaced* the original. Now it sits beside a raw column that
+  still holds `'1.5'` exactly. What the generated column promises is
+  narrower and true: "DuckDB's own `TRY_CAST` of the authored text,"
+  nothing more.
+- **`apply` writes only through the raw column**, per decision 7a — there
+  is no serialization problem to solve for reading, because reading never
+  touches raw at all.
+
+**The all-or-nothing gate moves from "compare in a carrier" to "does the
+generated column exist," decided once per column, not per row.** For each
+declared column, the compiler runs one check against the whole column
+before deciding whether to create it as generated:
+
+```sql
+count(*) filter (
+  where v is not null and not (<exactness predicate for T> on v)
+) = 0
+```
+
+If it holds for every row, the column is created generated, as above. If
+it fails for any row, the column is **not** created at all — no generated
+column, no typed surface — and the field is materialized exactly as RFC
+0005 already does, `VARCHAR`, straight from the same text that would have
+been the raw column. This is decision 5's original policy (one bad value
+degrades the whole column, not just that row) preserved exactly, now
+enforced before compilation instead of by discarding a cast after the
+fact — and it is why a hidden raw column is unconditionally present for
+every declared field regardless of outcome: it is the one thing both
+branches read from.
+
+**The exactness predicate is lexical, not carrier-based — a fixed
+profile per family, with no numeric-width limit to run out of.** Verified
+against DuckDB 1.5.5's `regexp_matches`, operating on the original text,
+never on a cast result:
+
+| Declared family | Exactness predicate on trimmed `v` |
+| --- | --- |
+| integer (`BIGINT`) | `regexp_matches(v, '^[+-]?[0-9]+(\.0+)?$')` |
+| fixed-point (`DECIMAL(p,s)`) | `regexp_matches(v, '^[+-]?[0-9]+(\.[0-9]{0,s}0*)?$')` (`s` from the declared scale) |
+| `TIMESTAMP` (naive) | ISO 8601, no offset, ≤ 6 fractional-second digits |
+| `TIMESTAMPTZ` | ISO 8601, offset present, ≤ 6 fractional-second digits |
+| `DATE` | a bare date, or a `TIMESTAMP`/`TIMESTAMPTZ` whose time-of-day is exactly midnight |
+| `T[]` | `T`'s predicate applied to every element (below) |
+| `VARCHAR`, `BOOLEAN`, `UUID`, `DOUBLE` | `TRY_CAST` succeeding is itself exact — no lossy path from text exists for these |
+
+Each predicate is combined with `TRY_CAST(v AS T) IS NOT NULL` — a value
+can satisfy the text shape and still be out of range (`DECIMAL(3,0)` given
+`'999999'`), and `TRY_CAST` catches that independently.
+
+`DOUBLE` stays exact-by-`TRY_CAST`-alone deliberately: binary floating
+point cannot represent most decimal fractions exactly, so a lexical
+exactness rule would reject `'0.1'`, and declaring `DOUBLE` is itself the
+producer's request for approximate representation. `DECIMAL(p,s)` is the
+type for a value whose exactness is meant to be enforced.
+
+Verified behaviour of the integer/decimal/timestamp rows, including the
+two counterexamples the carrier-based rule missed:
 
 ```text
-'001'     -> BIGINT          accepted (1)
-' 5 '     -> BIGINT          accepted (5)
-'1.5'     -> BIGINT          rejected
-'12.34'   -> DECIMAL(18,4)   accepted (12.3400 — scale padding is not loss)
-'12.34567'-> DECIMAL(18,4)   rejected
-'2024-05-10T00:00:00Z' -> DATE   accepted (midnight carries nothing)
-'2024-05-10T14:30:00Z' -> DATE   rejected
+'1.00000000001'  -> BIGINT           rejected (was wrongly accepted by DECIMAL(38,10))
+'1.00000000000'  -> BIGINT           accepted
+'001'            -> BIGINT           accepted
+'1.5'            -> BIGINT           rejected
+'12.34'          -> DECIMAL(18,4)    accepted
+'12.34567'       -> DECIMAL(18,4)    rejected
+...00.123456Z    -> TIMESTAMPTZ      accepted
+...00.123456789Z -> TIMESTAMPTZ      rejected (was wrongly accepted — both sides of the
+                                       old round-trip truncated to the same microsecond)
 ```
 
-A lexical round-trip (`CAST(CAST(v AS T) AS VARCHAR) = v`) was considered
-and rejected as the rule: it fails `'12.34'` → `DECIMAL(18,4)` and every
-ISO-8601 instant written with `Z` (DuckDB renders `+00`), degrading the two
-most common well-formed cases in a bundle.
+**Arrays: element-wise, via `list_filter`/`list_count`, not
+`list_reduce`.** DuckDB casts list children individually — `TRY_CAST(v AS
+BIGINT[])` inherits the same per-element rounding `TRY_CAST(v AS BIGINT)`
+has — so `T[]`'s predicate is `T`'s predicate checked on every element,
+counting violations rather than multiplying booleans:
 
-**Constraints are out of v1 entirely.** An earlier draft had `NOT NULL`,
-`CHECK`, `UNIQUE`, `PRIMARY KEY`, and `DEFAULT` read and diagnosed but not
-enforced. That is a second system — it needs `duckdb_constraints()`,
-expression preservation, and a per-constraint evaluation semantics over
-documents — and `DEFAULT` is not even a condition existing data can
-violate. v1 reads exactly three things from a declaration: **column names,
-column types, and comments** — `NOT NULL` included in what is not read, so
-there is no "declared non-null" state to diagnose. A declaration carrying
-constraints is still well-formed; the constraints are simply not read, not
-enforced, and not diagnosed. They are the natural first extension once the
-typing half is in use.
+```sql
+list_count(list_filter(v, x -> x IS NOT NULL AND NOT (<predicate for T> on x))) = 0
+```
+
+An earlier draft used `list_reduce` with no initial value, which throws
+outright on an empty list (verified: `Cannot perform list_reduce on an
+empty input list`) — a declared array field with a document holding `[]`
+would have raised where it should simply pass. `list_filter`/`list_count`
+was verified against the empty list (`0 = 0`, accepted) and a list holding
+`NULL` (`NULL` values are skipped by the predicate, not treated as
+violations, so a nullable array element is representable) with no special
+case required in either statement.
+
+**Constraints are out of v1 entirely.** `NOT NULL`, `CHECK`, `UNIQUE`,
+`PRIMARY KEY`, and `DEFAULT` are a second system — `duckdb_constraints()`,
+expression preservation, a per-constraint evaluation semantics over
+documents, and `DEFAULT` is not even a condition existing data can
+violate. v1 reads exactly three things from a declaration: **column
+names, column types, and comments.** A declaration carrying constraints is
+still well-formed; they are simply not read, not enforced, and not
+diagnosed. They are the natural first extension once the typing half is
+in use.
 
 ### 5a. The v1 type set, and what a type outside it does
 
@@ -408,16 +452,17 @@ in the table, `schema`'s inferred output in the export. One advisory
 diagnostic names the declared type and says v1 does not type it — the
 diagnostic is the only place the declared type survives.
 
-**This is a different outcome from a failing cast, and the two must not be
-merged.** A failing cast (decision 5) means a *supported* type the data
-does not currently satisfy: the column materializes as `VARCHAR` but the
+**This is a different outcome from a failing exactness check, and the two
+must not be merged.** A failing check (decision 5) means a *supported*
+type the data does not currently satisfy: no generated column is created,
+the field materializes as `VARCHAR` from the same raw text, but the
 declared type is still exported, because it is still an intelligible
-statement of intent (decision 9). An unsupported type is not intelligible
-to the exporter at all — there is no JSON Schema or Zod form for `STRUCT`
-under decision 10's closed mapping — so exporting "the declared type"
-would mean inventing one. An earlier draft routed both through a single
-fallback and so said both things at once; they are now separate cases in
-decision 7.
+statement of intent (decision 9). An unsupported type never reaches
+decision 5's check at all — there is no JSON Schema or Zod form for
+`STRUCT` under decision 10's closed mapping — so exporting "the declared
+type" would mean inventing one. An earlier draft routed both through a
+single fallback and so said both things at once; they are now separate
+cases in decision 7.
 
 This is deliberately a soft edge: the set grows by a later RFC naming a
 cast predicate and an export mapping for each addition, not by an
@@ -519,57 +564,59 @@ Every case resolves to "ignore the unusable part, compile the rest exactly
 as declared," never to a hard failure and never to discarding more than
 the one thing that broke.
 
-### 7a. `apply`: typed columns are readable, not writable, in v1
+### 7a. `apply`: typed columns are read-only because they are generated columns
 
 `apply` compiles declarations like every other surface — a declared
 `TIMESTAMPTZ` column is a real `TIMESTAMPTZ` in the ephemeral table, so
 `WHERE registrado_em > NOW() - INTERVAL 30 DAY` finally means what it says.
 That is where most of the value is, and it is available immediately.
 
-**The rule is "a typed column's stored value may not change," and it has
-to be a value-level check — a schema-level one does not catch the failure
-mode.** An earlier draft proposed reusing `_check_result_schema`
-(`apply.py:690-724`), which only compares each column's *type* before and
-after; `UPDATE "Rotina" SET custo = custo * 1.10` leaves `custo`
-`DECIMAL(18,4)` on both sides of that comparison; it passes, and would
-reach `apply`'s frontmatter compile step, whose rule is
-`target = final_value if isinstance(final_value, str) else None`
-(`apply.py:764-798`) — every `Decimal` compiles to `None`, and a `None`
-final value for a field that was present compiles to deletion. The
-schema-level check does not see this at all; it is one column with one
-type throughout.
+Two review rounds tried to enforce "typed columns aren't writable" as a
+guard `apply` runs — first a schema-level check that didn't see a value
+change behind a stable type, then a proposed row-level `before`/`after`
+equality check to replace it. Decision 5 removes the need for either: the
+declared column **is a DuckDB generated column** now, computed from the
+hidden raw column, and DuckDB itself refuses to write to it:
 
-So the guard is a new one, run per typed column before
-`_compile_row_diff`: for every row, the column's value in `before` and in
-`after` must be equal (`IS NOT DISTINCT FROM`, so `NULL` compares as
-`NULL`). Any row where they differ is `ApplyError`, dry-run or not, naming
-the column and the type declaration that made it read-only — a single SQL
-comparison per typed column, not a value-by-value walk in Python.
+```text
+UPDATE t SET custo = 5
+  -> Binder Error: Can't update column "custo" because it is a generated column!
+```
 
-**`RENAME COLUMN` on a typed column needs the same guard, not an
-exemption.** `ALTER TABLE "Rotina" RENAME COLUMN custo TO valor` changes
-`custo`'s presence in `before`'s column set entirely, so the equality
-check above has nothing to compare it against — and `_compile_field_value`
-would still read the renamed column's final value, find it is not a
-`str`, and compile it to a deletion under the new name, silently losing
-the value on every row. `RENAME COLUMN` naming a typed column is therefore
-rejected outright in v1, with a message pointing at the same declaration.
-A caller who wants the rename edits the declaration file and, until RFC
-0007 gives that edit a writeback path, drops back to `VARCHAR` for that
-column deliberately (by removing it from the declaration) before renaming
-it through `apply`.
+verified on 1.5.5. `apply`'s trailing `UPDATE` reaches this as an ordinary
+DuckDB error from `extract_statements()`/execution, the same way any other
+malformed `--sql` script fails today — no new check to write, no
+before/after comparison, nothing that could itself have a gap.
 
-Both rules reduce to one sentence: **a declaration makes a column
-`apply`-readable; it does not make it `apply`-writable, in any form**, not
-"disallowed only when it appears in `SET`." Making that work — a canonical
-YAML serialization per type, decided value by value: whether `12.34`
-becomes `12.3400` or `12.34`, how a typed `NULL` relates to the
-absence/`null` distinction RFC 0005 maintains, what a quoted-by-the-author
-value does — is the same problem RFC 0007 already owns for declaration
-writeback, so it goes there, whole, rather than being solved once here and
-again there.
+**`RENAME COLUMN` on a typed column is rejected outright, not because the
+guard above doesn't reach it, but because it targets the wrong column.**
+`ALTER TABLE "Rotina" RENAME COLUMN custo TO valor` would rename the
+generated column, not the raw one behind it — the renamed column stays
+computed from `__okf_raw_custo`, which is now orphaned from the name the
+caller intended to keep. `apply` rejects a `RENAME COLUMN` whose source
+name is a declared column, naming the declaration. A caller who wants the
+rename edits the declaration file and, until RFC 0007 gives that edit a
+writeback path, removes the field from the declaration first (dropping it
+to plain `VARCHAR`, which *is* the raw text and *is* renameable) before
+renaming it through `apply`.
 
-### 7b. `duckdb`: declared types materialize in a `{schema}_types` schema
+**`DROP COLUMN` on a typed column drops both.** DuckDB's own generated
+column semantics mean dropping `custo` requires dropping
+`__okf_raw_custo` too, or the generated column's source disappears
+underneath it; `apply` drops the pair in one statement and its writeback
+(RFC 0005's existing mechanism) reflects the field as removed, same as
+dropping any other column today.
+
+A declaration makes a column `apply`-readable. Making it also
+`apply`-writable needs a canonical YAML serialization per type, decided
+value by value — whether `12.34` becomes `12.3400` or `12.34`, how a typed
+`NULL` relates to the absence/`null` distinction RFC 0005 maintains, what
+a quoted-by-the-author value does — which is the same problem RFC 0007
+already owns for declaration writeback. Read-only in v1 is not a
+workaround for a missing guard anymore; it is what a generated column
+already is.
+
+### 7b. `duckdb`: declared types materialize in a `{schema}_types` schema, under the existing collision policy, never auto-dropped
 
 `duckdb`'s persistent output is four tables — `concepts`, `links`,
 `reserved`, `diagnostics` — and per-type tables are not among them. This
@@ -577,41 +624,47 @@ RFC does not reshape that contract: declared types materialize as one
 table per type in a **second schema**, named `{schema}_types` for the
 `--schema` the command was given (`okf` → `okf_types`), each table named
 for the exact authored type value, quoted, as RFC 0005 names its ephemeral
-tables.
+tables. A separate schema, rather than the existing one, because a type
+named `concepts` would otherwise collide with the contract's own table,
+and because it makes the whole typed surface inspectable and droppable as
+a unit.
 
-A separate schema, rather than the existing one, because a type named
-`concepts` would otherwise collide with the contract's own table, and
-because it makes the whole typed surface droppable and inspectable as a
-unit.
+**Two review rounds tried to invent a new ownership mechanism for this
+schema — a `COMMENT ON SCHEMA` marker, then a manifest table — before
+noticing `attach_okf` already has one, for the four tables it manages
+today.** `_existing_tables`/`BundleExportError` (`duckdb.py`) refuse to
+touch a table that already exists in the target schema unless the caller
+passes `overwrite=True`, and report exactly which names collided. That is
+the entire mechanism this decision needed, per table instead of
+per-schema-wide-marker:
 
-**`{schema}_types` is exclusively owned, and ownership is asserted rather
-than assumed — a schema-wide "drop what I don't recognize" over a name a
-caller chose is exactly how a differently-owned table gets destroyed.**
-`duckdb` refuses to run against a `{schema}_types` that already exists and
-contains any table this command did not itself create in a prior run:
-concretely, a schema comment DuckDB's `COMMENT ON SCHEMA` attaches on
-first creation — `okf-parser managed: do not create objects in this
-schema` — that a subsequent run checks for before touching anything.
-Absent on the schema (first run, or a name reused from something else): if
-the schema is empty, it is created and stamped; if it already holds any
-table, `duckdb` refuses to write to it at all and reports which tables it
-found, rather than guessing whether they are safe to drop. Present and
-matching: the run proceeds, and only tables it manages — every table whose
-name is a currently-declared type — are subject to the create-or-replace,
-drop-if-type-gone cycle decision 7b already describes. A table under a
-stamped schema that the command didn't create in this or a prior run
-cannot arise, because the stamp is the one gate for entering the schema at
-all.
+- `{schema}_types` is created if absent;
+- for each currently-declared type, its table is created if absent, or
+  replaced if `overwrite` is set and it already exists;
+- if it already exists and `overwrite` is not set, `duckdb` raises the
+  same `BundleExportError` the four contract tables already raise,
+  naming the colliding table.
 
-This is deliberately the strictest of the three options considered
-(refuse-to-adopt, rather than never-delete or a manifest table): a
-manifest is one more piece of state that can drift from the schema it
-describes, and never-deleting means a renamed or removed type's table
-accumulates forever. Refusing adoption of anything unrecognized costs
-nothing on the common path — a schema this command created is never a
-foreign object — and fails loudly, at the one moment (first run against an
-unexpected `{schema}_types`) where a wrong guess would otherwise be
-silent.
+A forgeable marker comment, or a manifest that can itself drift from the
+schema it describes, added a second source of truth for something the
+codebase already decides correctly with an existence check plus an
+explicit flag.
+
+**A type's table is never dropped automatically when the type disappears
+from the bundle.** This is the one place this RFC is more conservative
+than an earlier draft, deliberately: distinguishing "a table `duckdb`
+created and should now retire" from "a table something else put there"
+requires exactly the ownership state (marker or manifest) just rejected
+above as unnecessary complexity for the *write* path — and for *deletion*
+the cost of getting it wrong is not symmetric with the cost of getting it
+wrong on write. A stale table left behind costs disk and one line in a
+listing; a table deleted by a wrong guess is gone. `duckdb` instead
+reports stale tables — a table present in `{schema}_types` whose name is
+not a currently-declared type — as part of its existing diagnostics
+output, and does not remove them. Removing one is a separate, explicit
+`duckdb --prune-stale-types` operation an operator invokes deliberately,
+naming exactly what it will drop before it drops it; it is out of this
+RFC's scope and listed under Open questions.
 
 Types with no declaration get no table there. `{schema}_types` is the
 declared surface; RFC 0005's inference is not persisted, and `concepts`
@@ -828,6 +881,33 @@ intended type until the data is already perfect, which is exactly backwards
 — the declaration is how they find out it isn't. `--fail-on-spec-divergence`
 (decision 8) gives the strict posture to whoever wants it, opt-in.
 
+### `duckdb` as an atomically-published build artifact, not a schema written into a caller's connection
+
+Considered as the structural fix to decision 7b's ownership question: if
+`duckdb` compiled to a fresh file and swapped it into place atomically,
+there would be no existing schema to collide with, ever, and no orphan
+question either. Rejected for *this* RFC, not on merits — `attach_okf`'s
+existing contract takes a connection the caller already opened
+(`duckdb.py:attach_okf`), not a file path it owns end to end; changing
+that is a reshaping of RFC 0005's persistence model, which this RFC does
+not otherwise touch anywhere else. It is a stronger design for `duckdb`
+in general and belongs in its own RFC, decoupled from whether declared
+types exist at all.
+
+### Content-addressed generations for `{schema}_types` (`okf_types_<hash>` plus a stable pointer)
+
+Considered alongside the above: every compilation writes a new,
+independently named schema; a successful one repoints a stable alias;
+nothing already published is ever mutated in place. Rejected for v1 for
+the same reason the marker and the manifest were: it is real machinery
+(hashing, pointer indirection, generation garbage collection) motivated by
+a failure mode — concurrent or partial writes corrupting a shared schema
+— that the simpler create-or-replace-with-`overwrite`, refuse-on-unknown
+policy (decision 7b) already handles for the common case of one operator
+running `duckdb` against their own database. Worth revisiting if
+`duckdb` grows a concurrent or CI-shared-database use case this RFC
+doesn't target.
+
 ## Open questions
 
 - Exact `OKF0xx` codes for decision 7's cases — the existing numbering runs
@@ -837,8 +917,16 @@ intended type until the data is already perfect, which is exactly backwards
   RFC says tables, matching the four contract tables; views would avoid the
   copy but need the source relation to be queryable from the persisted
   database, which the current output does not guarantee.
+- `duckdb --prune-stale-types` (decision 7b): the explicit, separate
+  deletion command for tables whose type no longer exists in the bundle.
+  Not designed here — only that automatic deletion isn't it.
 - In-artifact comment provenance (decision 6) if git history ever proves
   insufficient.
+- Whether raw columns (decision 5) should be queryable at all outside
+  `apply`'s internals — `duckdb`'s persistent output could expose
+  `__okf_raw_<column>` alongside the typed one for a consumer who wants
+  the authored text a cast rounded away, or could keep it fully internal
+  to compilation. This RFC does not decide it either way.
 - Constraints (decision 5, excluded from v1): whether a later RFC reads
   `duckdb_constraints()` for `NOT NULL`/`CHECK`/`UNIQUE`/`PRIMARY KEY`, and
   what evaluating each against documents means. `DEFAULT` likely never
