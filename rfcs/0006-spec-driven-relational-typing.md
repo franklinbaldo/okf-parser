@@ -537,41 +537,58 @@ a silently stringified value:
 - structs, maps, and any composite/union physical type;
 - any physical type the serializer does not recognize.
 
-**The guard is on the final relational result, not on which statement
-produced it.** RFC 0005's own value-compile logic (`_compile_row_diff`) is
-already, deliberately, "blind to *how* the final state was reached" — a
-value can change structurally, for every row, without the trailing
-`UPDATE`'s `WHERE` ever selecting that row: `ADD COLUMN "valor" DECIMAL(18,4)
-DEFAULT 1.25` sets every existing row to `1.25` the moment the `ALTER TABLE`
-runs, and a `DROP COLUMN` immediately followed by an `ADD COLUMN` of the
-same name resets every row the same structural way. A guard that only
-inspects the trailing `UPDATE` misses both. So: **the script aborts
-whenever the final relational state would require persisting a non-null
-value of a non-writable physical type, for any row, regardless of which
-statement (`UPDATE`, `ADD COLUMN ... DEFAULT`, or a `DROP`+`ADD` reset)
-produced it.** Concretely, after the transaction runs, every non-writable
-column's values across the type's table are checked; any non-`NULL` value
-aborts the whole script with the same diagnostic named above.
+**The guard is on the compiled diff against the originally-authored
+document, not on a blanket scan of the final table.** An earlier revision
+of this decision said "abort if any non-writable column holds a non-`NULL`
+value in the final table" — too broad: a bundle that already has a
+populated `DECIMAL` column (materialized read-only, per this decision)
+would then fail *any* `apply` run against that type, even one that only
+touches an unrelated field and never reserializes that column at all. It
+also contradicted the rename exception immediately below it, which relies
+on the original YAML node never being touched in the first place.
 
-Two operations stay valid under this rule without qualification:
+The actual rule follows RFC 0005's own value-compile logic
+(`_compile_row_diff`), which is already, deliberately, "blind to *how* the
+final state was reached" and already compares each column's final value to
+what the document originally authored — decision 11 does not need a
+separate mechanism, only to extend that existing comparison to non-writable
+physical types instead of assuming every compiled value is a string:
 
-- `ADD COLUMN <non-writable type>` **without** a `DEFAULT` (or with
-  `DEFAULT NULL`) — every row is `NULL`, so nothing needs to be persisted;
-- `DROP COLUMN` of a non-writable-type column — dropping never persists a
-  value, only deletes a key, which decision 10 already handles structurally;
-- `RENAME COLUMN` of a non-writable-type column, **only** when the value
-  itself is untouched by the rest of the script — the original YAML scalar
-  node carries over unchanged (never re-serialized from the Python/DuckDB
-  value at all, so decision 11's writable-type restriction never applies to
-  it). A script that renames *and* changes such a column's value in the
-  same run — whether via the trailing `UPDATE` or a `DEFAULT` on a
-  same-run `ADD`/`DROP` pair — aborts under the general rule above.
+- for a column kept under its current name — whether its value changed via
+  the trailing `UPDATE`, or structurally via `ADD COLUMN ... DEFAULT` or a
+  same-run `DROP`+`ADD` reset of the same name — the compiler compares the
+  row's final value to the value the document originally authored for that
+  key, the same comparison `_compile_changed_field_value` already makes.
+  **Only when that comparison says a new, different, non-null value must be
+  persisted, and that value's physical type is non-writable, does the
+  script abort.** A row whose non-writable-type column value is identical
+  to what was already authored needs no compiled entry at all — the
+  original document scalar is never revisited, so it never trips this
+  guard, regardless of how many other rows in the same table did change;
+- for a column that is the final name of a rename chain (decision 10)
+  targeting a non-writable physical type, the compiler never re-serializes
+  a DuckDB value for it in the first place — the original YAML scalar node
+  carries over unchanged under the new key, exactly as `_compile_field_value`
+  already does for a plain rename (it only asks whether the *old* key was
+  ever authored, never re-derives the value from DuckDB). A pure rename of
+  a non-writable-type column therefore never aborts. Only when the same
+  script also changes that column's value — through the trailing `UPDATE`
+  targeting the new name, or a structural reset layered on top of the
+  rename — does the general new-value rule above apply, and abort;
+- `DROP COLUMN` of a non-writable-type column never aborts — dropping
+  deletes a key, it never persists a value, which decision 10 already
+  handles structurally.
 
-An `ADD COLUMN <non-writable type> DEFAULT <non-null literal>` is
-therefore invalid the moment it is combined with any pre-existing row —
-the same "reject after execution, by inspecting the result" posture RFC
-0005 already uses for protected-column and shape violations, not a new
-validation path.
+`ADD COLUMN <non-writable type>` with no `DEFAULT` (or `DEFAULT NULL`)
+never aborts either, by the same rule: every row's originally-authored
+value for that (previously nonexistent) key was absent, and its final
+value is `NULL` — no new non-null value, no compiled entry, nothing to
+abort over. `ADD COLUMN <non-writable type> DEFAULT <non-null literal>`
+aborts the instant it applies to any pre-existing row, since that row's
+compiled entry would need to go from absent to a genuinely new non-null
+value of a non-writable type — the same "reject after execution, by
+inspecting the result" posture RFC 0005 already uses for protected-column
+and shape violations, not a new validation path.
 
 Widening writeback to `number`/`DECIMAL`/arrays/composites is left to a
 follow-up RFC once a canonical, deterministic serialization for each is
@@ -661,9 +678,41 @@ otherwise have to define collision rules for. A collision *within*
 identifier equality — surfaces as DuckDB's own "table already exists"
 error, the same way `apply` already lets DuckDB's catalog be the source of
 truth for that case, per the 0.15.0 changelog's own precedent.
-`overwrite=True` extends over `{schema}_types` the same way it already
-does over `{schema}` — every existing table in both schemas is replaced,
-not just the original four.
+
+**Exactly what `overwrite` does in `{schema}_types` mirrors what it
+already does in `{schema}`, table by table, never schema-wide.** Today,
+`overwrite=False` raises `BundleExportError` if any of the four named
+tables this call is about to create already exists in `{schema}`;
+`overwrite=True` drops and recreates each of those four specific tables
+(`_replace_table`), one at a time — it has never dropped an unrelated
+table that happens to live in `{schema}`, and nothing in this RFC changes
+that. The per-type case extends the identical rule, not a stronger one:
+
+- the set of tables this invocation is about to create in `{schema}_types`
+  is exactly the quoted exact-type-name tables for types this run's
+  discovery (decision 2) found to have a specification — nothing else in
+  `{schema}_types` is "this export's" for the purposes of this call;
+- without `overwrite`, a name collision on any of *those* tables raises
+  `BundleExportError`, extended to list collisions found in either schema,
+  the same error type RFC 0005 already defines for `{schema}`;
+- with `overwrite=True`, each of those specific tables is individually
+  dropped and recreated (`_replace_table`), exactly like the existing four
+  — **never** a `DROP SCHEMA`/wholesale recreation of `{schema}_types`,
+  and never a table this invocation did not name;
+- a table left over in `{schema}_types` from a type whose specification
+  was later removed is **not** cleaned up by this RFC — orphan removal
+  needs its own retention/ownership decision this RFC does not attempt,
+  the same way `{schema}`'s four-table contract has never tried to garbage
+  collect anything either. A caller who wants a clean `{schema}_types`
+  drops it themselves before calling `attach_okf`;
+- a table in `{schema}_types` this invocation did not name — anything a
+  caller or another tool put there — is never touched, dropped, or
+  otherwise affected by `attach_okf`, with or without `overwrite`.
+
+This keeps `overwrite`'s meaning exactly what it already is today
+("replace the specific tables this call manages"), and makes explicit that
+this RFC never lets an implementation decide, implicitly, whether to
+destroy data the bundle export does not own.
 
 ### 15. `schema` (`schema_export.py`): declared schema wins, `--cast` narrows, diagnostics per format
 
@@ -696,15 +745,22 @@ existing shapes and this RFC does not unify them into one envelope:
   redirectable straight to a `.ts` file (`okf-parser schema . --schema-format
   zod > types.ts`), which a wrapping envelope would break. This RFC does
   not add a second return shape to it. Spec-compile diagnostics for Zod
-  mode are instead written to **stderr**, human-readable, one per line,
-  leaving stdout exactly the Zod source; the CLI command's exit code
-  reflects them the same way `check`/`format` already turn their own
-  advisory/normative diagnostics into a non-zero exit, escalated through
-  `check`'s `--normative-spec` precedent (decision 9) rather than a new
-  flag. The MCP `schema` tool's Zod mode keeps returning the same plain
-  string it does today — an MCP caller that needs diagnostics alongside a
-  Zod export calls `schema` with `schema_format="json"` instead; this RFC
-  does not add a second output channel to the Zod MCP tool.
+  mode are written to **stderr**, human-readable, one per line, leaving
+  stdout exactly the Zod source. Their exit code is **0** — `schema` has no
+  `--normative-spec` (that flag belongs to `check` alone, per decision 9;
+  an earlier draft of this decision incorrectly said Zod-mode diagnostics
+  escalated through it) and this RFC does not give `schema` a new
+  escalation flag, so an advisory diagnostic staying advisory means it
+  never changes the exit code, in either format — consistent with decision
+  6's "never rejected" policy rather than a Zod-specific carve-out. The
+  process exits non-zero only when the artifact genuinely cannot be
+  produced at all (an existing `SchemaExportError` — unreadable schema
+  file, a name collision, and the like), which is unrelated to this
+  decision and unchanged by it. The MCP `schema` tool's Zod mode keeps
+  returning the same plain string it does today — an MCP caller that needs
+  diagnostics alongside a Zod export calls `schema` with
+  `schema_format="json"` instead; this RFC does not add a second output
+  channel to the Zod MCP tool.
 
 ## Alternatives considered
 
