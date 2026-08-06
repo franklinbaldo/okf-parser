@@ -31,7 +31,8 @@ rotina.schema.json    # JSON Schema Draft 2020-12; the structural contract
 schema file is the canonical contract: **JSON Schema Draft 2020-12**, not a
 format this RFC invents. A deliberately small v1 profile of JSON Schema is
 interpreted by the compiler (decision 5); everything outside that profile is
-preserved losslessly and ignored, never rejected.
+preserved and ignored, never rejected — decision 5 states exactly what
+"preserved" guarantees and does not.
 
 The other direction is what makes this more than a read-only convenience:
 when a schema exists, an `ALTER TABLE` in RFC 0005's bounded script (`ADD
@@ -92,9 +93,9 @@ bounded `ALTER TABLE`\* + `UPDATE` script against it, and validates the
 the script beforehand, through a hardlink-staged candidate tree, hash
 recheck, and atomic per-file replace. Everything below is additional
 compilation input and an additional writeback target layered on that
-mechanism. It does not change RFC 0005's `--sql` grammar (decision 11), its
+mechanism. It does not change RFC 0005's `--sql` grammar (decision 8), its
 `__okf_*` reservations, or its stage-validate-write pipeline — it widens the
-*set of files* that pipeline covers (decision 16), the same way a
+*set of files* that pipeline covers (decision 12), the same way a
 multi-document `apply` invocation already writes several concept documents
 in one pass today.
 
@@ -108,9 +109,10 @@ in one pass today.
 ```
 
 `--require-spec`'s existing template mechanism (`type_specs.py`,
-`spec_relative_path`) is **unchanged**: it still derives and checks for the
-existence of exactly one path, the `.md` file, exactly as it does today.
-This RFC does not touch that already-shipped contract.
+`spec_relative_path`) is **unchanged** and stays scoped to `check` only —
+see decision 2 for how this RFC's compiler actually finds a specification,
+which is a different, broader mechanism than `--require-spec`'s derived
+path.
 
 The Markdown document's frontmatter carries only a relative reference to
 its schema:
@@ -146,20 +148,50 @@ A directory-per-type layout (`.okf/specs/rotina/index.md` +
 `.okf/specs/rotina/schema.json`) was considered and set aside — see
 Alternatives.
 
-### 2. Reservation is exactly the two files a specification names, not a tree
+### 2. Discovery is semantic and command-agnostic, not template-driven
 
-Only two paths are treated as bundle metadata per specification: the
-Markdown document itself (`type: OKFTypeSpec`, found via
-`--require-spec`'s derived path) and the exact file its `schema` field
-resolves to. `discover_markdown`'s concept walk excludes both, the same way
-`.okfignore` and other reserved documents are already excluded — neither is
-ever counted as a concept, neither gets a row in any type's table, neither
-appears in `inventory`/`graph`.
+Every consumer that can compile against or validate a specification —
+`apply`, `duckdb`, `schema` (`schema_export.py`), `check`, `inventory`,
+`graph` — discovers specifications the **same way**, without being handed
+any template or flag:
 
-`.okf/specs/**` as a whole is **not** reserved. An operator's
-`--require-spec` template can point anywhere; this RFC only removes the
-exact files a real specification names, never an entire arbitrary
-directory a template happens to resolve under. This is deliberately
+1. during the bundle's Markdown walk, any document whose frontmatter has
+   `type: OKFTypeSpec` is classified as bundle metadata, not a concept —
+   the same walk-time classification `.okfignore` and other reserved
+   documents already get, requiring no new discovery pass;
+2. its `schema` field is resolved to a sibling file (decision 1);
+3. that schema's `properties.type.const` (decision 3) associates it with
+   the concept type it governs.
+
+A specification is a property of the bundle itself — "just there," the
+same way `.okfignore` is — not something a caller must separately point a
+command at. This is deliberate: `--require-spec`'s template is per-invocation
+and operator-configurable, and is not persisted anywhere in the bundle, so
+no command other than `check` could reliably reconstruct it even if this
+RFC wanted every consumer to receive it.
+
+`--require-spec` keeps its existing, narrower, `check`-only role
+unchanged: an independent assertion that a document exists at one specific
+*derived* path for a given type, per its own configured template. It gains
+no new normative meaning here, and no other command receives it. The two
+mechanisms answer different questions and can disagree without
+contradiction — a type can have a specification this RFC's compiler
+discovers semantically at any path, without that path ever satisfying a
+`--require-spec` template that happens to point elsewhere; `check
+--require-spec` can also fail its existence check for a type whose
+specification this RFC's compiler already found and is happily compiling.
+
+Reservation follows discovery exactly: only two paths are treated as
+bundle metadata per specification — the Markdown document itself and the
+exact file its `schema` field resolves to. Both are excluded from
+`discover_markdown`'s concept walk; neither is ever counted as a concept,
+neither gets a row in any type's table, neither appears in
+`inventory`/`graph`.
+
+`.okf/specs/**` as a whole is **not** reserved, and specifications are not
+required to live under any particular directory — this RFC only removes
+the exact files a real specification names, never an arbitrary directory a
+`--require-spec` template happens to resolve under. This is deliberately
 narrower than this RFC's own first draft, which reserved the whole tree.
 
 Both files participate in everything that treats them as real files: RFC
@@ -194,9 +226,15 @@ so the derived `.md` path alone still cannot say which of two colliding
 type spellings a specification is for; `properties.type.const` is what
 resolves that, exactly as `defines:` would have in the first draft.
 
-A specification whose `const` disagrees with the type its derived path
-implies, or that omits `properties.type.const` entirely, is a diagnostic
-(decision 9) — never silently trusted either way.
+A specification that omits `properties.type.const` entirely is a
+diagnostic (decision 9) regardless of where it lives — identity is not
+optional. When a specification happens to sit at the exact path a
+`--require-spec` template derives for some type, and its `const` disagrees
+with that type, that mismatch is also a diagnostic — but this is a
+`--require-spec`-specific check (decision 2), not a property every
+specification is held to: a specification discovered semantically at a
+path unrelated to any template has no derived path to compare against in
+the first place, only its own `const`.
 
 `$id`, if present, is left for future schema-registry / `$ref` use and
 carries no identity meaning in this RFC. Reusing it as identity was
@@ -272,14 +310,28 @@ this RFC scopes v1 down to exactly the keywords the compiler interprets:
 
 Every other keyword — `$id`, `$ref`, `$defs`, `enum`, `pattern`, `oneOf`,
 `allOf`, `anyOf`, `default`, and anything else valid in Draft 2020-12 — is
-**preserved verbatim and exported as declared, but not semantically acted
-on** by the v1 compiler: no diagnostic is derived from it, no DuckDB
-decision depends on it. "Ignored" means "not yet load-bearing," not
-"invalid" or "stripped." `enum` and `pattern` were deliberately left out of
-v1 even though parsing them is simple — the open problem is not reading
-them, it is defining one coherent, advisory-consistent meaning for them
-across `check`, `apply`, DuckDB, and every schema exporter at once; that is
+**semantically preserved and exported as declared, but not acted on** by
+the v1 compiler: no diagnostic is derived from it, no DuckDB decision
+depends on it. "Ignored" means "not yet load-bearing," not "invalid" or
+"stripped." `enum` and `pattern` were deliberately left out of v1 even
+though parsing them is simple — the open problem is not reading them, it
+is defining one coherent, advisory-consistent meaning for them across
+`check`, `apply`, DuckDB, and every schema exporter at once; that is
 future-RFC work, not something to half-commit to here.
+
+"Semantically preserved" is a deliberately weaker promise than
+byte-identical: a schema written back by `apply` (decision 10) goes through
+a plain JSON encode-decode round trip, which keeps every member's value and
+every property's own key order, but is **not** guaranteed to reproduce the
+original file's exact whitespace, indentation width, key ordering at
+levels `apply` didn't touch beyond the natural effect of an unmodified
+Python `dict` preserving insertion order, or a number's original lexical
+spelling (`1.50` may re-serialize as `1.5`). Canonical output is UTF-8,
+2-space indent, one trailing newline, `ensure_ascii=False`. A future RFC
+that wants byte-for-byte JSON preservation — the way RFC 0005's YAML loader
+already achieves for concept documents — would need to adopt a JSON
+round-trip library equivalent to `ruamel.yaml`'s role for YAML; none is a
+dependency today, and this RFC does not add one.
 
 ### 6. Divergence from the schema is advisory, never a block
 
@@ -294,10 +346,10 @@ precedent:
   absence and an explicit `null` value remain distinct states throughout;
 - a document that violates `required`, or whose value does not cast to its
   property's declared `type`, is **never** rejected — the bundle still
-  opens, the table still builds. `apply`/`check` emit an advisory
-  diagnostic (`OKF0xx`, escalatable via `--normative`, per existing
-  precedent) naming the declared type, the physical type actually used,
-  the offending value, and its document;
+  opens, the table still builds. `apply`/`check`/`duckdb`/`schema` emit an
+  advisory diagnostic (`OKF0xx`, see decision 9 for exactly which surface
+  escalates it and how) naming the declared type, the physical type
+  actually used, the offending value, and its document;
 - a value that fails to cast makes that field's column fall back to
   `VARCHAR` for the affected row's type family the same way RFC 0005
   decision 1c already handles blind inference — a caller-declared
@@ -363,8 +415,7 @@ the schema file directly is no heavier.
 
 ### 9. Diagnostics
 
-All advisory by default (escalatable via `--normative`, following existing
-precedent), distinct cases:
+All advisory by default, distinct cases:
 
 - `schema` field absent from `OKFTypeSpec` frontmatter — malformed
   specification;
@@ -374,12 +425,21 @@ precedent), distinct cases:
 - keywords outside the v1 profile (decision 5) — preserved, no diagnostic
   by itself;
 - `properties.type.const` absent — missing identity;
-- `properties.type.const` present but disagreeing with the type the
-  specification's derived path implies — incompatible identity;
 - two `OKFTypeSpec` documents whose `schema` resolves to the same file —
   ownership conflict;
 - two schema files both declaring `properties.type.const` for the same OKF
   type — ambiguity.
+
+Escalation is per-surface, matching what already exists rather than
+inventing one flag for all of them: `check --require-spec` additionally
+reports its own existence-mismatch case (decision 2's "specification found
+at the derived path but its `const` disagrees") and escalates every
+`OKFTypeSpec`-related diagnostic through `check`'s existing
+`--normative-spec` flag — there is no bare `--normative` flag today, and
+this RFC does not invent one. `apply`, `duckdb`, and `schema` surface the
+same diagnostics through whatever advisory-reporting mechanism each
+already has (`apply`'s `validation` payload, etc.); none of them gain a new
+escalation flag by this RFC.
 
 ### 10. `ALTER TABLE` writes back to the schema, when one exists
 
@@ -400,7 +460,8 @@ When the type an `ALTER TABLE` targets has a schema file:
 - `RENAME COLUMN "prazo" TO "prazo_dias"` renames the `properties` key,
   updates its entry in `required` if present, and preserves every other
   keyword on that property node unchanged — including ones outside the v1
-  profile (decision 5), which round-trip losslessly;
+  profile (decision 5), semantically preserved per that decision's precise
+  round-trip guarantee;
 - descriptions are **not** part of this sync (decision 8) — they change by
   editing the schema file directly.
 
@@ -413,6 +474,27 @@ ambiguity:
 
 **Writable in v1:** `VARCHAR` (string), the DuckDB integer family, `BOOLEAN`,
 `DATE`, `TIMESTAMP`, `TIMESTAMPTZ`.
+
+Calling `TIMESTAMPTZ`/`TIMESTAMP` "round-trippable without ambiguity" only
+holds with an explicit canonical serialization, since DuckDB does not
+preserve the exact offset a value was written with. This RFC fixes one:
+
+- `TIMESTAMPTZ` is normalized to UTC and serialized as RFC 3339 with a
+  literal `Z` suffix (never a numeric `+00:00` offset); fractional seconds
+  are emitted at fixed microsecond precision when the value has any
+  sub-second component, and omitted entirely otherwise — e.g.
+  `2026-08-06T14:30:00Z` or `2026-08-06T14:30:00.125000Z`, never
+  `2026-08-06T14:30:00.125Z` or a value carrying its original,
+  pre-normalization offset;
+- `TIMESTAMP` (no offset, `x-okf-duckdb-type` opt-in per decision 7) is
+  serialized the same way minus the `Z`, as a naive local timestamp:
+  `2026-08-06T14:30:00` / `2026-08-06T14:30:00.125000`;
+- `DATE` is serialized as `YYYY-MM-DD`.
+
+Every value in this section is written as a YAML scalar the round-trip
+loader parses back to the same DuckDB value on the next `apply` — the
+canonical form above, not whatever lexical form a particular document
+happened to use before a write touched it.
 
 **Read-only in v1** — the column materializes and casts correctly, and
 `ADD`/`DROP`/`RENAME COLUMN` sync to the schema exactly as decision 10
@@ -467,6 +549,44 @@ replacements. A crash between two individual `tmp.replace()` calls is the
 same risk profile RFC 0005 already accepts for any multi-document
 `apply` run; this RFC widens the file set inside that existing envelope,
 it does not narrow or strengthen the envelope itself.
+
+### 13. `duckdb` and `schema` consume the same compiler, normatively
+
+The Motivation section's `schema_export.py` reference is not decorative —
+it names the second and third public surfaces this RFC is normative about.
+`apply`'s in-memory DuckDB database is ephemeral, discarded at the end of
+one invocation; if typed columns and `COMMENT ON` metadata only ever
+existed there, this RFC's main payoff would never reach anything a caller
+actually keeps. The specification-aware compiler introduced in decisions
+4–8 is one shared component (discovered per decision 2), and this RFC
+requires it to back every command that materializes or exports a type's
+schema, not `apply` alone:
+
+- **`duckdb`** — the existing command that materializes concept types into
+  a DuckDB database meant to persist or be exported, as opposed to
+  `apply`'s throwaway one — applies the same declared-type mapping
+  (decision 7) and issues the same `COMMENT ON TABLE`/`COMMENT ON COLUMN`
+  statements (decision 8) into that database, for every type that has a
+  specification. A type with no specification still compiles exactly as
+  RFC 0005 already defines for `duckdb`, unchanged;
+- **`schema`** (`schema_export.py`) — for a type with a specification, its
+  schema file becomes the canonical source for that type's exported JSON
+  Schema, instead of one derived purely from inferred/cast concept data.
+  Properties covered by the specification carry over as declared,
+  including every keyword outside the v1 profile (decision 5) that
+  `schema_export.py` does not itself interpret but re-emits unchanged, per
+  that decision's round-trip guarantee. Properties present in concept data
+  but absent from the specification continue to be inferred the way
+  `schema_export.py` already does today — a specification narrows what is
+  inferred, it does not have to cover every field a type happens to use.
+  Zod and Pydantic generation, which are themselves derived from the same
+  compiled contract (`schema_contract.py`), inherit this for free rather
+  than needing their own awareness of specifications.
+
+`check`, `inventory`, and `graph` are unaffected beyond decision 2's
+discovery/reservation and decision 6's advisory diagnostics — none of them
+materialize or export a schema, so decisions 7 and 8 have nothing to plug
+into for them.
 
 ## Alternatives considered
 
