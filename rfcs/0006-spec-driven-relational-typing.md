@@ -387,6 +387,25 @@ integer width, and so on. The JSON Schema `type` expresses the logical
 category; `x-okf-duckdb-type`, when present, expresses the exact physical
 representation.
 
+**`x-okf-duckdb-type` is never spliced into DDL as raw text.** A schema
+file is bundle data, not caller-trusted code — unlike an `--sql` script,
+which is the operator's own input, a schema's `x-okf-duckdb-type` string
+can come from anyone with write access to the bundle. Before it is used
+anywhere a column type is needed (`CREATE TABLE`/`ALTER TABLE` in `apply`'s
+ephemeral database, `duckdb`'s persistent per-type tables per decision 14),
+the compiler validates it in isolation — parsed by DuckDB itself as
+exactly one type expression in a synthetic, side-effect-free context (e.g.
+casting a literal `NULL` to it), never concatenated into a multi-statement
+string first. Parsing that succeeds as anything other than one type
+expression — extra tokens, a statement separator, a second statement — is
+rejected as a diagnostic (decision 9), the same as any other malformed
+schema value; it never reaches a real `CREATE`/`ALTER`. On success, the
+compiler uses **DuckDB's own catalog-normalized spelling** of that type
+(what `DESCRIBE`/the catalog reports back, e.g. `DECIMAL(18,4)` regardless
+of whitespace or case in the source) everywhere downstream — comments,
+diagnostics, decision 10's writeback — never the caller's original string
+verbatim a second time.
+
 ### 8. Comments: schema prose to catalog, never through `--sql`
 
 ```sql
@@ -428,7 +447,13 @@ All advisory by default, distinct cases:
 - two `OKFTypeSpec` documents whose `schema` resolves to the same file —
   ownership conflict;
 - two schema files both declaring `properties.type.const` for the same OKF
-  type — ambiguity.
+  type — ambiguity;
+- an `x-okf-duckdb-type` value that fails decision 7's isolated-parse
+  validation — malformed physical type, never reaching a real `CREATE`/
+  `ALTER`;
+- `schema`'s `--cast` naming a property already covered by a declared
+  schema (decision 15) — cast conflict; the declared type is exported, the
+  cast is not applied.
 
 Escalation is per-surface, matching what already exists rather than
 inventing one flag for all of them: `check --require-spec` additionally
@@ -436,10 +461,11 @@ reports its own existence-mismatch case (decision 2's "specification found
 at the derived path but its `const` disagrees") and escalates every
 `OKFTypeSpec`-related diagnostic through `check`'s existing
 `--normative-spec` flag — there is no bare `--normative` flag today, and
-this RFC does not invent one. `apply`, `duckdb`, and `schema` surface the
-same diagnostics through whatever advisory-reporting mechanism each
-already has (`apply`'s `validation` payload, etc.); none of them gain a new
-escalation flag by this RFC.
+this RFC does not invent one. `apply` and `duckdb` surface the same
+diagnostics through whatever advisory-reporting mechanism each already has
+(`apply`'s `validation` payload, etc.). `schema`'s transport is decision
+15's own: a `"diagnostics"` key in JSON mode, stderr plus exit code in Zod
+mode. None of them gain a new escalation flag by this RFC.
 
 ### 10. `ALTER TABLE` writes back to the schema, when one exists
 
@@ -498,9 +524,9 @@ happened to use before a write touched it.
 
 **Read-only in v1** — the column materializes and casts correctly, and
 `ADD`/`DROP`/`RENAME COLUMN` sync to the schema exactly as decision 10
-describes, but an `UPDATE` that would change one of these columns' values
-fails, explicitly and by name, rather than degrading to `NULL`, a removed
-key, or a silently stringified value:
+describes, but persisting a real value through one of these columns fails,
+explicitly and by name, rather than degrading to `NULL`, a removed key, or
+a silently stringified value:
 
 - `DOUBLE`/`number` — float round-tripping through Python and back to a
   YAML scalar can shift lexical representation or precision;
@@ -511,17 +537,41 @@ key, or a silently stringified value:
 - structs, maps, and any composite/union physical type;
 - any physical type the serializer does not recognize.
 
-An `UPDATE` attempting to change the value of a non-writable-type column
-aborts the whole script with a diagnostic naming the column, its physical
-type, and that RFC 0006 v1 can materialize but not write back to it — the
-same "reject after execution, by inspecting the result" posture RFC 0005
-already uses for protected-column and shape violations, not a new
-validation path. `DROP COLUMN` remains possible for any column regardless
-of physical type — dropping doesn't require serializing a value.
-`RENAME COLUMN` on a non-writable-type column is fine as long as the value
-itself is untouched (the original YAML node is preserved, only its key
-changes); a script that renames *and* changes such a column's value in the
-same run aborts.
+**The guard is on the final relational result, not on which statement
+produced it.** RFC 0005's own value-compile logic (`_compile_row_diff`) is
+already, deliberately, "blind to *how* the final state was reached" — a
+value can change structurally, for every row, without the trailing
+`UPDATE`'s `WHERE` ever selecting that row: `ADD COLUMN "valor" DECIMAL(18,4)
+DEFAULT 1.25` sets every existing row to `1.25` the moment the `ALTER TABLE`
+runs, and a `DROP COLUMN` immediately followed by an `ADD COLUMN` of the
+same name resets every row the same structural way. A guard that only
+inspects the trailing `UPDATE` misses both. So: **the script aborts
+whenever the final relational state would require persisting a non-null
+value of a non-writable physical type, for any row, regardless of which
+statement (`UPDATE`, `ADD COLUMN ... DEFAULT`, or a `DROP`+`ADD` reset)
+produced it.** Concretely, after the transaction runs, every non-writable
+column's values across the type's table are checked; any non-`NULL` value
+aborts the whole script with the same diagnostic named above.
+
+Two operations stay valid under this rule without qualification:
+
+- `ADD COLUMN <non-writable type>` **without** a `DEFAULT` (or with
+  `DEFAULT NULL`) — every row is `NULL`, so nothing needs to be persisted;
+- `DROP COLUMN` of a non-writable-type column — dropping never persists a
+  value, only deletes a key, which decision 10 already handles structurally;
+- `RENAME COLUMN` of a non-writable-type column, **only** when the value
+  itself is untouched by the rest of the script — the original YAML scalar
+  node carries over unchanged (never re-serialized from the Python/DuckDB
+  value at all, so decision 11's writable-type restriction never applies to
+  it). A script that renames *and* changes such a column's value in the
+  same run — whether via the trailing `UPDATE` or a `DEFAULT` on a
+  same-run `ADD`/`DROP` pair — aborts under the general rule above.
+
+An `ADD COLUMN <non-writable type> DEFAULT <non-null literal>` is
+therefore invalid the moment it is combined with any pre-existing row —
+the same "reject after execution, by inspecting the result" posture RFC
+0005 already uses for protected-column and shape violations, not a new
+validation path.
 
 Widening writeback to `number`/`DECIMAL`/arrays/composites is left to a
 follow-up RFC once a canonical, deterministic serialization for each is
@@ -562,31 +612,99 @@ actually keeps. The specification-aware compiler introduced in decisions
 requires it to back every command that materializes or exports a type's
 schema, not `apply` alone:
 
-- **`duckdb`** — the existing command that materializes concept types into
-  a DuckDB database meant to persist or be exported, as opposed to
-  `apply`'s throwaway one — applies the same declared-type mapping
-  (decision 7) and issues the same `COMMENT ON TABLE`/`COMMENT ON COLUMN`
-  statements (decision 8) into that database, for every type that has a
-  specification. A type with no specification still compiles exactly as
-  RFC 0005 already defines for `duckdb`, unchanged;
+- **`duckdb`** (`attach_okf`) — today persists exactly four fixed,
+  generic tables (`concepts`, `links`, `reserved`, `diagnostics`), with
+  every concept's frontmatter packed into `concepts.frontmatter_json` —
+  there is no existing per-type relation to plug decision 7's mapping or
+  decision 8's `COMMENT ON` into. Decision 14 defines the additive layout
+  this RFC introduces for it;
 - **`schema`** (`schema_export.py`) — for a type with a specification, its
   schema file becomes the canonical source for that type's exported JSON
   Schema, instead of one derived purely from inferred/cast concept data.
-  Properties covered by the specification carry over as declared,
-  including every keyword outside the v1 profile (decision 5) that
-  `schema_export.py` does not itself interpret but re-emits unchanged, per
-  that decision's round-trip guarantee. Properties present in concept data
-  but absent from the specification continue to be inferred the way
-  `schema_export.py` already does today — a specification narrows what is
-  inferred, it does not have to cover every field a type happens to use.
-  Zod and Pydantic generation, which are themselves derived from the same
-  compiled contract (`schema_contract.py`), inherit this for free rather
-  than needing their own awareness of specifications.
+  Decision 15 defines precedence against the command's existing
+  `--infer-types`/`--cast` flags and where the resulting diagnostics are
+  reported, for both the CLI and the MCP `schema` tool.
 
 `check`, `inventory`, and `graph` are unaffected beyond decision 2's
 discovery/reservation and decision 6's advisory diagnostics — none of them
 materialize or export a schema, so decisions 7 and 8 have nothing to plug
 into for them.
+
+### 14. Persistent per-type materialization in `duckdb`
+
+`attach_okf`'s existing four-table contract is **unchanged**:
+`{schema}.concepts`, `{schema}.links`, `{schema}.reserved`,
+`{schema}.diagnostics` (`schema` defaulting to `"okf"`) keep their current
+shape, names, and `overwrite`/collision behavior exactly as today. Every
+bundle still gets these four tables whether or not any type has a
+specification.
+
+Additively, for every concept type that has a specification, `attach_okf`
+also materializes one table into a **second, dedicated schema**,
+`{schema}_types` (`"okf_types"` by default) — never into `schema` itself —
+named for the exact type string, quoted, the same convention `apply`
+already uses for its ephemeral tables. Its columns follow decision 7's
+physical type mapping and carry decision 8's `COMMENT ON TABLE`/`COMMENT ON
+COLUMN` metadata. A type with **no** specification gets no per-type table;
+its concepts remain reachable only through the generic `concepts` table, as
+today — this RFC does not make per-type materialization the default for
+every type, only for ones that opted in with a specification, since the
+generic table already covers the rest and a wholesale VARCHAR-inferred
+table per type would be a much larger default-on behavior change than this
+RFC's "additive, opt-in" stance elsewhere.
+
+Using a separate schema rather than sharing `{schema}` is deliberate: it
+makes a per-type table name colliding with `concepts`/`links`/`reserved`/
+`diagnostics` structurally impossible, rather than a case this RFC would
+otherwise have to define collision rules for. A collision *within*
+`{schema}_types` — two types whose exact strings collide under DuckDB
+identifier equality — surfaces as DuckDB's own "table already exists"
+error, the same way `apply` already lets DuckDB's catalog be the source of
+truth for that case, per the 0.15.0 changelog's own precedent.
+`overwrite=True` extends over `{schema}_types` the same way it already
+does over `{schema}` — every existing table in both schemas is replaced,
+not just the original four.
+
+### 15. `schema` (`schema_export.py`): declared schema wins, `--cast` narrows, diagnostics per format
+
+**Precedence.** For a property a type's specification declares, the
+specification's `type` (mapped through the same JSON Schema vocabulary
+`schema_export.py` already emits, not decision 7's DuckDB mapping, which
+does not apply here) wins outright — inference is not consulted for that
+property regardless of `--infer-types`, and a `--cast` naming the same
+property is **not** silently applied over it. `--cast` and `--infer-types`
+keep their current, unchanged behavior for every property a type's
+specification does not cover (or for types with no specification at all).
+A `--cast` that names a property the specification *does* cover is a
+diagnostic ("cast conflicts with declared schema property"), added to
+decision 9's list — the cast is reported, not applied, and the declared
+type is still what gets exported.
+
+**Diagnostic transport.** `schema`'s two output formats have different
+existing shapes and this RFC does not unify them into one envelope:
+
+- **`--schema-format json`** (`export_json_schema`) already returns a
+  dict (`root`, `total_types`, `inferred_types`, `casts`, `schemas`). This
+  RFC adds a `"diagnostics"` key to that same dict — the advisory
+  diagnostics from decision 6 and this decision's cast-conflict case, in
+  the same shape `check`'s `diagnostics` array already uses. Both the CLI
+  command and the MCP `schema` tool return this envelope unchanged in
+  shape, just with the new key present (empty list when there is nothing
+  to report);
+- **`--schema-format zod`** (`export_zod_schema`) returns, and continues to
+  return, a **bare Zod source string** — its entire purpose is being
+  redirectable straight to a `.ts` file (`okf-parser schema . --schema-format
+  zod > types.ts`), which a wrapping envelope would break. This RFC does
+  not add a second return shape to it. Spec-compile diagnostics for Zod
+  mode are instead written to **stderr**, human-readable, one per line,
+  leaving stdout exactly the Zod source; the CLI command's exit code
+  reflects them the same way `check`/`format` already turn their own
+  advisory/normative diagnostics into a non-zero exit, escalated through
+  `check`'s `--normative-spec` precedent (decision 9) rather than a new
+  flag. The MCP `schema` tool's Zod mode keeps returning the same plain
+  string it does today — an MCP caller that needs diagnostics alongside a
+  Zod export calls `schema` with `schema_format="json"` instead; this RFC
+  does not add a second output channel to the Zod MCP tool.
 
 ## Alternatives considered
 
