@@ -443,7 +443,7 @@ preserves whatever else they declare) without this decision being able to
 say what DuckDB column they become. Both resolve through decision 9's
 single-property fallback: no diagnostic-worthy defect in the schema, but
 that one property compiles, for materialization only (`apply`'s ephemeral
-table, `duckdb`'s persistent one), exactly as if it hadn't been declared —
+table, `duckdb`'s persistent view), exactly as if it hadn't been declared —
 while `schema`'s JSON output and `apply`'s writeback keep emitting it
 exactly as authored, per decision 5.
 
@@ -467,7 +467,8 @@ file is bundle data, not caller-trusted code — unlike an `--sql` script,
 which is the operator's own input, a schema's `x-okf-duckdb-type` string
 can come from anyone with write access to the bundle. Before it is used
 anywhere a column type is needed (`CREATE TABLE`/`ALTER TABLE` in `apply`'s
-ephemeral database, `duckdb`'s persistent per-type tables per decision 14),
+ephemeral database, a `TRY_CAST` target in `duckdb`'s persistent per-type
+views per decision 14),
 the compiler validates it in isolation — parsed by DuckDB itself as
 exactly one type expression in a synthetic, side-effect-free context (e.g.
 casting a literal `NULL` to it), never concatenated into a multi-statement
@@ -571,7 +572,7 @@ Three distinct degrees of fallback, not one — collapsing them into a single
   7), or a property expressed only through a keyword this RFC's v1 profile
   doesn't map to a physical type in the first place (decision 7). Either
   way: materialization (`apply`'s ephemeral table, `duckdb`'s persistent
-  one) falls back to treating that one property as if the specification
+  view) falls back to treating that one property as if the specification
   hadn't declared it at all — for (a), decision 7's bare default physical
   type for the property's declared logical `type`/`format` is used
   instead, as if `x-okf-duckdb-type` had never been written; for (b),
@@ -876,72 +877,96 @@ discovery/reservation and decision 6's advisory diagnostics — none of them
 materialize or export a schema, so decisions 7 and 8 have nothing to plug
 into for them.
 
-### 14. Persistent per-type materialization in `duckdb`
+### 14. Persistent per-type materialization in `duckdb`: managed views, not physical copies
 
 `attach_okf`'s existing four-table contract is **unchanged**:
 `{schema}.concepts`, `{schema}.links`, `{schema}.reserved`,
 `{schema}.diagnostics` (`schema` defaulting to `"okf"`) keep their current
-shape, names, and `overwrite`/collision behavior exactly as today. Every
-bundle still gets these four tables whether or not any type has a
-specification.
+shape, names, and `overwrite`/collision behavior exactly as today. These
+four stay physical tables. Every bundle still gets them whether or not any
+type has a specification.
 
 Additively, for every concept type that has a specification, `attach_okf`
-also materializes one table into a **second, dedicated schema**,
-`{schema}_types` (`"okf_types"` by default) — never into `schema` itself —
-named for the exact type string, quoted, the same convention `apply`
-already uses for its ephemeral tables. Its columns follow decision 7's
-physical type mapping and carry decision 8's `COMMENT ON TABLE`/`COMMENT ON
-COLUMN` metadata. A type with **no** specification gets no per-type table;
-its concepts remain reachable only through the generic `concepts` table, as
-today — this RFC does not make per-type materialization the default for
-every type, only for ones that opted in with a specification, since the
-generic table already covers the rest and a wholesale VARCHAR-inferred
-table per type would be a much larger default-on behavior change than this
-RFC's "additive, opt-in" stance elsewhere.
+materializes one **persistent view**, not a physical table, into a
+**second, dedicated schema**, `{schema}_types` (`"okf_types"` by default)
+— never into `schema` itself — named for the exact type string, quoted,
+the same convention `apply` already uses for its ephemeral tables. The
+view selects and casts directly out of `{schema}.concepts`:
 
-Using a separate schema rather than sharing `{schema}` is deliberate: it
-makes a per-type table name colliding with `concepts`/`links`/`reserved`/
-`diagnostics` structurally impossible, rather than a case this RFC would
-otherwise have to define collision rules for. A collision *within*
-`{schema}_types` — two types whose exact strings collide under DuckDB
-identifier equality — surfaces as DuckDB's own "table already exists"
-error, the same way `apply` already lets DuckDB's catalog be the source of
-truth for that case, per the 0.15.0 changelog's own precedent.
+```sql
+CREATE VIEW "okf_types"."Rotina" AS
+SELECT
+    concept_id AS __okf_concept_id,
+    path AS __okf_path,
+    json_extract_string(frontmatter_json, '$.title') AS title,
+    TRY_CAST(json_extract_string(frontmatter_json, '$.tentativas') AS BIGINT)
+        AS tentativas
+FROM "okf"."concepts"
+WHERE concept_type = 'Rotina';
+```
 
-**Exactly what `overwrite` does in `{schema}_types` mirrors what it
-already does in `{schema}`, table by table, never schema-wide.** Today,
-`overwrite=False` raises `BundleExportError` if any of the four named
-tables this call is about to create already exists in `{schema}`;
-`overwrite=True` drops and recreates each of those four specific tables
-(`_replace_table`), one at a time — it has never dropped an unrelated
-table that happens to live in `{schema}`, and nothing in this RFC changes
-that. The per-type case extends the identical rule, not a stronger one:
+Column types follow decision 7's physical type mapping; `COMMENT ON VIEW`/
+`COMMENT ON COLUMN` carry decision 8's metadata — DuckDB persists and
+recovers comments on a view exactly like a table, confirmed against the
+`duckdb>=1.4,<2` range this project already depends on: created, closed,
+reopened, and re-queried, both the view's column types (`DESCRIBE`) and
+its `COMMENT ON VIEW`/`COMMENT ON COLUMN` text (`duckdb_views()`/
+`duckdb_columns()`) come back unchanged. A type with **no** specification
+gets no per-type view; its concepts remain reachable only through the
+generic `concepts` table, as today.
 
-- the set of tables this invocation is about to create in `{schema}_types`
-  is exactly the quoted exact-type-name tables for types this run's
-  discovery (decision 2) found to have a specification — nothing else in
-  `{schema}_types` is "this export's" for the purposes of this call;
-- without `overwrite`, a name collision on any of *those* tables raises
-  `BundleExportError`, extended to list collisions found in either schema,
-  the same error type RFC 0005 already defines for `{schema}`;
-- with `overwrite=True`, each of those specific tables is individually
-  dropped and recreated (`_replace_table`), exactly like the existing four
-  — **never** a `DROP SCHEMA`/wholesale recreation of `{schema}_types`,
-  and never a table this invocation did not name;
-- a table left over in `{schema}_types` from a type whose specification
-  was later removed is **not** cleaned up by this RFC — orphan removal
-  needs its own retention/ownership decision this RFC does not attempt,
-  the same way `{schema}`'s four-table contract has never tried to garbage
-  collect anything either. A caller who wants a clean `{schema}_types`
-  drops it themselves before calling `attach_okf`;
-- a table in `{schema}_types` this invocation did not name — anything a
-  caller or another tool put there — is never touched, dropped, or
-  otherwise affected by `attach_okf`, with or without `overwrite`.
+**Why a view instead of a physical copy, and what a view does and does not
+solve on its own.** A view is stored SQL text, re-executed on every query
+— confirmed by the same prototype: replacing `{schema}.concepts` outright
+(drop and recreate with different rows) left the existing view intact and
+immediately reflecting the new data, no refresh step, no stale copy. That
+genuinely removes data duplication, the "did this table refresh" question,
+and the cost of re-copying every row on each `attach_okf` call. It does
+**not**, by itself, resolve *ownership* — a `CREATE OR REPLACE VIEW`
+replaces only the view of that exact name; a view for a type whose
+specification later disappears does not get removed just because it's a
+view rather than a table. Decision 14 still needs an explicit lifecycle
+rule, the same way it did for physical tables — a view changes what that
+rule costs, not whether one is needed.
 
-This keeps `overwrite`'s meaning exactly what it already is today
-("replace the specific tables this call manages"), and makes explicit that
-this RFC never lets an implementation decide, implicitly, whether to
-destroy data the bundle export does not own.
+**`{schema}_types` is a namespace `attach_okf` fully owns, not a shared
+one it partially manages.** Given that ownership still has to be decided
+either way, this RFC picks the simpler of the two real options: `{schema}_types`
+holds nothing but this export's generated views, and every `attach_okf`
+call resets it wholesale rather than reconciling it view by view. This is
+consistent with what `{schema}_types` already was in this RFC's first
+revision — a namespace reserved specifically so a per-type name could
+never collide with `concepts`/`links`/`reserved`/`diagnostics` — extended
+one step further: the whole namespace is generated, not just
+collision-free.
+
+- `overwrite=False`: if `{schema}_types` already exists and holds anything
+  at all, `attach_okf` raises `BundleExportError` (extended over the new
+  schema the same way it already covers `{schema}`'s four tables) rather
+  than silently reusing or adding to it;
+- `overwrite=True`: `attach_okf` runs `DROP SCHEMA "{schema}_types" CASCADE`
+  followed by `CREATE SCHEMA "{schema}_types"`, then creates one view per
+  specification-having type found by this run's discovery (decision 2) —
+  confirmed against `duckdb>=1.4,<2` to cleanly remove every view in the
+  schema and leave it ready for immediate recreation. A type whose
+  specification was removed since the last run simply has no view created
+  this time — there is nothing left to clean up separately, because
+  nothing survives the drop;
+- a caller who puts their own objects in `{schema}_types` is depending on
+  behavior this RFC explicitly does not support: `{schema}_types` is
+  reserved, generated, `attach_okf`-owned namespace, the persistent-`duckdb`
+  counterpart to `.okf/specs/**`-adjacent reservation elsewhere in this
+  RFC, not a shared workspace `attach_okf` partially respects. This is a
+  narrower, and simpler, contract than physical per-type tables would have
+  needed — no partial-ownership bookkeeping, no distinguishing "this
+  export's table" from "a table with the same name someone else made."
+
+Snapshotting a type's data into a real, physical, independently queryable
+table — for workloads where view-time `TRY_CAST` cost or `{schema}.concepts`
+availability genuinely matters — is deliberately **out of scope for this
+RFC**. It is a coherent later addition (an opt-in materialization mode
+alongside the view default) that does not require revisiting anything
+decided here; this RFC does not attempt to design it now.
 
 ### 15. `schema` (`schema_export.py`): declared schema wins, `--cast` narrows, diagnostics per format
 
