@@ -298,6 +298,24 @@ levels, meaning three different things —
 None of the three is optional to get right, and none should be conflated
 with another when reading or writing a specification.
 
+**The schema file must validate against the JSON Schema Draft 2020-12
+meta-schema itself.** Calling it "a real JSON Schema document" (this
+decision's own opening line) is a claim, not a hope — it has to be
+checked, not merely assumed of whatever JSON happens to parse. A file that
+is syntactically valid JSON but is not a well-formed Draft 2020-12 schema
+— an `enum` whose value isn't an array, a `$ref` that isn't a string, a
+malformed `additionalProperties` shape, and any other meta-schema
+violation — is treated exactly as unreadable JSON already is (decision 9):
+a diagnostic that makes the specification ineligible, whole-specification
+fallback, same as today. This closes what an earlier revision of this RFC
+left as an open question ("does validating the schema file need a real
+JSON Schema library") — it does, and this RFC commits to that cost rather
+than leaving two conformant implementations free to disagree about which
+malformed files are tolerated. The check is meta-schema conformance of the
+*schema document itself* only — it has no relationship to decision 6's
+advisory try-without-forcing validation of *concept data* against that
+schema, which stays exactly as defined.
+
 ### 5. The v1 profile: a small, explicit subset — everything else preserved
 
 `okf-parser` does not implement JSON Schema Draft 2020-12 in full. Adding a
@@ -410,6 +428,40 @@ integer width, and so on. The JSON Schema `type` expresses the logical
 category; `x-okf-duckdb-type`, when present, expresses the exact physical
 representation.
 
+**Not every v1-profile-valid property has a resolvable physical type.**
+This table gives exactly one bare array default (`array` + `items.type:
+string` → `VARCHAR[]`); every other homogeneous scalar array decision 5's
+profile otherwise allows (`items.type: integer`, `items.type: boolean`,
+and so on) has no default here and needs an explicit `x-okf-duckdb-type`
+on the property — decision 10 states the matching rule for the reverse
+(`ADD COLUMN`) direction. A property expressed only through a keyword this
+decision doesn't map at all — for instance, one that relies solely on
+`$ref`/`$defs` for its shape, with no interpretable `type` of its own — is
+in the same position. Neither case is a malformed schema; both are simply
+properties the v1 profile can describe structurally (and decision 5
+preserves whatever else they declare) without this decision being able to
+say what DuckDB column they become. Both resolve through decision 9's
+single-property fallback: no diagnostic-worthy defect in the schema, but
+that one property compiles, for materialization only (`apply`'s ephemeral
+table, `duckdb`'s persistent one), exactly as if it hadn't been declared —
+while `schema`'s JSON output and `apply`'s writeback keep emitting it
+exactly as authored, per decision 5.
+
+**Normalization to DuckDB's catalog-normalized spelling applies to
+validation, diagnostics, and any `x-okf-duckdb-type` this RFC's own
+compiler writes for the first time — never to rewriting a value someone
+already authored.** Decision 10's `RENAME COLUMN` preserves every keyword
+on a property node, `x-okf-duckdb-type` included, byte-for-byte — the two
+rules don't conflict because they apply to different moments: a spec
+author writing `"x-okf-duckdb-type": "decimal (18, 4)"` gets that exact
+string echoed back by a `RENAME` that never touches the value, and gets
+`DECIMAL(18,4)` used for the actual `CREATE`/`ALTER` DDL and for any
+diagnostic that names the type. Only when this decision's compiler is the
+one *writing* an `x-okf-duckdb-type` for the first time — decision 10's
+reverse-mapping table, synthesizing one for an `ADD COLUMN` whose exact
+type differs from its logical type's default — is the catalog-normalized
+spelling what gets written.
+
 **`x-okf-duckdb-type` is never spliced into DDL as raw text.** A schema
 file is bundle data, not caller-trusted code — unlike an `--sql` script,
 which is the operator's own input, a schema's `x-okf-duckdb-type` string
@@ -464,6 +516,8 @@ All advisory by default, distinct cases:
 - the file `schema` resolves to does not exist, or resolves outside the
   bundle — broken reference;
 - the referenced file is not valid JSON — unreadable schema;
+- the referenced file is valid JSON but fails Draft 2020-12 meta-schema
+  validation (decision 4) — malformed schema;
 - keywords outside the v1 profile (decision 5) — preserved, no diagnostic
   by itself;
 - `properties.type.const` absent — missing identity;
@@ -474,9 +528,15 @@ All advisory by default, distinct cases:
 - an `x-okf-duckdb-type` value that fails decision 7's isolated-parse
   validation — malformed physical type, never reaching a real `CREATE`/
   `ALTER`;
+- a property with no resolvable physical type — no bare array default and
+  no `x-okf-duckdb-type` override, or no mapped `type` at all (decision 7)
+  — unmaterializable property;
 - `schema`'s `--cast` naming a property already covered by a declared
   schema (decision 15) — cast conflict; the declared type is exported, the
-  cast is not applied.
+  cast is not applied;
+- a concept document holding a field a closed specification
+  (`additionalProperties`/`unevaluatedProperties: false`) doesn't declare
+  (decision 15) — undeclared field under a closed schema.
 
 **"Advisory" is not just a severity label — it is a defined fallback every
 consumer applies the same way.** Saying a diagnostic is advisory means
@@ -492,7 +552,8 @@ Three distinct degrees of fallback, not one — collapsing them into a single
 
 - **whole-specification fallback**, for a failure nothing about the
   specification's own content can localize — a missing `schema` field, a
-  broken reference, unreadable JSON, missing `properties.type.const`, or
+  broken reference, unreadable JSON, a Draft 2020-12 meta-schema
+  validation failure (decision 4), missing `properties.type.const`, or
   either half of an ownership conflict or an identity ambiguity. These
   make the **affected specification ineligible**: the type it would have
   governed compiles, in `apply`, `duckdb`, and `schema` alike, **exactly
@@ -502,19 +563,28 @@ Three distinct degrees of fallback, not one — collapsing them into a single
   that type reshapes only the ephemeral table, the same as any type with
   no specification, because there is no well-formed specification to
   write into;
-- **single-property fallback**, for a malformed `x-okf-duckdb-type` only —
-  the property stays fully declared and eligible. Only the physical-type
-  *override* is unusable: materialization (`apply`'s ephemeral table,
-  `duckdb`'s persistent one) falls back to decision 7's bare default
-  physical type for that property's declared logical `type`/`format`, as
-  if `x-okf-duckdb-type` had never been written. The property's declared
-  `type`, `format`, and `description` are used exactly as declared
-  everywhere else — nothing about them is in question, only the physical
-  override was unparseable. `schema`'s JSON output and `apply`'s writeback
-  (decision 5) still re-emit the property **with the original,
-  unparseable `x-okf-duckdb-type` member preserved verbatim** — neither
-  path interprets that value, so there is nothing for either of them to
-  reject; only materialization, which does interpret it, degrades;
+- **single-property fallback**, for two distinct causes that both leave
+  the property itself fully declared and eligible, only its physical
+  materialization affected: (a) a malformed `x-okf-duckdb-type`, or (b) a
+  property with no resolvable physical type at all — an array whose item
+  type has no bare default and no `x-okf-duckdb-type` override (decision
+  7), or a property expressed only through a keyword this RFC's v1 profile
+  doesn't map to a physical type in the first place (decision 7). Either
+  way: materialization (`apply`'s ephemeral table, `duckdb`'s persistent
+  one) falls back to treating that one property as if the specification
+  hadn't declared it at all — for (a), decision 7's bare default physical
+  type for the property's declared logical `type`/`format` is used
+  instead, as if `x-okf-duckdb-type` had never been written; for (b),
+  there is no default to fall back to, so the property is simply not
+  compiled as a typed column, exactly like a field with no specification.
+  In both cases the property's declared `type`, `format`, and
+  `description` are used exactly as declared everywhere else that isn't
+  materialization — nothing about the property's own validity is in
+  question. `schema`'s JSON output and `apply`'s writeback (decision 5)
+  still re-emit the property **exactly as authored, any unparseable or
+  physically-unmappable member included** — neither path interprets these
+  values, so there is nothing for either of them to reject; only
+  materialization, which does interpret them, degrades;
 - **no fallback at all**, for a `--cast` naming a property a schema
   already declares. This is not a defect in the specification to degrade
   around — the specification is exactly as valid as it was — so nothing
@@ -631,8 +701,9 @@ exactly `[<primitive>, "null"]` as decision 6 already defines, since a
 scalar mapping is never an object.
 
 Every mapped property is nullable by the rule matching its own shape
-above, unless the column is also being written to `required` in the same
-statement — which `ADD COLUMN` alone never does (below).
+above — `required` (decision 6) governs presence, not nullability, so it
+has no bearing on this at all, and `ADD COLUMN` never adds a column to
+`required` in the first place (below).
 
 - `ADD COLUMN "prazo" BIGINT` creates `schema.properties.prazo` per the
   table above. **It never adds `prazo` to `required`** — `ALTER TABLE ADD
@@ -879,13 +950,35 @@ specification's `type` (mapped through the same JSON Schema vocabulary
 `schema_export.py` already emits, not decision 7's DuckDB mapping, which
 does not apply here) wins outright — inference is not consulted for that
 property regardless of `--infer-types`, and a `--cast` naming the same
-property is **not** silently applied over it. `--cast` and `--infer-types`
-keep their current, unchanged behavior for every property a type's
-specification does not cover (or for types with no specification at all).
-A `--cast` that names a property the specification *does* cover is a
-diagnostic ("cast conflicts with declared schema property"), added to
-decision 9's list — the cast is reported, not applied, and the declared
-type is still what gets exported.
+property is **not** silently applied over it. A `--cast` that names a
+property the specification *does* cover is a diagnostic ("cast conflicts
+with declared schema property"), added to decision 9's list — the cast is
+reported, not applied, and the declared type is still what gets exported.
+
+**A specified type's JSON output never grows properties `--infer-types`
+found in the data.** "The declared schema is canonical" and "infer
+whatever the data adds" are not both true at once — a specification
+declaring `additionalProperties: false` and a concept document holding an
+undeclared `legado` field is exactly the case where blindly merging an
+inferred `legado` property into the exported `properties` would silently
+turn something the specification declared *closed* into something the
+export makes *open*. So, for a type that has a specification:
+`schema`'s JSON output is the declared schema, re-emitted per decision 5 —
+`properties` is never augmented with fields `--infer-types` observed but
+the specification didn't declare, regardless of the flag. If the
+specification's own `additionalProperties`/`unevaluatedProperties`
+keyword is present and literally `false` — the one case this decision
+reads either keyword for, a narrow exception to decision 5's "not acted
+on" list, not a general adoption of closed-world validation — a concept
+document holding a field the specification doesn't declare is a new
+diagnostic ("undeclared field present under a closed schema"), added to
+decision 9's list, advisory like every other case there. When the
+specification is open (`additionalProperties` absent or `true`, the
+example in decision 4 included), an undeclared observed field is simply
+not diagnosed — the schema's own declared openness already says that's
+fine. `--cast` and `--infer-types` keep their current, entirely unchanged
+behavior for types with **no** specification at all; this decision only
+narrows what a *specified* type's output does.
 
 **Diagnostic transport.** `schema`'s two output formats have different
 existing shapes and this RFC does not unify them into one envelope:
@@ -1012,10 +1105,10 @@ the next run) without a second flag to remember every time.
 - Exact `OKF0xx` diagnostic codes for every case in decision 9 — needs to
   fit the existing numbering in `type_specs.py`/`schema_contract.py`
   rather than being assigned here in isolation.
-- Whether validating that a schema file is itself syntactically valid
-  Draft 2020-12 needs a real JSON Schema validation library (none is a
-  current dependency) or whether checking only the v1 profile's own
-  keywords (decision 5) is sufficient for now.
+- Which JSON Schema meta-schema validation library `okf-parser` adopts for
+  decision 4's new meta-schema-conformance requirement — a real dependency
+  this RFC now commits to needing, even though the exact package isn't
+  named here.
 - Ambiguous casts: what makes a value "convertible" for decision 6's
   try-without-forcing rule is underspecified beyond DuckDB's own
   `TRY_CAST` semantics — whether that is sufficient, or OKF wants stricter
