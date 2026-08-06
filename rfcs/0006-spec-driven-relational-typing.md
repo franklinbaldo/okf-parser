@@ -2,7 +2,7 @@
 type: RFC
 title: Spec-driven relational typing and bidirectional spec sync
 status: proposed
-description: Let an optional sibling JSON Schema file declare a type's schema and documentation, compiled into DuckDB types and COMMENT ON metadata, with ALTER TABLE writing back to the schema that declared it
+description: Let an optional linked JSON Schema file declare a type's schema and documentation, compiled into DuckDB types and COMMENT ON metadata, with ALTER TABLE writing back to the schema that declared it
 ---
 
 # RFC 0006: Spec-driven relational typing and bidirectional spec sync
@@ -19,7 +19,12 @@ TABLE`/`COMMENT ON COLUMN` metadata carrying the specification's own prose —
 instead of leaving inference and documentation as something a caller
 re-derives every time.
 
-The specification is a pair of sibling files, not a single document:
+The specification is a linked pair of files, not a single document —
+"linked," not "sibling": `schema` (decision 1) is a POSIX-relative path
+resolved against the Markdown document's own location, so the two files
+commonly sit side by side but are not required to; a bundle is free to
+keep schema files under their own subdirectory (`schema:
+./schemas/rotina.schema.json`) if that suits its layout:
 
 ```text
 rotina.md            # narrative documentation; frontmatter references the schema
@@ -101,7 +106,7 @@ in one pass today.
 
 ## Decision
 
-### 1. A specification is two sibling files: `<name>.md` + `<name>.schema.json`
+### 1. A specification is two linked files: `<name>.md` + `<name>.schema.json`
 
 ```text
 .okf/specs/rotina.md
@@ -159,7 +164,7 @@ any template or flag:
    `type: OKFTypeSpec` is classified as bundle metadata, not a concept —
    the same walk-time classification `.okfignore` and other reserved
    documents already get, requiring no new discovery pass;
-2. its `schema` field is resolved to a sibling file (decision 1);
+2. its `schema` field is resolved to its linked file (decision 1);
 3. that schema's `properties.type.const` (decision 3) associates it with
    the concept type it governs.
 
@@ -310,14 +315,32 @@ this RFC scopes v1 down to exactly the keywords the compiler interprets:
 
 Every other keyword — `$id`, `$ref`, `$defs`, `enum`, `pattern`, `oneOf`,
 `allOf`, `anyOf`, `default`, and anything else valid in Draft 2020-12 — is
-**semantically preserved and exported as declared, but not acted on** by
-the v1 compiler: no diagnostic is derived from it, no DuckDB decision
-depends on it. "Ignored" means "not yet load-bearing," not "invalid" or
-"stripped." `enum` and `pattern` were deliberately left out of v1 even
-though parsing them is simple — the open problem is not reading them, it
-is defining one coherent, advisory-consistent meaning for them across
-`check`, `apply`, DuckDB, and every schema exporter at once; that is
+**not acted on** by the v1 compiler: no diagnostic is derived from it, no
+DuckDB decision depends on it. "Ignored" means "not yet load-bearing," not
+"invalid" or "stripped." `enum` and `pattern` were deliberately left out of
+v1 even though parsing them is simple — the open problem is not reading
+them, it is defining one coherent, advisory-consistent meaning for them
+across `check`, `apply`, DuckDB, and every schema exporter at once; that is
 future-RFC work, not something to half-commit to here.
+
+**The preservation promise itself only holds for the schema file and JSON
+Schema output — not for every projection.** "Semantically preserved and
+exported as declared" is achievable when the target is the schema file
+itself (decision 10's writeback) or `schema`'s JSON-format output
+(decision 15), because both re-emit JSON Schema, the same vocabulary the
+unread keywords are already written in — no interpretation is needed to
+pass them through. It is **not** achievable for Zod or Pydantic output: a
+`oneOf` or a `pattern` has no representation in Zod/Pydantic's own type
+systems without the compiler interpreting it, which decision 5 explicitly
+does not do in v1. Zod and Pydantic generation therefore compile **only
+the v1 profile** — a property using an out-of-profile keyword still
+generates a field from whatever the v1 profile *does* say about it (its
+`type`, nullability, `description`), silently narrower than the full
+declared contract in exactly the keywords this decision lists as ignored.
+This is a real, documented loss specific to those two projections, not an
+oversight: a caller who needs the full declared contract, keywords and
+all, reads the schema file directly or uses `schema`'s JSON-format output,
+not Zod or Pydantic.
 
 "Semantically preserved" is a deliberately weaker promise than
 byte-identical: a schema written back by `apply` (decision 10) goes through
@@ -432,7 +455,7 @@ review: extending `apply`'s SQL grammar for comment writes would contradict
 RFC 0005's just-implemented contract for no clear benefit, since editing
 the schema file directly is no heavier.
 
-### 9. Diagnostics
+### 9. Diagnostics, and what "advisory" actually compiles to for a broken specification
 
 All advisory by default, distinct cases:
 
@@ -455,6 +478,38 @@ All advisory by default, distinct cases:
   schema (decision 15) — cast conflict; the declared type is exported, the
   cast is not applied.
 
+**"Advisory" is not just a severity label — it is a defined fallback every
+consumer applies the same way.** Saying a diagnostic is advisory means
+nothing on its own unless it's also settled what actually gets compiled
+when a specification is broken; leaving that implicit would let two
+conformant implementations legitimately disagree, and would leave `apply`
+unable to know which file, if any, its writeback (decision 10) targets.
+So:
+
+- the first six cases above — missing `schema` field, broken reference,
+  unreadable JSON, missing identity, and either half of an ownership
+  conflict or an identity ambiguity — make the **affected specification
+  ineligible**. An ineligible specification governs nothing: the type it
+  would have governed compiles, in `apply`, `duckdb`, and `schema` alike,
+  **exactly as it would with no specification at all** (RFC 0005's plain
+  `VARCHAR` inference, `schema`'s existing inferred/cast output), and
+  `apply`'s writeback (decision 10) does not target it — an `ALTER TABLE`
+  against that type reshapes only the ephemeral table, the same as any
+  type with no specification, because there is no well-formed specification
+  to write into. The diagnostic is still reported; the bundle still opens;
+  nothing is blocked;
+- an `x-okf-duckdb-type` that fails validation or a `--cast` conflict
+  disqualify only *that one property* the same way — the property
+  compiles as if the specification hadn't declared it (falling back to
+  inference for that field alone), not the whole specification;
+- this list is exhaustive for what "advisory" degrades to in v1: every
+  case above resolves to "ignore the unusable part, compile as if it
+  weren't declared," never to a hard failure. If a future case is found
+  that genuinely cannot degrade this way, it must be named explicitly and
+  removed from the advisory category by that future RFC — decision 15's
+  `SchemaExportError` is not, and must not become, a back door for a
+  spec-content failure to bypass this fallback (see decision 15).
+
 Escalation is per-surface, matching what already exists rather than
 inventing one flag for all of them: `check --require-spec` additionally
 reports its own existence-mismatch case (decision 2's "specification found
@@ -464,30 +519,54 @@ at the derived path but its `const` disagrees") and escalates every
 this RFC does not invent one. `apply` and `duckdb` surface the same
 diagnostics through whatever advisory-reporting mechanism each already has
 (`apply`'s `validation` payload, etc.). `schema`'s transport is decision
-15's own: a `"diagnostics"` key in JSON mode, stderr plus exit code in Zod
-mode. None of them gain a new escalation flag by this RFC.
+15's own: a `"diagnostics"` key in JSON mode, stderr in Zod mode, exit code
+unaffected in both. None of them gain a new escalation flag by this RFC.
 
 ### 10. `ALTER TABLE` writes back to the schema, when one exists
 
-When the type an `ALTER TABLE` targets has a schema file:
+**`ADD COLUMN` of a type this decision's reverse mapping cannot represent
+stays rejected, exactly as RFC 0005 already rejects it.** RFC 0005 v1
+requires every `ADD COLUMN` to be `VARCHAR`, full stop (`_check_result_schema`).
+This RFC lifts that restriction **only** for a type that has a schema file,
+and **only** for the exact DuckDB types the table below can turn back into
+a v1-profile JSON Schema property — never unconditionally. A type with no
+schema file keeps RFC 0005's original VARCHAR-only restriction exactly as
+defined, unchanged. An `ADD COLUMN` of any DuckDB type not in this table —
+`STRUCT`, `MAP`, `UNION`, `ENUM`, `BLOB`, `INTERVAL`, `UUID`, and anything
+else this RFC does not name — is rejected the same way, whether or not a
+schema exists, because there is no way to sync it into the v1 profile
+without inventing representation this RFC does not define. This closes the
+gap two conformant implementations could otherwise fill in differently.
 
-- `ADD COLUMN "prazo" BIGINT` creates `schema.properties.prazo`, with `type`
-  set to the nearest logical JSON Schema type for `BIGINT` (`integer`).
-  **It never adds `prazo` to `required`** — `ALTER TABLE ADD COLUMN` has no
-  way to express "and this must always be present" in RFC 0005's grammar,
-  so inventing that obligation here would be an unrequested escalation.
-  When the exact DuckDB type isn't the default physical mapping for that
-  logical type (decision 7) — e.g. `ADD COLUMN "valor" DECIMAL(18,4)`,
-  whose default would have been `DOUBLE` — the sync also writes
-  `x-okf-duckdb-type` explicitly, or the next compile would silently lose
-  the declared precision;
+| `ADD COLUMN` DuckDB type | Written to `properties.<name>` |
+| --- | --- |
+| `VARCHAR` | `{"type": "string"}` |
+| `BOOLEAN` | `{"type": "boolean"}` |
+| any DuckDB integer type (`TINYINT` … `HUGEINT`, signed or unsigned) | `{"type": "integer"}`, `x-okf-duckdb-type` added unless the exact type is `BIGINT` (decision 7's default) |
+| `DOUBLE`/`REAL`/`FLOAT` | `{"type": "number"}`, `x-okf-duckdb-type` added unless the exact type is `DOUBLE` |
+| `DECIMAL(p,s)` | `{"type": "number", "x-okf-duckdb-type": "DECIMAL(p,s)"}` — always annotated, since `DECIMAL` is never decision 7's bare default for `number` |
+| `DATE` | `{"type": "string", "format": "date"}` |
+| `TIMESTAMPTZ` | `{"type": "string", "format": "date-time"}` |
+| `TIMESTAMP` | `{"type": "string", "format": "date-time", "x-okf-duckdb-type": "TIMESTAMP"}` — annotated, since `TIMESTAMPTZ` is decision 7's bare default for `date-time` |
+| `VARCHAR[]` | `{"type": "array", "items": {"type": "string"}}` |
+| any other `<scalar>[]` covered by a row above | `{"type": "array", "items": <that row's own mapping>}`, `x-okf-duckdb-type` on the array itself when the item type isn't the bare default for its row |
+
+Every mapped property is nullable (`type` written as `[<mapped>, "null"]`,
+per decision 6) unless the column is also being written to `required` in
+the same statement — which `ADD COLUMN` alone never does (below).
+
+- `ADD COLUMN "prazo" BIGINT` creates `schema.properties.prazo` per the
+  table above. **It never adds `prazo` to `required`** — `ALTER TABLE ADD
+  COLUMN` has no way to express "and this must always be present" in RFC
+  0005's grammar, so inventing that obligation here would be an
+  unrequested escalation;
 - `DROP COLUMN "prazo"` removes `properties.prazo` and, if present, `prazo`
   from `required`;
 - `RENAME COLUMN "prazo" TO "prazo_dias"` renames the `properties` key,
   updates its entry in `required` if present, and preserves every other
   keyword on that property node unchanged — including ones outside the v1
-  profile (decision 5), semantically preserved per that decision's precise
-  round-trip guarantee;
+  profile, per decision 5's schema-file preservation guarantee (not its
+  narrower Zod/Pydantic one, which does not apply to writeback at all);
 - descriptions are **not** part of this sync (decision 8) — they change by
   editing the schema file directly.
 
@@ -754,13 +833,33 @@ existing shapes and this RFC does not unify them into one envelope:
   never changes the exit code, in either format — consistent with decision
   6's "never rejected" policy rather than a Zod-specific carve-out. The
   process exits non-zero only when the artifact genuinely cannot be
-  produced at all (an existing `SchemaExportError` — unreadable schema
-  file, a name collision, and the like), which is unrelated to this
-  decision and unchanged by it. The MCP `schema` tool's Zod mode keeps
-  returning the same plain string it does today — an MCP caller that needs
+  produced at all — an existing `SchemaExportError` unrelated to
+  specification *content* (a concept type name collision, an invalid
+  `--cast` specification string, and the like already raised before this
+  RFC). **A broken or ambiguous specification is never one of those
+  cases** — decision 9's eligibility fallback means a malformed schema
+  file degrades that one type to no-spec behavior, advisory diagnostic
+  reported, artifact still produced; it is deliberately excluded from
+  `SchemaExportError`, not an unstated exception to it. The MCP `schema`
+  tool's Zod mode keeps returning the same plain string it does today — an
+  MCP caller that needs
   diagnostics alongside a Zod export calls `schema` with
   `schema_format="json"` instead; this RFC does not add a second output
   channel to the Zod MCP tool.
+
+**`build_pydantic_models()`.** Unlike JSON and Zod, Pydantic is a library
+API only — `schema_format` (CLI and MCP) is `Literal["json", "zod"]` and
+never exposes it; `build_pydantic_models()` is called directly by Python
+code that imports `okf_parser`. Its return type,
+`dict[str, type[BaseModel]]`, is unchanged by this RFC — no diagnostics
+envelope is added to it, for the same reason Zod's stdout contract stays a
+bare string: wrapping a stable, narrow, already-used return type is a
+bigger cost than the benefit. A caller who needs the diagnostics for a
+bundle also compiled to Pydantic models calls `export_json_schema`/
+`schema_bundle(fmt="json")` against the same bundle, which now carries them
+(this decision's JSON-mode addition) — the same "call JSON mode for
+diagnostics" answer this decision already gives for Zod, extended to
+Pydantic rather than inventing a third mechanism.
 
 ## Alternatives considered
 
@@ -775,7 +874,7 @@ schema as a source rather than something it only ever produces.
 
 ### Embedding the JSON Schema inline in the specification's YAML frontmatter
 
-Considered, and initially preferred over a sibling file. Rejected in favor
+Considered, and initially preferred over a linked file. Rejected in favor
 of the two-file form because: an external `.schema.json` is directly
 usable by any JSON Schema tool (editors, validators, `$ref` resolution)
 without extracting it from YAML frontmatter first; it can be versioned,
@@ -792,7 +891,7 @@ project sometimes grows into a directory once fixtures or migrations show
 up. Rejected for v1: it would change `--require-spec`'s already-shipped
 template contract, which today resolves one file path via `{slug}`
 substitution, into something that needs to resolve a directory plus a
-conventional filename. The flat sibling-file form (decision 1) requires no
+conventional filename. The flat, linked-file form (decision 1) requires no
 change to that contract. Revisit once directory-worthy content — fixtures,
 worked examples, migration history — is a real, not speculative, need.
 
