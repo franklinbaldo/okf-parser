@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 import duckdb
 import networkx as nx
 
+from okf_parser.apply import apply_bundle as _apply_bundle
 from okf_parser.bundle import load_bundle, validate_path
 from okf_parser.duckdb import attach_okf
 from okf_parser.formatting import FormatReport, format_path
@@ -110,6 +111,30 @@ def check_format(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
 def write_format(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
     """Explicitly rewrite Markdown files into mdformat canonical form."""
     return _format_payload(format_path(Path(path), write=True, exclude=exclude))
+
+
+def apply_bundle(  # noqa: PLR0913 - each argument is an independent public CLI flag.
+    path: str,
+    *,
+    sql: str | None = None,
+    type_name: str | None = None,
+    field_name: str | None = None,
+    from_value: str | None = None,
+    to_value: str | None = None,
+    write: bool = False,
+    exclude: Sequence[str] = (),
+) -> dict[str, object]:
+    """Mutate frontmatter fields across a bundle via a bounded SQL script."""
+    return _apply_bundle(
+        path,
+        sql=sql,
+        type_name=type_name,
+        field_name=field_name,
+        from_value=from_value,
+        to_value=to_value,
+        write=write,
+        exclude=exclude,
+    )
 
 
 def export_duckdb(

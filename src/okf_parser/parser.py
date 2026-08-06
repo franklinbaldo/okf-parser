@@ -104,7 +104,16 @@ def parse_document(path: Path) -> ParsedDocument:
     except UnicodeDecodeError as exc:
         msg = "document must be valid UTF-8"
         raise DocumentParseError(msg) from exc
+    return parse_document_text(path, text)
 
+
+def parse_document_text(path: Path, text: str) -> ParsedDocument:
+    """Parse YAML frontmatter and preserve the Markdown body from already-read text.
+
+    Callers that need the exact bytes they parsed from for another purpose
+    (hashing, a freshness check) should read once and call this directly,
+    rather than `parse_document`, which reads the file itself.
+    """
     match = _FRONTMATTER_RE.match(text.removeprefix("\ufeff"))
     if match is None:
         msg = "concept must start with YAML frontmatter delimited by ---"

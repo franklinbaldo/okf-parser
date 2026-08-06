@@ -1,6 +1,6 @@
 [project]
 name = "okf-parser"
-version = "0.14.2"
+version = "0.15.0"
 description = "Relational inspection and validation for Open Knowledge Format bundles"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -17,8 +17,10 @@ dependencies = [
   "mdformat-frontmatter>=2,<3",
   "mdformat-gfm>=1,<2",
   "networkx>=3.4,<4",
+  "pyarrow>=18,<26",
   "pydantic>=2.11,<3",
   "pyyaml>=6,<7",
+  "ruamel.yaml>=0.18,<0.20",
 ]
 
 [project.scripts]
