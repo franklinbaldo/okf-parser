@@ -486,29 +486,51 @@ conformant implementations legitimately disagree, and would leave `apply`
 unable to know which file, if any, its writeback (decision 10) targets.
 So:
 
-- the first six cases above — missing `schema` field, broken reference,
-  unreadable JSON, missing identity, and either half of an ownership
-  conflict or an identity ambiguity — make the **affected specification
-  ineligible**. An ineligible specification governs nothing: the type it
-  would have governed compiles, in `apply`, `duckdb`, and `schema` alike,
-  **exactly as it would with no specification at all** (RFC 0005's plain
-  `VARCHAR` inference, `schema`'s existing inferred/cast output), and
-  `apply`'s writeback (decision 10) does not target it — an `ALTER TABLE`
-  against that type reshapes only the ephemeral table, the same as any
-  type with no specification, because there is no well-formed specification
-  to write into. The diagnostic is still reported; the bundle still opens;
-  nothing is blocked;
-- an `x-okf-duckdb-type` that fails validation or a `--cast` conflict
-  disqualify only *that one property* the same way — the property
-  compiles as if the specification hadn't declared it (falling back to
-  inference for that field alone), not the whole specification;
-- this list is exhaustive for what "advisory" degrades to in v1: every
-  case above resolves to "ignore the unusable part, compile as if it
-  weren't declared," never to a hard failure. If a future case is found
-  that genuinely cannot degrade this way, it must be named explicitly and
-  removed from the advisory category by that future RFC — decision 15's
-  `SchemaExportError` is not, and must not become, a back door for a
-  spec-content failure to bypass this fallback (see decision 15).
+Three distinct degrees of fallback, not one — collapsing them into a single
+"ineligible" bucket is exactly what produced a contradiction with decision
+15 in an earlier revision of this decision, so they are named separately:
+
+- **whole-specification fallback**, for a failure nothing about the
+  specification's own content can localize — a missing `schema` field, a
+  broken reference, unreadable JSON, missing `properties.type.const`, or
+  either half of an ownership conflict or an identity ambiguity. These
+  make the **affected specification ineligible**: the type it would have
+  governed compiles, in `apply`, `duckdb`, and `schema` alike, **exactly
+  as it would with no specification at all** (RFC 0005's plain `VARCHAR`
+  inference, `schema`'s existing inferred/cast output), and `apply`'s
+  writeback (decision 10) does not target it — an `ALTER TABLE` against
+  that type reshapes only the ephemeral table, the same as any type with
+  no specification, because there is no well-formed specification to
+  write into;
+- **single-property fallback**, for a malformed `x-okf-duckdb-type` only —
+  the property stays fully declared and eligible. Only the physical-type
+  *override* is unusable: materialization (`apply`'s ephemeral table,
+  `duckdb`'s persistent one) falls back to decision 7's bare default
+  physical type for that property's declared logical `type`/`format`, as
+  if `x-okf-duckdb-type` had never been written. The property's declared
+  `type`, `format`, and `description` are used exactly as declared
+  everywhere else — nothing about them is in question, only the physical
+  override was unparseable. `schema`'s JSON output and `apply`'s writeback
+  (decision 5) still re-emit the property **with the original,
+  unparseable `x-okf-duckdb-type` member preserved verbatim** — neither
+  path interprets that value, so there is nothing for either of them to
+  reject; only materialization, which does interpret it, degrades;
+- **no fallback at all**, for a `--cast` naming a property a schema
+  already declares. This is not a defect in the specification to degrade
+  around — the specification is exactly as valid as it was — so nothing
+  about the property changes: decision 15 already settles this
+  precisely (declared property wins outright, the cast is not applied),
+  and this decision does not restate or loosen that outcome. Only the
+  cast itself is diagnosed.
+
+This is exhaustive for v1: every case above resolves to "ignore the
+unusable part, compile the rest exactly as declared," never to a hard
+failure and never to discarding more than the one thing that was actually
+broken. If a future case is found that genuinely cannot degrade this way,
+it must be named explicitly and removed from the advisory category by that
+future RFC — decision 15's `SchemaExportError` is not, and must not
+become, a back door for a specification-content failure to bypass this
+fallback (see decision 15).
 
 Escalation is per-surface, matching what already exists rather than
 inventing one flag for all of them: `check --require-spec` additionally
@@ -549,11 +571,68 @@ gap two conformant implementations could otherwise fill in differently.
 | `TIMESTAMPTZ` | `{"type": "string", "format": "date-time"}` |
 | `TIMESTAMP` | `{"type": "string", "format": "date-time", "x-okf-duckdb-type": "TIMESTAMP"}` — annotated, since `TIMESTAMPTZ` is decision 7's bare default for `date-time` |
 | `VARCHAR[]` | `{"type": "array", "items": {"type": "string"}}` |
-| any other `<scalar>[]` covered by a row above | `{"type": "array", "items": <that row's own mapping>}`, `x-okf-duckdb-type` on the array itself when the item type isn't the bare default for its row |
+| any other `<scalar>[]` covered by a row above | see below — `items` carries only the logical scalar schema; the array's own physical type is always annotated at the property level |
 
-Every mapped property is nullable (`type` written as `[<mapped>, "null"]`,
-per decision 6) unless the column is also being written to `required` in
-the same statement — which `ADD COLUMN` alone never does (below).
+**Nullability is shaped differently for a scalar property than for an
+array property**, and decision 6's `[<primitive>, "null"]` union only
+describes the scalar case — a JSON Schema `type` union cannot contain an
+object (`items`'s schema), so an array property is never written as
+`"type": [{"type": "array", ...}, "null"]`. Instead, an array property's
+own `type` keyword is the union `["array", "null"]`, sitting alongside
+`items` as a sibling keyword, exactly like a plain (non-nullable) array
+already looks except for the added `"null"`:
+
+```json
+// prazo_dias BIGINT[]
+{
+  "type": ["array", "null"],
+  "items": { "type": "integer" },
+  "x-okf-duckdb-type": "BIGINT[]"
+}
+```
+
+```json
+// registros DATE[]
+{
+  "type": ["array", "null"],
+  "items": { "type": "string", "format": "date" },
+  "x-okf-duckdb-type": "DATE[]"
+}
+```
+
+```json
+// tags VARCHAR[] — the one array shape with a bare physical default
+{
+  "type": ["array", "null"],
+  "items": { "type": "string" }
+}
+```
+
+Two rules make this unambiguous rather than case-by-case:
+
+- **`items` carries only the item's logical schema** (`type`, and
+  `format` when relevant) — never an `x-okf-duckdb-type` of its own. A
+  physical annotation for one array element type does not compose
+  cleanly with a physical annotation for the array type as a whole, so
+  this decision puts the array's physical type in exactly one place;
+- **the array's physical type is annotated at the property level whenever
+  it is anything other than `VARCHAR[]`** — not "whenever the item type
+  differs from its own row's default," which would wrongly let `BIGINT[]`
+  go unannotated on the theory that `integer` is already `BIGINT`'s
+  default row. Decision 7 defines exactly one bare array default —
+  `array` + `items.type: string` → `VARCHAR[]` — and nothing else; every
+  other array physical type, `BIGINT[]`/`DATE[]`/`TIMESTAMPTZ[]`
+  included, has no default to fall back to and is therefore always
+  annotated, the same "no default exists, so always write it" logic
+  `DECIMAL(p,s)` already gets in the scalar table above.
+
+A scalar property's nullability is unaffected by any of this — it stays
+exactly `[<primitive>, "null"]` as decision 6 already defines, since a
+scalar mapping is never an object.
+
+Every mapped property is nullable by the rule matching its own shape
+above, unless the column is also being written to `required` in the same
+statement — which `ADD COLUMN` alone never does (below).
 
 - `ADD COLUMN "prazo" BIGINT` creates `schema.properties.prazo` per the
   table above. **It never adds `prazo` to `required`** — `ALTER TABLE ADD
