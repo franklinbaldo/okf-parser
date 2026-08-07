@@ -7,7 +7,7 @@ description: Every CLI command and MCP tool exposed by okf-parser, with flags an
 # okf-parser command reference
 
 `okf-parser` exposes its command-line interface through Cyclopts
-(`uv run okf-parser <command>`). Read-only operations are also exposed through
+(`uv run okf-parser <command>`). Inspection operations are also exposed through
 FastMCP (`okf-parser-mcp`, or `okf-parser serve`) and share the same service
 functions and payloads where both surfaces exist.
 
@@ -191,4 +191,4 @@ uv run okf-parser serve [--transport stdio|http|sse] [--host HOST] [--port PORT]
 
 Runs the MCP server. `stdio` (default) is what `okf-parser-mcp` runs directly;
 `http` and `sse` bind `--host` and `--port` for network transports. It currently
-serves the five read-only tools listed above.
+serves the five MCP tools listed above.
