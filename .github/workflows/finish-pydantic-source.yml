@@ -2,12 +2,7 @@ name: Finish Pydantic source implementation
 
 on:
   push:
-    branches:
-      - feat/pydantic-schema-source
-
-concurrency:
-  group: finish-pydantic-source
-  cancel-in-progress: true
+    branches: [feat/pydantic-schema-source]
 
 permissions:
   contents: write
@@ -20,7 +15,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: feat/pydantic-schema-source
-          fetch-depth: 0
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: "0.11.21"
@@ -28,268 +22,23 @@ jobs:
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24
-      - name: Wire public surface, tests, docs, and 0.20.0 metadata
+      - name: Regenerate derived files and validate
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
-          from pathlib import Path
-
-          cli = Path("src/okf_parser/cli.py")
-          text = cli.read_text(encoding="utf-8")
-          text = text.replace(
-              'type SchemaFormat = Literal["json", "zod"]',
-              'type SchemaFormat = Literal["json", "zod", "pydantic"]',
-          )
-          text = text.replace(
-              '"""Export canonical JSON Schema or generic/Astro Zod definitions."""',
-              '"""Export JSON Schema, Zod, or importable Pydantic source."""',
-              1,
-          )
-          cli.write_text(text, encoding="utf-8")
-
-          docs = Path("docs/cli.md")
-          text = docs.read_text(encoding="utf-8")
-          text = text.replace(
-              '[--format json|zod]',
-              '[--format json|zod|pydantic]',
-          )
-          text = text.replace(
-              'Exports a canonical JSON Schema or Zod schema for the bundle\'s concept types.',
-              'Exports canonical JSON Schema, Zod source, or importable Pydantic v2 source for the bundle\'s concept types.',
-          )
-          text = text.replace(
-              '- `--format` — `json` (default) or `zod`.',
-              '- `--format` — `json` (default), `zod`, or `pydantic`. The Pydantic target prints one importable module to stdout; naming and aliases are automatic.',
-          )
-          docs.write_text(text, encoding="utf-8")
-
-          mcp_tests = Path("tests/test_mcp.py")
-          text = mcp_tests.read_text(encoding="utf-8")
-          needle = '    assert "spec_template" in tools["duckdb_export"].inputSchema["properties"]\n'
-          replacement = (
-              '    schema_format = tools["schema"].inputSchema["properties"]["format"]\n'
-              '    assert schema_format["enum"] == ["json", "zod", "pydantic"]\n\n'
-              + needle
-          )
-          if needle not in text:
-              raise SystemExit("MCP schema test anchor not found")
-          text = text.replace(needle, replacement, 1)
-          mcp_tests.write_text(text, encoding="utf-8")
-
-          Path("tests/test_pydantic_source.py").write_text(r'''"""Pydantic source generation and shared naming-policy regressions."""
-
-from __future__ import annotations
-
-from decimal import Decimal
-from typing import TYPE_CHECKING, Any, cast
-from uuid import UUID
-
-import pytest
-from pydantic import BaseModel, ValidationError
-
-from okf_parser.schema_contract import SchemaNameCollisionError
-from okf_parser.schema_export import build_pydantic_models, export_pydantic_source
-from okf_parser.service import schema_bundle
-
-if TYPE_CHECKING:
-    from pathlib import Path
-
-
-def _write_concept(path: Path, frontmatter: str) -> None:
-    path.write_text(f"---\n{frontmatter}---\nBody\n", encoding="utf-8")
-
-
-def _source_model(source: str, name: str) -> type[BaseModel]:
-    namespace: dict[str, Any] = {}
-    exec(compile(source, "<generated-okf-models>", "exec"), namespace)  # noqa: S102
-    return cast("type[BaseModel]", namespace[name])
-
-
-def test_pydantic_source_happy_path_is_deterministic_and_importable(tmp_path: Path) -> None:
-    _write_concept(
-        tmp_path / "registro.md",
-        "type: Registro\nvalor: '12.34'\nid_externo: '550e8400-e29b-41d4-a716-446655440000'\n",
-    )
-    spec = tmp_path / "docs" / "types" / "registro.schema.sql"
-    spec.parent.mkdir(parents=True)
-    spec.write_text(
-        'CREATE TABLE "Registro" (valor DECIMAL(18, 4), id_externo UUID);',
-        encoding="utf-8",
-    )
-
-    first = export_pydantic_source(str(tmp_path), spec_template="docs/types/{slug}.md")
-    second = export_pydantic_source(str(tmp_path), spec_template="docs/types/{slug}.md")
-    via_service = schema_bundle(
-        str(tmp_path), "pydantic", spec_template="docs/types/{slug}.md"
-    )
-
-    assert first == second == via_service
-    assert "class RegistroConcept(BaseModel):" in first
-    assert "valor: Decimal" in first
-    assert "id_externo: UUID" in first
-
-    model = _source_model(first, "RegistroConcept")
-    value = model.model_validate(
-        {
-            "type": "Registro",
-            "valor": "12.34",
-            "id_externo": "550e8400-e29b-41d4-a716-446655440000",
-            "extension": "preserved",
-        }
-    )
-    assert value.valor == Decimal("12.34")
-    assert value.id_externo == UUID("550e8400-e29b-41d4-a716-446655440000")
-    assert value.model_extra == {"extension": "preserved"}
-
-
-def test_dynamic_and_source_models_share_automatic_alias_policy(tmp_path: Path) -> None:
-    _write_concept(
-        tmp_path / "odd.md",
-        "type: Odd\n_private: value\n__custom__: value\n__pydantic_extra__: value\n"
-        "model_dump: value\nclass: value\ncustomer-id: value\n",
-    )
-
-    dynamic = build_pydantic_models(str(tmp_path))["Odd"]
-    source = export_pydantic_source(str(tmp_path))
-    generated = _source_model(source, "OddConcept")
-
-    expected = {
-        "private_": "_private",
-        "custom_": "__custom__",
-        "pydantic_extra_": "__pydantic_extra__",
-        "model_dump_": "model_dump",
-        "class_": "class",
-        "customer_id": "customer-id",
-    }
-    for model in (dynamic, generated):
-        aliases = {name: field.alias for name, field in model.model_fields.items()}
-        for name, alias in expected.items():
-            assert aliases[name] == alias
-        value = model.model_validate(
-            {
-                "type": "Odd",
-                "_private": "value",
-                "__custom__": "value",
-                "__pydantic_extra__": "value",
-                "model_dump": "value",
-                "class": "value",
-                "customer-id": "value",
-            }
-        )
-        assert value.private_ == "value"
-        with pytest.raises(ValidationError):
-            model.model_validate(
-                {
-                    "type": "Odd",
-                    "_private": None,
-                    "__custom__": "value",
-                    "__pydantic_extra__": "value",
-                    "model_dump": "value",
-                    "class": "value",
-                    "customer-id": "value",
-                }
-            )
-
-
-def test_optional_non_nullable_accepts_omission_but_rejects_null(tmp_path: Path) -> None:
-    _write_concept(tmp_path / "one.md", "type: Pessoa\napelido: presente\n")
-    _write_concept(tmp_path / "two.md", "type: Pessoa\n")
-
-    dynamic = build_pydantic_models(str(tmp_path))["Pessoa"]
-    generated = _source_model(export_pydantic_source(str(tmp_path)), "PessoaConcept")
-
-    for model in (dynamic, generated):
-        omitted = model.model_validate({"type": "Pessoa"})
-        assert omitted.apelido is None
-        with pytest.raises(ValidationError):
-            model.model_validate({"type": "Pessoa", "apelido": None})
-
-
-def test_field_alias_collision_fails_in_both_pydantic_projections(tmp_path: Path) -> None:
-    _write_concept(tmp_path / "odd.md", "type: Odd\n_x: one\nx_: two\n")
-
-    with pytest.raises(SchemaNameCollisionError, match="both map to Pydantic attribute 'x_'"):
-        build_pydantic_models(str(tmp_path))
-    with pytest.raises(SchemaNameCollisionError, match="both map to Pydantic attribute 'x_'"):
-        export_pydantic_source(str(tmp_path))
-
-
-def test_nested_model_name_collision_reports_both_structural_paths(tmp_path: Path) -> None:
-    _write_concept(
-        tmp_path / "x.md",
-        "type: X\na:\n  structure_b:\n    value: one\n"
-        "a_structure:\n  b:\n    other: two\n",
-    )
-
-    for operation in (build_pydantic_models, export_pydantic_source):
-        with pytest.raises(SchemaNameCollisionError) as caught:
-            operation(str(tmp_path))
-        message = str(caught.value)
-        assert "'a' -> 'structure_b'" in message
-        assert "'a_structure' -> 'b'" in message
-''', encoding="utf-8")
-
-          rfc = Path("rfcs/0001-python-model-codegen.md")
-          text = rfc.read_text(encoding="utf-8")
-          if "status: proposed" not in text:
-              raise SystemExit("RFC status anchor not found")
-          rfc.write_text(text.replace("status: proposed", "status: accepted", 1), encoding="utf-8")
-
-          replacements = {
-              "pyproject.toml": [('version = "0.19.1"', 'version = "0.20.0"')],
-              "typescript/package.json": [('"version": "0.19.1"', '"version": "0.20.0"')],
-              "typescript-duckdb/package.json": [
-                  ('"version": "0.19.1"', '"version": "0.20.0"'),
-                  ('"okf-parser": "^0.19.1"', '"okf-parser": "^0.20.0"'),
-              ],
-              "typescript/src/version.ts": [
-                  ('PROTOCOL_VERSION = "0.19.1"', 'PROTOCOL_VERSION = "0.20.0"')
-              ],
-          }
-          for filename, pairs in replacements.items():
-              path = Path(filename)
-              text = path.read_text(encoding="utf-8")
-              for old, new in pairs:
-                  if old not in text:
-                      raise SystemExit(f"expected {old!r} in {filename}")
-                  text = text.replace(old, new, 1)
-              path.write_text(text, encoding="utf-8")
-
-          Path("changelog/0.20.0.md").write_text('''---
-type: Release
-title: okf-parser 0.20.0
-description: add deterministic Pydantic source generation to the existing schema surface
----
-
-# okf-parser 0.20.0
-
-## Pydantic schema target
-
-`okf-parser schema . --format pydantic` now prints one deterministic importable Pydantic v2 module using the same `TypeContract` consumed by JSON Schema, Zod, and runtime Pydantic models.
-
-- no new command hierarchy or required configuration;
-- aliases are automatic for Python keywords, `BaseModel` members, invalid identifiers, and all leading-underscore authored keys;
-- dynamic and source-generated models share the same Pydantic projection policy;
-- optional non-nullable fields preserve omission versus explicit `null`;
-- nested generated model names are registered compilation-wide and collisions report both structural paths;
-- RFC 0001 is accepted with the implementation in place.
-''', encoding="utf-8")
-          PY
-
           uv lock
           npm install --prefix typescript --package-lock-only --ignore-scripts
           npm install --prefix typescript-duckdb --package-lock-only --ignore-scripts
+          uv sync --frozen --all-groups
           uv run ruff format src tests
           uv run ruff check src tests
           uv run ty check src tests
           uv run pytest --cov --cov-report=term-missing --cov-fail-under=85
           uv run okf-parser check .
           uv build
-
           git rm -f .github/workflows/finish-pydantic-source.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "feat: generate Pydantic source from shared schema contracts"
+          git commit -m "chore: regenerate 0.20.0 derived artifacts"
           git push origin HEAD:feat/pydantic-schema-source
