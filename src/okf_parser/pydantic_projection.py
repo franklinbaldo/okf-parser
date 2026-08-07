@@ -1,0 +1,571 @@
+"""Project shared OKF schema contracts into Pydantic runtime models and source."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import keyword
+import unicodedata
+from dataclasses import dataclass, field
+from datetime import date, datetime
+from decimal import Decimal
+from typing import TYPE_CHECKING, Any, Literal, cast
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field, create_model
+
+from okf_parser.schema_contract import (
+    AnyNode,
+    ContractNode,
+    ListNode,
+    LiteralNode,
+    ObjectNode,
+    ScalarNode,
+    SchemaNameCollisionError,
+    TypeContract,
+    model_name,
+)
+
+if TYPE_CHECKING:
+    from okf_parser.schema_lexemes import CastKind
+
+type FieldDefinition = tuple[Any, Any]
+type StructuralPath = tuple[str, ...]
+
+_PROTECTED_PYDANTIC_NAMES = frozenset(dir(BaseModel)) | {"model_config"}
+_MAX_PYDANTIC_FIELD_NAME = 32
+_MAX_PYDANTIC_MODEL_NAME = 40
+_MAX_COMPACT_ANNOTATION = 50
+_MAX_STRING_LITERAL = 64
+_MAX_SOURCE_LINE = 100
+
+
+@dataclass(frozen=True, slots=True)
+class PydanticFieldName:
+    """One safe Python attribute and its authored alias, when one is required."""
+
+    python_name: str
+    alias: str | None
+
+
+@dataclass(slots=True)
+class PydanticModelNameRegistry:
+    """Reject module-global model-name collisions with structural provenance."""
+
+    owners: dict[str, StructuralPath] = field(default_factory=dict)
+
+    def register(self, name: str, path: StructuralPath) -> None:
+        """Claim one emitted model name for exactly one structural path."""
+        previous = self.owners.get(name)
+        if previous is not None and previous != path:
+            message = (
+                f"Pydantic model name {name!r} collides between structural paths "
+                f"{_path_label(previous)} and {_path_label(path)}"
+            )
+            raise SchemaNameCollisionError(message)
+        self.owners[name] = path
+
+
+def _path_label(path: StructuralPath) -> str:
+    return " -> ".join(repr(segment) for segment in path)
+
+
+def _normalized_identifier(authored: str) -> str:
+    normalized = unicodedata.normalize("NFKC", authored)
+    candidate = "".join(
+        character if character == "_" or character.isalnum() else "_" for character in normalized
+    ).strip("_")
+    if not candidate:
+        candidate = "field"
+    if candidate[0].isdigit():
+        candidate = f"field_{candidate}"
+    if not candidate.isidentifier():
+        encoded = "".join(f"u{ord(character):04x}" for character in normalized)
+        candidate = f"field_{encoded}" if encoded else "field"
+    return candidate
+
+
+def _bounded_identifier(candidate: str, source: str, *, limit: int, fallback: str) -> str:
+    """Bound one generated identifier with a stable content digest."""
+    if len(candidate) <= limit:
+        return candidate
+    digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:10]
+    prefix = candidate[: limit - len(digest) - 1].rstrip("_") or fallback
+    return f"{prefix}_{digest}"
+
+
+def _pydantic_model_name(suggested: str, path: StructuralPath) -> str:
+    """Keep emitted class names bounded while preserving CapWords spelling."""
+    if len(suggested) <= _MAX_PYDANTIC_MODEL_NAME:
+        return suggested
+    provenance = "\x1f".join((*path, suggested))
+    digest = hashlib.sha256(provenance.encode("utf-8")).hexdigest()[:10]
+    suffix = f"H{digest}"
+    prefix = suggested[: _MAX_PYDANTIC_MODEL_NAME - len(suffix)].rstrip("_") or "Model"
+    return f"{prefix}{suffix}"
+
+
+def pydantic_field_name(
+    authored: str,
+    used: dict[str, str],
+) -> PydanticFieldName:
+    """Map an authored YAML key to a bounded safe Pydantic attribute."""
+    normalized = unicodedata.normalize("NFKC", authored)
+    direct = (
+        authored == normalized
+        and authored.isidentifier()
+        and not keyword.iskeyword(authored)
+        and not authored.startswith("_")
+        and not authored.startswith("model_")
+        and authored not in _PROTECTED_PYDANTIC_NAMES
+    )
+    if direct:
+        candidate = authored
+        alias = None
+    else:
+        candidate = _normalized_identifier(authored)
+        if candidate.startswith("model_"):
+            candidate = f"field_{candidate}"
+        elif (
+            authored.startswith("_")
+            or keyword.iskeyword(candidate)
+            or candidate in _PROTECTED_PYDANTIC_NAMES
+        ):
+            candidate = f"{candidate.rstrip('_')}_"
+        if candidate.startswith("_"):
+            candidate = f"field{candidate}"
+        alias = authored
+
+    bounded = _bounded_identifier(
+        candidate,
+        authored,
+        limit=_MAX_PYDANTIC_FIELD_NAME,
+        fallback="field",
+    )
+    if bounded != candidate:
+        candidate = bounded
+        alias = authored
+
+    previous = used.get(candidate)
+    if previous is not None and previous != authored:
+        message = (
+            f"authored fields {previous!r} and {authored!r} both map to "
+            f"Pydantic attribute {candidate!r}"
+        )
+        raise SchemaNameCollisionError(message)
+    used[candidate] = authored
+    return PydanticFieldName(candidate, alias)
+
+
+def _python_type(kind: CastKind) -> type:
+    return {
+        "string": str,
+        "boolean": bool,
+        "integer": int,
+        "number": float,
+        "date": date,
+        "datetime": datetime,
+    }[kind]
+
+
+def _runtime_annotation(
+    node: ContractNode,
+    *,
+    suggested_name: str,
+    path: StructuralPath,
+    registry: PydanticModelNameRegistry,
+) -> object:
+    if isinstance(node, ScalarNode):
+        declared = node.declared_type
+        if declared is None:
+            return _python_type(node.kind)
+        return {
+            "string": str,
+            "boolean": bool,
+            "integer": int,
+            "float": float,
+            "decimal": Decimal,
+            "date": date,
+            "timestamp": datetime,
+            "timestamptz": datetime,
+            "uuid": UUID,
+            "unsupported": Any,
+        }.get(declared.family, Any)
+    if isinstance(node, LiteralNode):
+        return cast("Any", Literal)[node.value]
+    if isinstance(node, AnyNode):
+        return Any
+    if isinstance(node, ListNode):
+        item: Any = _runtime_annotation(
+            node.item,
+            suggested_name=f"{suggested_name}Item",
+            path=(*path, "[]"),
+            registry=registry,
+        )
+        if node.item_nullable:
+            item = item | None
+        return list[item]
+    return _dynamic_model(suggested_name, node, path=path, registry=registry)
+
+
+def _dynamic_model(
+    name: str,
+    node: ObjectNode,
+    *,
+    path: StructuralPath,
+    registry: PydanticModelNameRegistry,
+) -> type[BaseModel]:
+    emitted_name = _pydantic_model_name(name, path)
+    registry.register(emitted_name, path)
+    fields: dict[str, FieldDefinition] = {}
+    used: dict[str, str] = {}
+    for field_contract in node.fields:
+        mapped = pydantic_field_name(field_contract.name, used)
+        nested_name = model_name(f"{name}_{field_contract.name}", "Structure")
+        annotation: Any = _runtime_annotation(
+            field_contract.value,
+            suggested_name=nested_name,
+            path=(*path, field_contract.name),
+            registry=registry,
+        )
+        if field_contract.nullable:
+            annotation = annotation | None
+        default: Any = ... if field_contract.required else None
+        if mapped.alias is not None:
+            default = Field(default=default, alias=mapped.alias)
+        fields[mapped.python_name] = (annotation, default)
+    return create_model(
+        emitted_name,
+        __config__=ConfigDict(extra="allow"),
+        **cast("dict[str, Any]", fields),
+    )
+
+
+def build_dynamic_pydantic_models(
+    contracts: tuple[TypeContract, ...],
+) -> dict[str, type[BaseModel]]:
+    """Build dynamic Pydantic models under the same naming policy as source output."""
+    registry = PydanticModelNameRegistry()
+    models: dict[str, type[BaseModel]] = {}
+    for contract in contracts:
+        models[contract.concept_type] = _dynamic_model(
+            contract.model_name,
+            contract.root,
+            path=(contract.concept_type,),
+            registry=registry,
+        )
+    return models
+
+
+@dataclass(slots=True)
+class _SourceImports:
+    datetime_names: set[str] = field(default_factory=set)
+    typing_names: set[str] = field(default_factory=set)
+    decimal: bool = False
+    uuid: bool = False
+    field: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceAnnotation:
+    compact: str
+    lines: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceField:
+    name: str
+    annotation: _SourceAnnotation
+    required: bool
+    nullable: bool
+    alias: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _SourceModel:
+    name: str
+    fields: tuple[_SourceField, ...]
+
+
+@dataclass(slots=True)
+class _SourceContext:
+    registry: PydanticModelNameRegistry = field(default_factory=PydanticModelNameRegistry)
+    imports: _SourceImports = field(default_factory=_SourceImports)
+    models: list[_SourceModel] = field(default_factory=list)
+
+
+def _string_literal_parts(value: str) -> tuple[str, ...]:
+    """Split a Python string literal so no emitted literal token is excessively long."""
+    compact = json.dumps(value, ensure_ascii=False)
+    if len(compact) <= _MAX_STRING_LITERAL:
+        return (compact,)
+
+    parts: list[str] = []
+    current = ""
+    for character in value:
+        candidate = current + character
+        if current and len(json.dumps(candidate, ensure_ascii=False)) > _MAX_STRING_LITERAL:
+            parts.append(json.dumps(current, ensure_ascii=False))
+            current = character
+        else:
+            current = candidate
+    parts.append(json.dumps(current, ensure_ascii=False))
+    return tuple(parts)
+
+
+def _literal_source_annotation(value: str) -> _SourceAnnotation:
+    compact_value = json.dumps(value, ensure_ascii=False)
+    compact = f"Literal[{compact_value}]"
+    if len(compact) <= _MAX_COMPACT_ANNOTATION:
+        return _SourceAnnotation(compact)
+    parts = list(_string_literal_parts(value))
+    parts[-1] = f"{parts[-1]},"
+    return _SourceAnnotation(
+        compact,
+        ("Literal[", *(f"    {part}" for part in parts), "]"),
+    )
+
+
+def _nullable_source_annotation(annotation: _SourceAnnotation) -> _SourceAnnotation:
+    compact = f"{annotation.compact} | None"
+    if annotation.lines is None and len(compact) <= _MAX_COMPACT_ANNOTATION:
+        return _SourceAnnotation(compact)
+    lines = list(annotation.lines or (annotation.compact,))
+    lines[-1] = f"{lines[-1]} | None"
+    return _SourceAnnotation(compact, tuple(lines))
+
+
+def _list_source_annotation(item: _SourceAnnotation) -> _SourceAnnotation:
+    compact = f"list[{item.compact}]"
+    if item.lines is None and len(compact) <= _MAX_COMPACT_ANNOTATION:
+        return _SourceAnnotation(compact)
+    if item.lines is None:
+        inner = [f"    {item.compact},"]
+    else:
+        inner = [f"    {line}" for line in item.lines]
+        inner[-1] = f"{inner[-1]},"
+    return _SourceAnnotation(compact, ("list[", *inner, "]"))
+
+
+def _source_scalar(node: ScalarNode, imports: _SourceImports) -> _SourceAnnotation:
+    declared = node.declared_type
+    if declared is None:
+        annotation = {
+            "string": "str",
+            "boolean": "bool",
+            "integer": "int",
+            "number": "float",
+            "date": "date",
+            "datetime": "datetime",
+        }[node.kind]
+    else:
+        annotation = {
+            "string": "str",
+            "boolean": "bool",
+            "integer": "int",
+            "float": "float",
+            "decimal": "Decimal",
+            "date": "date",
+            "timestamp": "datetime",
+            "timestamptz": "datetime",
+            "uuid": "UUID",
+            "unsupported": "Any",
+        }.get(declared.family, "Any")
+
+    if annotation in {"date", "datetime"}:
+        imports.datetime_names.add(annotation)
+    elif annotation == "Decimal":
+        imports.decimal = True
+    elif annotation == "UUID":
+        imports.uuid = True
+    elif annotation == "Any":
+        imports.typing_names.add("Any")
+    return _SourceAnnotation(annotation)
+
+
+def _source_annotation(
+    node: ContractNode,
+    *,
+    suggested_name: str,
+    path: StructuralPath,
+    context: _SourceContext,
+) -> _SourceAnnotation:
+    if isinstance(node, ScalarNode):
+        return _source_scalar(node, context.imports)
+    if isinstance(node, LiteralNode):
+        context.imports.typing_names.add("Literal")
+        return _literal_source_annotation(node.value)
+    if isinstance(node, AnyNode):
+        context.imports.typing_names.add("Any")
+        return _SourceAnnotation("Any")
+    if isinstance(node, ListNode):
+        item = _source_annotation(
+            node.item,
+            suggested_name=f"{suggested_name}Item",
+            path=(*path, "[]"),
+            context=context,
+        )
+        if node.item_nullable:
+            item = _nullable_source_annotation(item)
+        return _list_source_annotation(item)
+    emitted_name = _collect_source_model(
+        suggested_name,
+        node,
+        path=path,
+        context=context,
+    )
+    return _SourceAnnotation(emitted_name)
+
+
+def _collect_source_model(
+    name: str,
+    node: ObjectNode,
+    *,
+    path: StructuralPath,
+    context: _SourceContext,
+) -> str:
+    emitted_name = _pydantic_model_name(name, path)
+    context.registry.register(emitted_name, path)
+    used: dict[str, str] = {}
+    source_fields: list[_SourceField] = []
+    for field_contract in node.fields:
+        mapped = pydantic_field_name(field_contract.name, used)
+        nested_name = model_name(f"{name}_{field_contract.name}", "Structure")
+        annotation = _source_annotation(
+            field_contract.value,
+            suggested_name=nested_name,
+            path=(*path, field_contract.name),
+            context=context,
+        )
+        if field_contract.nullable:
+            annotation = _nullable_source_annotation(annotation)
+        if mapped.alias is not None or (
+            not field_contract.required and not field_contract.nullable
+        ):
+            context.imports.field = True
+        source_fields.append(
+            _SourceField(
+                mapped.python_name,
+                annotation,
+                field_contract.required,
+                field_contract.nullable,
+                mapped.alias,
+            )
+        )
+    context.models.append(_SourceModel(emitted_name, tuple(source_fields)))
+    return emitted_name
+
+
+def _render_imports(imports: _SourceImports, *, has_models: bool) -> list[str]:
+    standard: list[str] = []
+    if imports.datetime_names:
+        standard.append(f"from datetime import {', '.join(sorted(imports.datetime_names))}")
+    if imports.decimal:
+        standard.append("from decimal import Decimal")
+    if imports.typing_names:
+        standard.append(f"from typing import {', '.join(sorted(imports.typing_names))}")
+    if imports.uuid:
+        standard.append("from uuid import UUID")
+
+    lines = ['"""Generated Pydantic models from OKF schema contracts."""']
+    if standard:
+        lines.extend(["", *standard])
+    if has_models:
+        pydantic_names = ["BaseModel", "ConfigDict"]
+        if imports.field:
+            pydantic_names.append("Field")
+        if lines:
+            lines.append("")
+        lines.append(f"from pydantic import {', '.join(pydantic_names)}")
+    return lines
+
+
+def _render_annotation_assignment(field_contract: _SourceField, suffix: str) -> list[str]:
+    annotation_lines = field_contract.annotation.lines or (field_contract.annotation.compact,)
+    lines = [f"    {field_contract.name}: {annotation_lines[0]}"]
+    lines.extend(f"    {line}" for line in annotation_lines[1:])
+    lines[-1] = f"{lines[-1]}{suffix}"
+    return lines
+
+
+def _render_string_keyword(name: str, value: str) -> list[str]:
+    compact = json.dumps(value, ensure_ascii=False)
+    candidate = f"        {name}={compact},"
+    if len(candidate) <= _MAX_SOURCE_LINE:
+        return [candidate]
+    parts = _string_literal_parts(value)
+    return [
+        f"        {name}=(",
+        *(f"            {part}" for part in parts),
+        "        ),",
+    ]
+
+
+def _render_field(field_contract: _SourceField) -> list[str]:
+    annotation = field_contract.annotation
+    if field_contract.alias is not None:
+        alias = json.dumps(field_contract.alias, ensure_ascii=False)
+        default = "" if field_contract.required else "default=None, "
+        compact = f"    {field_contract.name}: {annotation.compact} = Field({default}alias={alias})"
+        if annotation.lines is None and len(compact) <= _MAX_SOURCE_LINE:
+            return [compact]
+        lines = _render_annotation_assignment(field_contract, " = Field(")
+        if not field_contract.required:
+            lines.append("        default=None,")
+        lines.extend(_render_string_keyword("alias", field_contract.alias))
+        lines.append("    )")
+        return lines
+
+    if field_contract.required:
+        return _render_annotation_assignment(field_contract, "")
+    if field_contract.nullable:
+        compact = f"    {field_contract.name}: {annotation.compact} = None"
+        return (
+            [compact]
+            if annotation.lines is None and len(compact) <= _MAX_SOURCE_LINE
+            else _render_annotation_assignment(field_contract, " = None")
+        )
+
+    compact = f"    {field_contract.name}: {annotation.compact} = Field(default=None)"
+    if annotation.lines is None and len(compact) <= _MAX_SOURCE_LINE:
+        return [compact]
+    lines = _render_annotation_assignment(field_contract, " = Field(")
+    lines.extend(["        default=None,", "    )"])
+    return lines
+
+
+def render_pydantic_source(contracts: tuple[TypeContract, ...]) -> str:
+    """Render deterministic importable Pydantic v2 source from shared contracts."""
+    context = _SourceContext()
+    for contract in contracts:
+        _collect_source_model(
+            contract.model_name,
+            contract.root,
+            path=(contract.concept_type,),
+            context=context,
+        )
+
+    lines = _render_imports(context.imports, has_models=bool(context.models))
+    for model in context.models:
+        lines.extend(["", "", f"class {model.name}(BaseModel):"])
+        lines.extend(
+            [
+                '    """Generated Pydantic model for one OKF contract object."""',
+                "",
+                '    model_config = ConfigDict(extra="allow")',
+            ]
+        )
+        if model.fields:
+            lines.append("")
+            for field_contract in model.fields:
+                lines.extend(_render_field(field_contract))
+    return "\n".join(lines).rstrip() + "\n"
+
+
+__all__ = [
+    "PydanticFieldName",
+    "PydanticModelNameRegistry",
+    "build_dynamic_pydantic_models",
+    "pydantic_field_name",
+    "render_pydantic_source",
+]

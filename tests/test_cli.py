@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
-from okf_parser.cli import format_command
+import pytest
+
+from okf_parser.cli import app, format_command
+from okf_parser.service import schema_bundle
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -32,3 +35,20 @@ def test_format_check_exits_nonzero_when_a_file_needs_formatting(tmp_path: Path)
     (tmp_path / "a.md").write_text("# Heading\n\n-   item\n", encoding="utf-8")
 
     assert format_command(str(tmp_path)).exit_code == 1
+
+
+@pytest.mark.parametrize("schema_format", ["zod", "pydantic"])
+def test_text_schema_cli_preserves_single_trailing_newline(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    schema_format: Literal["zod", "pydantic"],
+) -> None:
+    (tmp_path / "concept.md").write_text(
+        "---\ntype: Example\nname: value\n---\nBody\n",
+        encoding="utf-8",
+    )
+    expected = schema_bundle(str(tmp_path), schema_format)
+
+    app(["schema", str(tmp_path), "--format", schema_format])
+
+    assert capsys.readouterr().out == expected

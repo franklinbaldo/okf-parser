@@ -1,15 +1,10 @@
-"""Export canonical JSON Schema, Zod, and Python models for OKF frontmatter."""
+"""Export canonical JSON Schema, Zod, and Pydantic schemas for OKF frontmatter."""
 
 from __future__ import annotations
 
 import json
-from datetime import date, datetime
-from decimal import Decimal
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
-from uuid import UUID
-
-from pydantic import BaseModel, create_model
+from typing import TYPE_CHECKING, Any, cast
 
 from okf_parser.bundle import load_bundle
 from okf_parser.declared_schema import (
@@ -17,13 +12,11 @@ from okf_parser.declared_schema import (
     declared_schema_relative_path,
     parse_declared_schema,
 )
+from okf_parser.pydantic_projection import (
+    build_dynamic_pydantic_models,
+    render_pydantic_source,
+)
 from okf_parser.schema_contract import (
-    AnyNode,
-    ContractNode,
-    ListNode,
-    LiteralNode,
-    ObjectNode,
-    ScalarNode,
     SchemaCastError,
     SchemaExportError,
     SchemaNameCollisionError,
@@ -31,17 +24,15 @@ from okf_parser.schema_contract import (
     ZodImport,
     compile_contracts,
     contract_json_schema,
-    model_name,
     render_zod,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    from okf_parser.duckdb_types import DuckDBLogicalType
-    from okf_parser.schema_lexemes import CastKind
+    from pydantic import BaseModel
 
-type FieldDefinition = tuple[Any, Any]
+    from okf_parser.duckdb_types import DuckDBLogicalType
 
 
 def documents_by_type(
@@ -122,58 +113,6 @@ def build_schema_contracts(
     )
 
 
-def _python_type(kind: CastKind) -> type:
-    return {
-        "string": str,
-        "boolean": bool,
-        "integer": int,
-        "number": float,
-        "date": date,
-        "datetime": datetime,
-    }[kind]
-
-
-def _annotation(node: ContractNode, *, name: str) -> object:
-    if isinstance(node, ScalarNode):
-        declared = node.declared_type
-        if declared is None:
-            return _python_type(node.kind)
-        return {
-            "string": str,
-            "boolean": bool,
-            "integer": int,
-            "float": float,
-            "decimal": Decimal,
-            "date": date,
-            "timestamp": datetime,
-            "timestamptz": datetime,
-            "uuid": UUID,
-            "unsupported": Any,
-        }.get(declared.family, Any)
-    if isinstance(node, LiteralNode):
-        return cast("Any", Literal)[node.value]
-    if isinstance(node, AnyNode):
-        return Any
-    if isinstance(node, ListNode):
-        item: Any = _annotation(node.item, name=f"{name}Item")
-        if node.item_nullable:
-            item = item | None
-        return list[item]
-    return _pydantic_model(name, node)
-
-
-def _pydantic_model(name: str, node: ObjectNode) -> type[BaseModel]:
-    fields: dict[str, FieldDefinition] = {}
-    for field_contract in node.fields:
-        nested_name = model_name(f"{name}_{field_contract.name}", "Structure")
-        annotation: Any = _annotation(field_contract.value, name=nested_name)
-        if field_contract.nullable:
-            annotation = annotation | None
-        default: Any = ... if field_contract.required else None
-        fields[field_contract.name] = (annotation, default)
-    return create_model(name, **cast("dict[str, Any]", fields))
-
-
 def build_pydantic_models(
     path: str,
     exclude: Sequence[str] = (),
@@ -182,7 +121,7 @@ def build_pydantic_models(
     casts: Sequence[str] = (),
     spec_template: str | None = None,
 ) -> dict[str, type[BaseModel]]:
-    """Build dynamic Pydantic adapters from the same contract used by exporters."""
+    """Build dynamic Pydantic adapters from the shared schema contracts."""
     contracts = build_schema_contracts(
         path,
         exclude,
@@ -190,10 +129,26 @@ def build_pydantic_models(
         casts=casts,
         spec_template=spec_template,
     )
-    return {
-        contract.concept_type: _pydantic_model(contract.model_name, contract.root)
-        for contract in contracts
-    }
+    return build_dynamic_pydantic_models(contracts)
+
+
+def export_pydantic_source(
+    path: str,
+    exclude: Sequence[str] = (),
+    *,
+    infer_types: bool = False,
+    casts: Sequence[str] = (),
+    spec_template: str | None = None,
+) -> str:
+    """Generate deterministic importable Pydantic v2 source."""
+    contracts = build_schema_contracts(
+        path,
+        exclude,
+        infer_types=infer_types,
+        casts=casts,
+        spec_template=spec_template,
+    )
+    return render_pydantic_source(contracts)
 
 
 def export_json_schema(
@@ -249,5 +204,6 @@ __all__ = [
     "build_pydantic_models",
     "build_schema_contracts",
     "export_json_schema",
+    "export_pydantic_source",
     "export_zod_schema",
 ]
