@@ -527,9 +527,9 @@ whose type has since been removed from the bundle" (genuinely stale) from
 "a table a different process or a different tool put in this schema"
 (never this command's to begin with); calling either one "stale" implies
 a provenance claim the no-manifest design deliberately doesn't make. The
-diagnostic name is corrected to match what is actually known: a table
-present in `{schema}_types` whose name is not a currently-declared type is
-reported as **unrecognized**, and `duckdb` does not remove it. Removing
+report uses the only state that is actually known: a table present in
+`{schema}_types` whose name is not a currently-declared type is reported as
+**unrecognized**, and `duckdb` does not remove it. Removing
 one is a separate, explicit operation an operator invokes deliberately,
 naming exactly what it will drop before it drops it; that command is not
 designed here — only that automatic deletion isn't it — and is listed
@@ -569,8 +569,8 @@ to restate information already present in the relational representation.
 This decision is closed. When `.schema.sql` declares a field, `schema` exports that
 declared logical type even if one or more current documents do not cast to it. A
 malformed row is data drift, not a request to silently widen the producer's
-contract. This matches decision 5's per-value materialization: the future typed
-column remains typed and only that row's `TRY_CAST` result becomes `NULL`.
+contract. This matches decision 5's per-value materialization: the typed column
+remains typed and only that row's `TRY_CAST` result becomes `NULL`.
 
 `--infer-types` is therefore ignored for a declared field. An explicit operator
 `--cast FIELD=TYPE` remains the one intentional override and wins over the
@@ -632,15 +632,13 @@ families to arbitrary-precision `int`.
 An unsupported DuckDB family keeps only `x-okf-duckdb-type` in JSON Schema and maps
 to an unconstrained target rather than being mislabeled as `string`.
 
-### 11. `init` scaffolds the missing specification documents, never a declaration
+### 11. `init` scaffolds specification documents and may propose starter declarations
 
-`--require-spec`/`--spec-template` (decision 1) only ever *reports* a
-missing `docs/types/{slug}.md`; nothing in RFC 0005 or this RFC creates
-one. A bundle adopting either rule for the first time can have dozens of
-types in use and zero specification documents, and hand-creating each one
-at its exact derived path is exactly the kind of bookkeeping this RFC
-already refuses to make an author do by hand elsewhere (decision 1's whole
-premise is that the path is *computable*, not authored).
+`check --require-spec` only reports missing specification documents; `init` is
+the explicit authoring surface that can fill those gaps. A bundle adopting the
+convention for the first time can have dozens of types in use and zero specification
+documents, and hand-creating each one at its exact derived path is exactly the kind
+of bookkeeping decision 1 makes computable instead of authored.
 
 `init <path> --spec-template TEMPLATE` computes `bundle.concept_types`,
 derives each type's path the same way `check --require-spec` already does
@@ -690,7 +688,7 @@ than becoming a second source of truth:
   implicitly on a bare `init` — a starter type declaration is a bigger
   claim than a stub prose document, and stays opt-in.
 
-### 12. `init` --require-spec derived-path collisions raise before writing anything
+### 12. `init` derived-path collisions raise before writing anything
 
 Decision 1 already treats two types slugging to the same declaration path as
 an ambiguity that declaration discovery refuses to compile. `init` cannot leave that decision to `check`: two types would
