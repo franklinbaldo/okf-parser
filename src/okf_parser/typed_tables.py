@@ -15,7 +15,7 @@ from okf_parser.declared_schema import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Iterable, Mapping, Sequence
 
     import duckdb
 
@@ -35,6 +35,16 @@ _OKF_PREFIX = "__okf_"
 
 class TypedTableError(ValueError):
     """Raised when observed fields cannot form one deterministic type table."""
+
+
+class TypedTableCollisionError(TypedTableError):
+    """Raised when the persistent typed schema already owns a planned table name."""
+
+    def __init__(self, schema_name: str, tables: tuple[str, ...]) -> None:
+        """Record the typed schema and tables that would be replaced."""
+        self.schema_name = schema_name
+        self.tables = tables
+        super().__init__(f"schema {schema_name!r} already contains {', '.join(tables)}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,7 +115,7 @@ def _is_reserved(name: str) -> bool:
 
 def discover_declared_schemas(
     root: str | Path,
-    concept_types: Sequence[str],
+    concept_types: Iterable[str],
     spec_template: str | None,
 ) -> dict[str, DeclaredSchema]:
     """Execute and read every declaration reachable from one spec template."""
@@ -251,7 +261,8 @@ def build_typed_table_plans(
 
 def _table_names(connection: duckdb.DuckDBPyConnection, schema: str) -> tuple[str, ...]:
     rows = connection.execute(
-        "SELECT table_name FROM information_schema.tables WHERE table_schema = ? ORDER BY table_name",
+        "SELECT table_name FROM information_schema.tables "
+        "WHERE table_schema = ? ORDER BY table_name",
         [schema],
     ).fetchall()
     return tuple(str(row[0]) for row in rows)
@@ -296,13 +307,16 @@ def _ddl(plan: TypedTablePlan, schema: str) -> str:
         if not field.declared:
             columns.append(f"{_quote_ident(field.name)} VARCHAR")
             continue
-        assert field.raw_name is not None
-        assert field.raw_sql_type is not None
-        assert field.declared_type is not None
-        columns.append(f"{_quote_ident(field.raw_name)} {field.raw_sql_type}")
+        raw_name = field.raw_name
+        raw_sql_type = field.raw_sql_type
+        declared_type = field.declared_type
+        if raw_name is None or raw_sql_type is None or declared_type is None:
+            message = f"declared field {field.name!r} has an incomplete typed-table plan"
+            raise TypedTableError(message)
+        columns.append(f"{_quote_ident(raw_name)} {raw_sql_type}")
         columns.append(
-            f"{_quote_ident(field.name)} {field.declared_type.sql} GENERATED ALWAYS AS "
-            f"(TRY_CAST({_quote_ident(field.raw_name)} AS {field.declared_type.sql}))"
+            f"{_quote_ident(field.name)} {declared_type.sql} GENERATED ALWAYS AS "
+            f"(TRY_CAST({_quote_ident(raw_name)} AS {declared_type.sql}))"
         )
     body = ",\n    ".join(columns)
     return f"CREATE TABLE {_quote_ident(schema)}.{_quote_ident(plan.concept_type)} (\n    {body}\n)"
@@ -329,7 +343,7 @@ def _row_values(row: _ConceptRow, plan: TypedTablePlan) -> tuple[object, ...]:
     aliases = _declared_aliases(
         row.frontmatter,
         {
-            field.name: cast("DuckDBLogicalType", field.declared_type)
+            field.name: field.declared_type
             for field in plan.fields
             if field.declared_type is not None
         },
@@ -344,11 +358,19 @@ def _row_values(row: _ConceptRow, plan: TypedTablePlan) -> tuple[object, ...]:
     return tuple(values)
 
 
+def _insert_name(field: TypedFieldPlan) -> str:
+    if not field.declared:
+        return field.name
+    if field.raw_name is None:
+        message = f"declared field {field.name!r} has no raw column"
+        raise TypedTableError(message)
+    return field.raw_name
+
+
 def _insert_columns(plan: TypedTablePlan) -> tuple[str, ...]:
     columns = list(_INTERNAL_COLUMNS)
-    for field in plan.fields:
-        columns.append(field.raw_name if field.declared else field.name)
-    return tuple(cast("str", name) for name in columns)
+    columns.extend(_insert_name(field) for field in plan.fields)
+    return tuple(columns)
 
 
 def _apply_comments(
@@ -365,7 +387,9 @@ def _apply_comments(
             f"IS {_quote_literal(table_comment)}"
         )
     for field in plan.fields:
-        comment = field.comment if field.comment is not None else prior_column_comments.get(field.name)
+        comment = (
+            field.comment if field.comment is not None else prior_column_comments.get(field.name)
+        )
         if comment is None:
             continue
         connection.execute(
@@ -403,13 +427,9 @@ def materialize_typed_tables(
         if (match := _matching_existing_table(existing, plan.concept_type)) is not None
     )
     if collisions and not overwrite:
-        from okf_parser.duckdb import BundleExportError
+        raise TypedTableCollisionError(schema, tuple(sorted(collisions)))
 
-        raise BundleExportError(schema, tuple(sorted(collisions)))
-
-    unrecognized = tuple(
-        name for name in existing if _identifier_key(name) not in planned_keys
-    )
+    unrecognized = tuple(name for name in existing if _identifier_key(name) not in planned_keys)
     rows = _rows_by_type(bundle)
     connection.execute(f"CREATE SCHEMA IF NOT EXISTS {_quote_ident(schema)}")
     for plan in plans:
@@ -420,9 +440,7 @@ def materialize_typed_tables(
             prior_table_comment, prior_column_comments = _existing_comments(
                 connection, schema, existing_name
             )
-            connection.execute(
-                f"DROP TABLE {_quote_ident(schema)}.{_quote_ident(existing_name)}"
-            )
+            connection.execute(f"DROP TABLE {_quote_ident(schema)}.{_quote_ident(existing_name)}")
         connection.execute(_ddl(plan, schema))
         insert_columns = _insert_columns(plan)
         type_rows = rows.get(plan.concept_type, ())

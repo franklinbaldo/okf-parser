@@ -1,6 +1,6 @@
 [project]
 name = "okf-parser"
-version = "0.16.0"
+version = "0.17.0"
 description = "Relational inspection and validation for Open Knowledge Format bundles"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -87,6 +87,8 @@ runtime-evaluated-base-classes = ["pydantic.BaseModel"]
 "src/okf_parser/apply.py" = ["BLE001", "PLR0913", "S608"]
 "src/okf_parser/bundle_import.py" = ["PLR0913", "S608"]
 "src/okf_parser/declared_schema.py" = ["S608"]
+"src/okf_parser/duckdb.py" = ["PLR0913"]
+"src/okf_parser/typed_tables.py" = ["S608"]
 "src/okf_parser/cli.py" = ["A002", "PLR0913", "T201"]
 "src/okf_parser/schema_export.py" = ["PLR0913"]
 "src/okf_parser/service.py" = ["PLR0913"]

@@ -169,7 +169,7 @@ No MCP equivalent today.
 ## `duckdb`
 
 ```bash
-uv run okf-parser duckdb path/to/bundle [database] [schema] [--overwrite] [--exclude PATTERN]...
+uv run okf-parser duckdb path/to/bundle [database] [schema] [--overwrite] [--spec-template TEMPLATE] [--exclude PATTERN]...
 ```
 
 Materializes the bundle's concepts and links into a DuckDB database file.
@@ -177,6 +177,11 @@ Materializes the bundle's concepts and links into a DuckDB database file.
 - `database` — positional, defaults to `okf.duckdb`.
 - `schema` — positional, defaults to `okf`.
 - `--overwrite` — replace existing tables in that schema instead of failing.
+- `--spec-template TEMPLATE` — execute each present sibling `.schema.sql` and
+  materialize declared concept types into a second `{schema}_types` schema.
+  Declared values keep a compiler-owned raw column beside a generated typed
+  `TRY_CAST` projection; types without a declaration remain available only in
+  the complete untyped `concepts` table.
 
 On a name collision without `--overwrite`, exits `1` with
 `{"error", "schema", "existing_tables"}` in the payload instead of raising.

@@ -202,11 +202,19 @@ def duckdb_command(
     *,
     overwrite: bool = False,
     exclude: RepeatableStrings = None,
+    spec_template: str | None = None,
 ) -> CliResult[JsonPayload]:
     """Materialize an OKF bundle into a DuckDB database file."""
     try:
         return CliResult(
-            export_duckdb(path, database, schema, overwrite=overwrite, exclude=exclude or ())
+            export_duckdb(
+                path,
+                database,
+                schema,
+                overwrite=overwrite,
+                exclude=exclude or (),
+                spec_template=spec_template,
+            )
         )
     except BundleExportError as exc:
         return CliResult(
