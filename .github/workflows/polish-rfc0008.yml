@@ -1,0 +1,45 @@
+name: Temporary RFC 0008 polish
+
+on:
+  push:
+    branches:
+      - feat/rfc0008-effect-aware-mcp
+
+concurrency:
+  group: polish-rfc0008
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  polish:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/rfc0008-effect-aware-mcp
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+      - name: Polish and validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/_polish_rfc0008.py
+          uv sync --frozen --all-groups
+          uv run ruff format src tests
+          uv run ruff check src tests --fix
+          uv run ruff check src tests
+          uv run ty check src tests
+          uv run pytest --cov --cov-report=term-missing --cov-fail-under=85
+          uv run python scripts/release_contract.py verify-source
+          git rm -f .github/workflows/polish-rfc0008.yml scripts/_polish_rfc0008.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: align MCP public contract"
+          git push origin HEAD:feat/rfc0008-effect-aware-mcp
