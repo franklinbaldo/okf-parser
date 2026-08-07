@@ -150,8 +150,9 @@ append = '''
 
 
 def test_duckdb_export_preserves_cli_collision_payload(monkeypatch: pytest.MonkeyPatch) -> None:
-    def collide(*args: object, **kwargs: object) -> dict[str, object]:
-        raise cli.BundleExportError("okf", ("concepts", "links"))
+    def collide(*_args: object, **_kwargs: object) -> dict[str, object]:
+        schema_name = "okf"
+        raise cli.BundleExportError(schema_name, ("concepts", "links"))
 
     monkeypatch.setattr(cli, "export_duckdb", collide)
 
