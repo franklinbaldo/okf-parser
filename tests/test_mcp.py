@@ -157,7 +157,12 @@ def test_init_preview_and_write_share_service_with_only_commit_bit_changed(
 ) -> None:
     calls: list[dict[str, object]] = []
 
-    def fake_init_bundle(path: str, spec_template: str, exclude: object, **kwargs: object) -> dict[str, object]:
+    def fake_init_bundle(
+        path: str,
+        spec_template: str,
+        exclude: object,
+        **kwargs: object,
+    ) -> dict[str, object]:
         calls.append(
             {
                 "path": path,
