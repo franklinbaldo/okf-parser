@@ -14,7 +14,7 @@ from okf_parser.bundle_import import import_bundle as _import_bundle
 from okf_parser.duckdb import attach_okf
 from okf_parser.formatting import FormatReport, format_path
 from okf_parser.schema_export import documents_by_type as _documents_by_type
-from okf_parser.schema_export import export_json_schema, export_zod_schema
+from okf_parser.schema_export import export_json_schema, export_pydantic_source, export_zod_schema
 from okf_parser.spec_scaffold import scaffold_missing_declared_schemas, scaffold_missing_specs
 
 if TYPE_CHECKING:
@@ -118,7 +118,7 @@ def schema_bundle(  # service mirrors the independent public schema flags.
     zod_import: ZodImport = "zod",
     spec_template: str | None = None,
 ) -> dict[str, object] | str:
-    """Export canonical JSON Schema or generic/Astro Zod definitions."""
+    """Export JSON Schema, Zod, or importable Pydantic source."""
     if fmt == "zod":
         return export_zod_schema(
             path,
@@ -126,6 +126,14 @@ def schema_bundle(  # service mirrors the independent public schema flags.
             infer_types=infer_types,
             casts=casts,
             zod_import=zod_import,
+            spec_template=spec_template,
+        )
+    if fmt == "pydantic":
+        return export_pydantic_source(
+            path,
+            exclude,
+            infer_types=infer_types,
+            casts=casts,
             spec_template=spec_template,
         )
     return export_json_schema(
@@ -149,12 +157,12 @@ def _format_payload(report: FormatReport) -> dict[str, object]:
 
 
 def check_format(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
-    """Check mdformat canonical form without writing files."""
+    """Check mdformat style without modifying files."""
     return _format_payload(format_path(Path(path), exclude=exclude))
 
 
 def write_format(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
-    """Explicitly rewrite Markdown files into mdformat canonical form."""
+    """Explicitly rewrite Markdown files into canonical form."""
     return _format_payload(format_path(Path(path), write=True, exclude=exclude))
 
 
