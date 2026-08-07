@@ -91,6 +91,7 @@ def pydantic_field_name(
         and authored.isidentifier()
         and not keyword.iskeyword(authored)
         and not authored.startswith("_")
+        and not authored.startswith("model_")
         and authored not in _PROTECTED_PYDANTIC_NAMES
     )
     if direct:
@@ -98,7 +99,9 @@ def pydantic_field_name(
         alias = None
     else:
         candidate = _normalized_identifier(authored)
-        if (
+        if candidate.startswith("model_"):
+            candidate = f"field_{candidate}"
+        elif (
             authored.startswith("_")
             or keyword.iskeyword(candidate)
             or candidate in _PROTECTED_PYDANTIC_NAMES
@@ -357,7 +360,6 @@ def _collect_source_model(
 
 
 def _render_imports(imports: _SourceImports, *, has_models: bool) -> list[str]:
-    lines = ["from __future__ import annotations"]
     standard: list[str] = []
     if imports.datetime_names:
         standard.append(f"from datetime import {', '.join(sorted(imports.datetime_names))}")
@@ -367,13 +369,15 @@ def _render_imports(imports: _SourceImports, *, has_models: bool) -> list[str]:
         standard.append(f"from typing import {', '.join(sorted(imports.typing_names))}")
     if imports.uuid:
         standard.append("from uuid import UUID")
-    if standard:
-        lines.extend(["", *standard])
+
+    lines = list(standard)
     if has_models:
         pydantic_names = ["BaseModel", "ConfigDict"]
         if imports.field:
             pydantic_names.append("Field")
-        lines.extend(["", f"from pydantic import {', '.join(pydantic_names)}"])
+        if lines:
+            lines.append("")
+        lines.append(f"from pydantic import {', '.join(pydantic_names)}")
     return lines
 
 
