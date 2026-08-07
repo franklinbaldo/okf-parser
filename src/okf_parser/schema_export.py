@@ -101,9 +101,7 @@ def _declared_casts_by_type(
             sql_text = schema_path.read_text(encoding="utf-8")
             declared = parse_declared_schema(sql_text, concept_type)
         except (OSError, UnicodeError, DeclaredSchemaError) as exc:
-            message = (
-                f"invalid declared schema for {concept_type!r} at {relative!r}: {exc}"
-            )
+            message = f"invalid declared schema for {concept_type!r} at {relative!r}: {exc}"
             raise SchemaExportError(message) from exc
 
         kinds = declared_cast_kinds(declared)
