@@ -11,9 +11,9 @@ description: Every CLI command and MCP tool exposed by okf-parser, with flags an
 FastMCP (`okf-parser-mcp`, or `okf-parser serve`) and share the same service
 functions and payloads where both surfaces exist.
 
-The MCP surface is intentionally read-only. It exposes `check`, `inventory`,
-`graph`, `schema` and `format_check`; it does not expose `import`, `init`,
-`apply` or `duckdb`, all of which can create or mutate files.
+The MCP surface currently exposes `check`, `inventory`, `graph`, `schema` and
+`format_check`. File-creating and mutating operations (`import`, `init`,
+`apply`, `format --write` and `duckdb`) remain CLI-only today.
 
 Most commands print one JSON object to stdout. `schema --format zod` prints the
 Zod source as plain text. Exit status is command-specific and described below.
@@ -61,7 +61,7 @@ as one concept document of `TYPE`.
 Exits `1` when the import plan contains duplicate ids. Other invalid inputs are
 reported as command errors.
 
-No MCP equivalent.
+No MCP equivalent today.
 
 ## `init`
 
@@ -80,7 +80,7 @@ Scaffolds missing type specification documents at paths derived from
 Exits `1` when a planned specification or schema path collides with an existing
 file that cannot be safely scaffolded.
 
-No MCP equivalent.
+No MCP equivalent today.
 
 ## `inventory`
 
@@ -138,7 +138,7 @@ would change are left on disk and listed in `payload["skipped_paths"]`; see
 [Formatting](../README.md#quick-start) in the README for what "protected"
 means.
 
-MCP tool: `format_check` (read-only; there is no MCP tool that writes files).
+MCP tool: `format_check`; no write-format MCP tool is exposed today.
 
 ## `apply`
 
@@ -164,7 +164,7 @@ replacement without hand-writing SQL.
 reports the candidate changes. Exits `1` when `payload["succeeded"]` is false,
 including validation or write-conflict failures.
 
-No MCP equivalent.
+No MCP equivalent today.
 
 ## `duckdb`
 
@@ -181,7 +181,7 @@ Materializes the bundle's concepts and links into a DuckDB database file.
 On a name collision without `--overwrite`, exits `1` with
 `{"error", "schema", "existing_tables"}` in the payload instead of raising.
 
-No MCP equivalent.
+No MCP equivalent today.
 
 ## `serve`
 
@@ -190,5 +190,5 @@ uv run okf-parser serve [--transport stdio|http|sse] [--host HOST] [--port PORT]
 ```
 
 Runs the MCP server. `stdio` (default) is what `okf-parser-mcp` runs directly;
-`http` and `sse` bind `--host` and `--port` for network transports. Serves the
-five read-only tools listed above.
+`http` and `sse` bind `--host` and `--port` for network transports. It currently
+serves the five read-only tools listed above.
