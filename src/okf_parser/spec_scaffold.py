@@ -71,8 +71,7 @@ def scaffold_missing_specs(
             "created": [],
             "would_create": [],
             "collisions": [
-                {"path": path, "types": sorted(types)}
-                for path, types in sorted(collisions.items())
+                {"path": path, "types": sorted(types)} for path, types in sorted(collisions.items())
             ],
             "written": False,
         }
