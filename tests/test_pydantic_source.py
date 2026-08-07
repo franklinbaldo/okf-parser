@@ -194,3 +194,44 @@ def test_nested_model_name_collision_reports_both_structural_paths(tmp_path: Pat
         message = str(caught.value)
         assert "'a' -> 'structure_b'" in message
         assert "'a_structure' -> 'b'" in message
+
+
+def _write_adversarial_bundle(path: Path) -> tuple[str, str, str, str]:
+    concept_type = "ExtremelyLongConceptType" + "Segment" * 18
+    long_key = "customer-" + "identifier-" * 14 + "value"
+    nested_key = "nested-" + "structure-" * 12 + "value"
+    child_key = "child-" + "segment-" * 12 + "value"
+    _write_concept(
+        path / "adversarial.md",
+        f"type: {concept_type}\n{long_key}: customer-123\n{nested_key}:\n  {child_key}: nested\n",
+    )
+    return concept_type, long_key, nested_key, child_key
+
+
+def test_adversarial_names_and_literals_stay_canonical(tmp_path: Path) -> None:
+    concept_type, long_key, nested_key, child_key = _write_adversarial_bundle(tmp_path)
+    source = export_pydantic_source(str(tmp_path))
+    expected = (Path(__file__).parent / "fixtures" / "pydantic_adversarial_generated.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert source == expected
+    assert max(map(len, source.splitlines())) <= 100
+
+    dynamic = build_pydantic_models(str(tmp_path))[concept_type]
+    generated = _source_model(source, dynamic.__name__)
+    assert len(dynamic.__name__) <= 40
+    assert dynamic.__name__ == generated.__name__
+    assert max(map(len, generated.model_fields)) <= 32
+
+    value = generated.model_validate(
+        {
+            "type": concept_type,
+            long_key: "customer-123",
+            nested_key: {child_key: "nested"},
+        }
+    )
+    customer_name = next(
+        name for name, field in generated.model_fields.items() if field.alias == long_key
+    )
+    assert value.model_dump()[customer_name] == "customer-123"

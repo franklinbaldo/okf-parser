@@ -47,7 +47,8 @@ def _render_cli_result(result: object) -> None:
     if not isinstance(result, CliResult):
         return
     if isinstance(result.payload, str):
-        sys.stdout.write(result.payload + "\n")
+        text = result.payload
+        sys.stdout.write(text if text.endswith("\n") else text + "\n")
     else:
         sys.stdout.write(
             json.dumps(result.payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"

@@ -37,6 +37,7 @@ _MAX_PYDANTIC_FIELD_NAME = 32
 _MAX_PYDANTIC_MODEL_NAME = 40
 _MAX_COMPACT_ANNOTATION = 50
 _MAX_STRING_LITERAL = 64
+_MAX_SOURCE_LINE = 100
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,8 +73,7 @@ def _path_label(path: StructuralPath) -> str:
 def _normalized_identifier(authored: str) -> str:
     normalized = unicodedata.normalize("NFKC", authored)
     candidate = "".join(
-        character if character == "_" or character.isalnum() else "_"
-        for character in normalized
+        character if character == "_" or character.isalnum() else "_" for character in normalized
     ).strip("_")
     if not candidate:
         candidate = "field"
@@ -95,14 +95,14 @@ def _bounded_identifier(candidate: str, source: str, *, limit: int, fallback: st
 
 
 def _pydantic_model_name(suggested: str, path: StructuralPath) -> str:
-    """Keep emitted class names comfortably inside the repository line limit."""
+    """Keep emitted class names bounded while preserving CapWords spelling."""
+    if len(suggested) <= _MAX_PYDANTIC_MODEL_NAME:
+        return suggested
     provenance = "\x1f".join((*path, suggested))
-    return _bounded_identifier(
-        suggested,
-        provenance,
-        limit=_MAX_PYDANTIC_MODEL_NAME,
-        fallback="Model",
-    )
+    digest = hashlib.sha256(provenance.encode("utf-8")).hexdigest()[:10]
+    suffix = f"H{digest}"
+    prefix = suggested[: _MAX_PYDANTIC_MODEL_NAME - len(suffix)].rstrip("_") or "Model"
+    return f"{prefix}{suffix}"
 
 
 def pydantic_field_name(
@@ -491,7 +491,7 @@ def _render_annotation_assignment(field_contract: _SourceField, suffix: str) -> 
 def _render_string_keyword(name: str, value: str) -> list[str]:
     compact = json.dumps(value, ensure_ascii=False)
     candidate = f"        {name}={compact},"
-    if len(candidate) <= 100:
+    if len(candidate) <= _MAX_SOURCE_LINE:
         return [candidate]
     parts = _string_literal_parts(value)
     return [
@@ -506,11 +506,8 @@ def _render_field(field_contract: _SourceField) -> list[str]:
     if field_contract.alias is not None:
         alias = json.dumps(field_contract.alias, ensure_ascii=False)
         default = "" if field_contract.required else "default=None, "
-        compact = (
-            f"    {field_contract.name}: {annotation.compact} = "
-            f"Field({default}alias={alias})"
-        )
-        if annotation.lines is None and len(compact) <= 100:
+        compact = f"    {field_contract.name}: {annotation.compact} = Field({default}alias={alias})"
+        if annotation.lines is None and len(compact) <= _MAX_SOURCE_LINE:
             return [compact]
         lines = _render_annotation_assignment(field_contract, " = Field(")
         if not field_contract.required:
@@ -523,12 +520,14 @@ def _render_field(field_contract: _SourceField) -> list[str]:
         return _render_annotation_assignment(field_contract, "")
     if field_contract.nullable:
         compact = f"    {field_contract.name}: {annotation.compact} = None"
-        if annotation.lines is None and len(compact) <= 100:
-            return [compact]
-        return _render_annotation_assignment(field_contract, " = None")
+        return (
+            [compact]
+            if annotation.lines is None and len(compact) <= _MAX_SOURCE_LINE
+            else _render_annotation_assignment(field_contract, " = None")
+        )
 
     compact = f"    {field_contract.name}: {annotation.compact} = Field(default=None)"
-    if annotation.lines is None and len(compact) <= 100:
+    if annotation.lines is None and len(compact) <= _MAX_SOURCE_LINE:
         return [compact]
     lines = _render_annotation_assignment(field_contract, " = Field(")
     lines.extend(["        default=None,", "    )"])
