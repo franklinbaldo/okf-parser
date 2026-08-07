@@ -17,8 +17,9 @@ zero-argument `okf-parser-mcp` entry point remains commit-disabled. Tool-level M
 annotations describe each tool's maximum possible effect and are descriptive hints,
 not an authorization boundary.
 
-Most commands print one JSON object to stdout. `schema --format zod` prints the
-Zod source as plain text. Exit status is command-specific and described below.
+Most commands print one JSON object to stdout. `schema --format zod` and
+`schema --format pydantic` print source code as plain text. Exit status is
+command-specific and described below.
 
 Commands that walk an existing bundle accept `--exclude` (repeatable) where
 shown, in addition to any `.okfignore`; see
@@ -109,12 +110,26 @@ MCP tool: `graph`.
 ## `schema`
 
 ```bash
-uv run okf-parser schema path/to/bundle [--format json|zod] [--infer-types] [--cast FIELD]... [--spec-template TEMPLATE] [--exclude PATTERN]... [--zod-import zod|astro]
+uv run okf-parser schema path/to/bundle [--format json|zod|pydantic] [--infer-types] [--cast FIELD]... [--spec-template TEMPLATE] [--exclude PATTERN]... [--zod-import zod|astro]
 ```
 
-Exports a canonical JSON Schema or Zod schema for the bundle's concept types.
+Exports the bundle's shared frontmatter contract as JSON Schema, Zod source, or
+an importable Pydantic v2 module.
 
-- `--format` — `json` (default) or `zod`.
+The common Pydantic path is intentionally just:
+
+```bash
+uv run okf-parser schema path/to/bundle --format pydantic
+```
+
+No alias configuration, naming policy, profile file, or second code-generation
+command is required. The compiler automatically maps authored YAML keys that are
+unsafe as Pydantic attributes — including Python keywords, leading-underscore
+keys and protected `model_*` names — while preserving the authored key as the
+validation alias. Truly ambiguous name collisions fail with the conflicting
+keys or structural paths in the error instead of requiring preconfiguration.
+
+- `--format` — `json` (default), `zod`, or `pydantic`.
 - `--infer-types` — infer scalar types from observed frontmatter values instead
   of leaving them untyped.
 - `--cast FIELD` — declare a scalar type for a specific field, repeatable.
@@ -124,8 +139,15 @@ Exports a canonical JSON Schema or Zod schema for the bundle's concept types.
 - `--zod-import` — only meaningful with `--format zod`; choose the `zod` or
   `astro:content` import style.
 
-MCP tool: `schema` (same flags, with `format` exposed as `schema_format` in the
-Python function signature).
+The Pydantic target prints one deterministic source module to stdout, so normal
+shell redirection is enough when a file is desired:
+
+```bash
+uv run okf-parser schema path/to/bundle --format pydantic > generated_models.py
+```
+
+MCP tool: `schema` with the same `json`, `zod`, and `pydantic` format choices
+(`format` is represented internally by the Python parameter `schema_format`).
 
 ## `format`
 
