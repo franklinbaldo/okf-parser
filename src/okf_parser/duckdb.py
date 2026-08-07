@@ -9,6 +9,11 @@ from typing import TYPE_CHECKING, cast
 import ibis
 
 from okf_parser.bundle import Bundle, load_bundle
+from okf_parser.typed_tables import (
+    TypedTableCollisionError,
+    discover_declared_schemas,
+    materialize_typed_tables,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -71,6 +76,7 @@ def attach_okf(
     schema: str = "okf",
     overwrite: bool = False,
     exclude: Sequence[str] = (),
+    spec_template: str | None = None,
 ) -> dict[str, object]:
     """Materialize one OKF bundle into a DuckDB schema.
 
@@ -81,9 +87,12 @@ def attach_okf(
 
     Materializing twice into the same schema raises :class:`BundleExportError`
     unless ``overwrite`` is set, in which case the four tables are replaced.
+    With ``spec_template``, declared concept types are additionally persisted
+    in ``{schema}_types`` as raw columns plus stable typed snapshot columns.
     """
     _validate_schema_name(schema)
     bundle = load_bundle(Path(path), exclude)
+    typed_schema = f"{schema}_types"
     relations = {
         "concepts": bundle.concepts,
         "links": bundle.links,
@@ -95,17 +104,35 @@ def attach_okf(
     if collisions and not overwrite:
         raise BundleExportError(schema, collisions)
 
+    declarations = discover_declared_schemas(
+        bundle.root,
+        bundle.concept_types,
+        spec_template,
+    )
+
     connection.execute("BEGIN TRANSACTION")
     try:
         connection.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
         for table_name, relation in relations.items():
             _replace_table(connection, schema, table_name, relation)
+        typed = None
+        if spec_template is not None:
+            try:
+                typed = materialize_typed_tables(
+                    connection,
+                    bundle,
+                    schema=typed_schema,
+                    declarations=declarations,
+                    overwrite=overwrite,
+                )
+            except TypedTableCollisionError as exc:
+                raise BundleExportError(exc.schema_name, exc.tables) from exc
         connection.execute("COMMIT")
     except Exception:
         connection.execute("ROLLBACK")
         raise
 
-    return {
+    result: dict[str, object] = {
         "schema": schema,
         "root": str(bundle.root),
         "conformant": bundle.is_conformant,
@@ -114,6 +141,16 @@ def attach_okf(
         "link_count": cast("int", bundle.links.count().execute()),
         "diagnostic_count": len(bundle.diagnostics),
     }
+    if spec_template is not None and typed is not None:
+        result.update(
+            {
+                "typed_schema": typed.schema,
+                "typed_table_count": len(typed.tables),
+                "typed_tables": list(typed.tables),
+                "unrecognized_type_tables": list(typed.unrecognized_tables),
+            }
+        )
+    return result
 
 
 def _replace_table(

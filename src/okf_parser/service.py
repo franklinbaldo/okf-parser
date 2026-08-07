@@ -189,6 +189,7 @@ def export_duckdb(
     *,
     overwrite: bool = False,
     exclude: Sequence[str] = (),
+    spec_template: str | None = None,
 ) -> dict[str, object]:
     """Materialize an OKF bundle into a DuckDB database file."""
     connection = duckdb.connect(database)
@@ -199,6 +200,7 @@ def export_duckdb(
             schema=schema,
             overwrite=overwrite,
             exclude=exclude,
+            spec_template=spec_template,
         )
     finally:
         connection.close()
