@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import keyword
 import unicodedata
@@ -32,6 +33,10 @@ type FieldDefinition = tuple[Any, Any]
 type StructuralPath = tuple[str, ...]
 
 _PROTECTED_PYDANTIC_NAMES = frozenset(dir(BaseModel)) | {"model_config"}
+_MAX_PYDANTIC_FIELD_NAME = 32
+_MAX_PYDANTIC_MODEL_NAME = 40
+_MAX_COMPACT_ANNOTATION = 50
+_MAX_STRING_LITERAL = 64
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,7 +72,8 @@ def _path_label(path: StructuralPath) -> str:
 def _normalized_identifier(authored: str) -> str:
     normalized = unicodedata.normalize("NFKC", authored)
     candidate = "".join(
-        character if character == "_" or character.isalnum() else "_" for character in normalized
+        character if character == "_" or character.isalnum() else "_"
+        for character in normalized
     ).strip("_")
     if not candidate:
         candidate = "field"
@@ -79,11 +85,31 @@ def _normalized_identifier(authored: str) -> str:
     return candidate
 
 
+def _bounded_identifier(candidate: str, source: str, *, limit: int, fallback: str) -> str:
+    """Bound one generated identifier with a stable content digest."""
+    if len(candidate) <= limit:
+        return candidate
+    digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:10]
+    prefix = candidate[: limit - len(digest) - 1].rstrip("_") or fallback
+    return f"{prefix}_{digest}"
+
+
+def _pydantic_model_name(suggested: str, path: StructuralPath) -> str:
+    """Keep emitted class names comfortably inside the repository line limit."""
+    provenance = "\x1f".join((*path, suggested))
+    return _bounded_identifier(
+        suggested,
+        provenance,
+        limit=_MAX_PYDANTIC_MODEL_NAME,
+        fallback="Model",
+    )
+
+
 def pydantic_field_name(
     authored: str,
     used: dict[str, str],
 ) -> PydanticFieldName:
-    """Map an authored YAML key to a safe Pydantic attribute without configuration."""
+    """Map an authored YAML key to a bounded safe Pydantic attribute."""
     normalized = unicodedata.normalize("NFKC", authored)
     direct = (
         authored == normalized
@@ -108,6 +134,16 @@ def pydantic_field_name(
             candidate = f"{candidate.rstrip('_')}_"
         if candidate.startswith("_"):
             candidate = f"field{candidate}"
+        alias = authored
+
+    bounded = _bounded_identifier(
+        candidate,
+        authored,
+        limit=_MAX_PYDANTIC_FIELD_NAME,
+        fallback="field",
+    )
+    if bounded != candidate:
+        candidate = bounded
         alias = authored
 
     previous = used.get(candidate)
@@ -179,7 +215,8 @@ def _dynamic_model(
     path: StructuralPath,
     registry: PydanticModelNameRegistry,
 ) -> type[BaseModel]:
-    registry.register(name, path)
+    emitted_name = _pydantic_model_name(name, path)
+    registry.register(emitted_name, path)
     fields: dict[str, FieldDefinition] = {}
     used: dict[str, str] = {}
     for field_contract in node.fields:
@@ -198,7 +235,7 @@ def _dynamic_model(
             default = Field(default=default, alias=mapped.alias)
         fields[mapped.python_name] = (annotation, default)
     return create_model(
-        name,
+        emitted_name,
         __config__=ConfigDict(extra="allow"),
         **cast("dict[str, Any]", fields),
     )
@@ -230,9 +267,15 @@ class _SourceImports:
 
 
 @dataclass(frozen=True, slots=True)
+class _SourceAnnotation:
+    compact: str
+    lines: tuple[str, ...] | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class _SourceField:
     name: str
-    annotation: str
+    annotation: _SourceAnnotation
     required: bool
     nullable: bool
     alias: str | None
@@ -251,7 +294,60 @@ class _SourceContext:
     models: list[_SourceModel] = field(default_factory=list)
 
 
-def _source_scalar(node: ScalarNode, imports: _SourceImports) -> str:
+def _string_literal_parts(value: str) -> tuple[str, ...]:
+    """Split a Python string literal so no emitted literal token is excessively long."""
+    compact = json.dumps(value, ensure_ascii=False)
+    if len(compact) <= _MAX_STRING_LITERAL:
+        return (compact,)
+
+    parts: list[str] = []
+    current = ""
+    for character in value:
+        candidate = current + character
+        if current and len(json.dumps(candidate, ensure_ascii=False)) > _MAX_STRING_LITERAL:
+            parts.append(json.dumps(current, ensure_ascii=False))
+            current = character
+        else:
+            current = candidate
+    parts.append(json.dumps(current, ensure_ascii=False))
+    return tuple(parts)
+
+
+def _literal_source_annotation(value: str) -> _SourceAnnotation:
+    compact_value = json.dumps(value, ensure_ascii=False)
+    compact = f"Literal[{compact_value}]"
+    if len(compact) <= _MAX_COMPACT_ANNOTATION:
+        return _SourceAnnotation(compact)
+    parts = list(_string_literal_parts(value))
+    parts[-1] = f"{parts[-1]},"
+    return _SourceAnnotation(
+        compact,
+        ("Literal[", *(f"    {part}" for part in parts), "]"),
+    )
+
+
+def _nullable_source_annotation(annotation: _SourceAnnotation) -> _SourceAnnotation:
+    compact = f"{annotation.compact} | None"
+    if annotation.lines is None and len(compact) <= _MAX_COMPACT_ANNOTATION:
+        return _SourceAnnotation(compact)
+    lines = list(annotation.lines or (annotation.compact,))
+    lines[-1] = f"{lines[-1]} | None"
+    return _SourceAnnotation(compact, tuple(lines))
+
+
+def _list_source_annotation(item: _SourceAnnotation) -> _SourceAnnotation:
+    compact = f"list[{item.compact}]"
+    if item.lines is None and len(compact) <= _MAX_COMPACT_ANNOTATION:
+        return _SourceAnnotation(compact)
+    if item.lines is None:
+        inner = [f"    {item.compact},"]
+    else:
+        inner = [f"    {line}" for line in item.lines]
+        inner[-1] = f"{inner[-1]},"
+    return _SourceAnnotation(compact, ("list[", *inner, "]"))
+
+
+def _source_scalar(node: ScalarNode, imports: _SourceImports) -> _SourceAnnotation:
     declared = node.declared_type
     if declared is None:
         annotation = {
@@ -284,7 +380,7 @@ def _source_scalar(node: ScalarNode, imports: _SourceImports) -> str:
         imports.uuid = True
     elif annotation == "Any":
         imports.typing_names.add("Any")
-    return annotation
+    return _SourceAnnotation(annotation)
 
 
 def _source_annotation(
@@ -293,15 +389,15 @@ def _source_annotation(
     suggested_name: str,
     path: StructuralPath,
     context: _SourceContext,
-) -> str:
+) -> _SourceAnnotation:
     if isinstance(node, ScalarNode):
         return _source_scalar(node, context.imports)
     if isinstance(node, LiteralNode):
         context.imports.typing_names.add("Literal")
-        return f"Literal[{json.dumps(node.value, ensure_ascii=False)}]"
+        return _literal_source_annotation(node.value)
     if isinstance(node, AnyNode):
         context.imports.typing_names.add("Any")
-        return "Any"
+        return _SourceAnnotation("Any")
     if isinstance(node, ListNode):
         item = _source_annotation(
             node.item,
@@ -310,15 +406,15 @@ def _source_annotation(
             context=context,
         )
         if node.item_nullable:
-            item = f"{item} | None"
-        return f"list[{item}]"
-    _collect_source_model(
+            item = _nullable_source_annotation(item)
+        return _list_source_annotation(item)
+    emitted_name = _collect_source_model(
         suggested_name,
         node,
         path=path,
         context=context,
     )
-    return suggested_name
+    return _SourceAnnotation(emitted_name)
 
 
 def _collect_source_model(
@@ -327,8 +423,9 @@ def _collect_source_model(
     *,
     path: StructuralPath,
     context: _SourceContext,
-) -> None:
-    context.registry.register(name, path)
+) -> str:
+    emitted_name = _pydantic_model_name(name, path)
+    context.registry.register(emitted_name, path)
     used: dict[str, str] = {}
     source_fields: list[_SourceField] = []
     for field_contract in node.fields:
@@ -341,7 +438,7 @@ def _collect_source_model(
             context=context,
         )
         if field_contract.nullable:
-            annotation = f"{annotation} | None"
+            annotation = _nullable_source_annotation(annotation)
         if mapped.alias is not None or (
             not field_contract.required and not field_contract.nullable
         ):
@@ -355,7 +452,8 @@ def _collect_source_model(
                 mapped.alias,
             )
         )
-    context.models.append(_SourceModel(name, tuple(source_fields)))
+    context.models.append(_SourceModel(emitted_name, tuple(source_fields)))
+    return emitted_name
 
 
 def _render_imports(imports: _SourceImports, *, has_models: bool) -> list[str]:
@@ -382,18 +480,59 @@ def _render_imports(imports: _SourceImports, *, has_models: bool) -> list[str]:
     return lines
 
 
-def _render_field(field_contract: _SourceField) -> str:
-    line = f"    {field_contract.name}: {field_contract.annotation}"
+def _render_annotation_assignment(field_contract: _SourceField, suffix: str) -> list[str]:
+    annotation_lines = field_contract.annotation.lines or (field_contract.annotation.compact,)
+    lines = [f"    {field_contract.name}: {annotation_lines[0]}"]
+    lines.extend(f"    {line}" for line in annotation_lines[1:])
+    lines[-1] = f"{lines[-1]}{suffix}"
+    return lines
+
+
+def _render_string_keyword(name: str, value: str) -> list[str]:
+    compact = json.dumps(value, ensure_ascii=False)
+    candidate = f"        {name}={compact},"
+    if len(candidate) <= 100:
+        return [candidate]
+    parts = _string_literal_parts(value)
+    return [
+        f"        {name}=(",
+        *(f"            {part}" for part in parts),
+        "        ),",
+    ]
+
+
+def _render_field(field_contract: _SourceField) -> list[str]:
+    annotation = field_contract.annotation
     if field_contract.alias is not None:
         alias = json.dumps(field_contract.alias, ensure_ascii=False)
-        if field_contract.required:
-            return f"{line} = Field(alias={alias})"
-        return f"{line} = Field(default=None, alias={alias})"
+        default = "" if field_contract.required else "default=None, "
+        compact = (
+            f"    {field_contract.name}: {annotation.compact} = "
+            f"Field({default}alias={alias})"
+        )
+        if annotation.lines is None and len(compact) <= 100:
+            return [compact]
+        lines = _render_annotation_assignment(field_contract, " = Field(")
+        if not field_contract.required:
+            lines.append("        default=None,")
+        lines.extend(_render_string_keyword("alias", field_contract.alias))
+        lines.append("    )")
+        return lines
+
     if field_contract.required:
-        return line
+        return _render_annotation_assignment(field_contract, "")
     if field_contract.nullable:
-        return f"{line} = None"
-    return f"{line} = Field(default=None)"
+        compact = f"    {field_contract.name}: {annotation.compact} = None"
+        if annotation.lines is None and len(compact) <= 100:
+            return [compact]
+        return _render_annotation_assignment(field_contract, " = None")
+
+    compact = f"    {field_contract.name}: {annotation.compact} = Field(default=None)"
+    if annotation.lines is None and len(compact) <= 100:
+        return [compact]
+    lines = _render_annotation_assignment(field_contract, " = Field(")
+    lines.extend(["        default=None,", "    )"])
+    return lines
 
 
 def render_pydantic_source(contracts: tuple[TypeContract, ...]) -> str:
@@ -419,7 +558,8 @@ def render_pydantic_source(contracts: tuple[TypeContract, ...]) -> str:
         )
         if model.fields:
             lines.append("")
-            lines.extend(_render_field(item) for item in model.fields)
+            for field_contract in model.fields:
+                lines.extend(_render_field(field_contract))
     return "\n".join(lines).rstrip() + "\n"
 
 
