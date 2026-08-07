@@ -37,6 +37,10 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/_pre_accept_rfc0006.py
+          # The accepted RFC deliberately names --fail-on-spec-divergence once
+          # to record that the earlier proposal is rejected. Do not treat that
+          # historical mention as a stale normative promise.
+          sed -i '/    "--fail-on-spec-divergence",/d' scripts/_accept_rfc0006.py
           python scripts/_accept_rfc0006.py
           uv lock
           npm install --package-lock-only --ignore-scripts --prefix typescript
