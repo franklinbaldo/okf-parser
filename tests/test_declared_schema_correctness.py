@@ -23,7 +23,7 @@ def test_declared_table_identity_follows_duckdb_identifier_case_rules() -> None:
     schema = parse_declared_schema('CREATE TABLE "Rotina" (id BIGINT);', "rotina")
 
     assert schema.table_name == "Rotina"
-    assert schema.columns == {"id": "BIGINT"}
+    assert {name: logical.sql for name, logical in schema.columns.items()} == {"id": "BIGINT"}
 
 
 def test_declared_columns_are_read_from_the_non_temporary_table_identity() -> None:
@@ -34,7 +34,9 @@ def test_declared_columns_are_read_from_the_non_temporary_table_identity() -> No
 
     schema = parse_declared_schema(sql, "Rotina")
 
-    assert schema.columns == {"permanent_col": "BIGINT"}
+    assert {name: logical.sql for name, logical in schema.columns.items()} == {
+        "permanent_col": "BIGINT"
+    }
 
 
 def test_declared_but_unobserved_column_is_exported_as_optional(tmp_path: Path) -> None:
@@ -49,7 +51,7 @@ def test_declared_but_unobserved_column_is_exported_as_optional(tmp_path: Path) 
     assert "futuro" not in schema["required"]
 
 
-def test_scalar_declaration_does_not_type_observed_list_items(tmp_path: Path) -> None:
+def test_declared_scalar_intent_wins_over_divergent_observed_shape(tmp_path: Path) -> None:
     _write_concept(tmp_path / "one.md", "type: Rotina\nvalues: [1, 2]\n")
     declared = tmp_path / "docs" / "types" / "rotina.schema.sql"
     declared.parent.mkdir(parents=True)
@@ -57,8 +59,8 @@ def test_scalar_declaration_does_not_type_observed_list_items(tmp_path: Path) ->
 
     schema = export_json_schema(str(tmp_path), spec_template=TEMPLATE)["schemas"]["Rotina"]
 
-    assert schema["properties"]["values"]["type"] == "array"
-    assert schema["properties"]["values"]["items"]["type"] == "string"
+    assert schema["properties"]["values"]["type"] == "integer"
+    assert schema["properties"]["values"]["x-okf-duckdb-type"] == "BIGINT"
 
 
 def test_existing_derived_path_collision_is_an_explicit_export_error(tmp_path: Path) -> None:

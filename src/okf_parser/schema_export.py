@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import json
 from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal, cast
+from uuid import UUID
 
 from pydantic import BaseModel, create_model
 
 from okf_parser.bundle import load_bundle
 from okf_parser.declared_schema import (
     DeclaredSchemaError,
-    declared_cast_kinds,
     declared_schema_relative_path,
     parse_declared_schema,
 )
@@ -37,6 +38,7 @@ from okf_parser.schema_contract import (
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from okf_parser.duckdb_types import DuckDBLogicalType
     from okf_parser.schema_lexemes import CastKind
 
 type FieldDefinition = tuple[Any, Any]
@@ -63,20 +65,12 @@ def documents_by_type(
     return by_type
 
 
-def _declared_casts_by_type(
+def _declared_types_by_type(
     root: str,
     concept_types: Sequence[str],
     spec_template: str | None,
-) -> dict[str, dict[str, CastKind]]:
-    """Read each type's declaration without hiding collisions or malformed files.
-
-    Declarations stay indexed by `(concept_type, field)`, never flattened.
-    Because schema export does not yet expose RFC 0006's planned declaration
-    diagnostics channel, an existing but unusable declaration fails loudly
-    instead of being silently treated as absent. Likewise, if two types
-    derive the same existing `.schema.sql` path, neither can safely claim
-    that file, so export fails with the collision named explicitly.
-    """
+) -> dict[str, dict[str, DuckDBLogicalType]]:
+    """Read each type's declaration while retaining DuckDB's full catalog types."""
     if spec_template is None:
         return {}
 
@@ -86,7 +80,7 @@ def _declared_casts_by_type(
         if relative is not None:
             types_by_path.setdefault(relative, []).append(concept_type)
 
-    by_type: dict[str, dict[str, CastKind]] = {}
+    by_type: dict[str, dict[str, DuckDBLogicalType]] = {}
     for relative, owners in sorted(types_by_path.items()):
         schema_path = Path(root) / relative
         if not schema_path.is_file():
@@ -104,9 +98,8 @@ def _declared_casts_by_type(
             message = f"invalid declared schema for {concept_type!r} at {relative!r}: {exc}"
             raise SchemaExportError(message) from exc
 
-        kinds = declared_cast_kinds(declared)
-        if kinds:
-            by_type[concept_type] = kinds
+        if declared.columns:
+            by_type[concept_type] = dict(declared.columns)
     return by_type
 
 
@@ -120,12 +113,12 @@ def build_schema_contracts(
 ) -> tuple[TypeContract, ...]:
     """Compile bundle observations into deterministic language-neutral contracts."""
     observed = documents_by_type(path, exclude)
-    declared_by_type = _declared_casts_by_type(path, tuple(observed), spec_template)
+    declared_by_type = _declared_types_by_type(path, tuple(observed), spec_template)
     return compile_contracts(
         observed,
         infer_types=infer_types,
         casts=casts,
-        declared_casts_by_type=declared_by_type,
+        declared_types_by_type=declared_by_type,
     )
 
 
@@ -142,7 +135,21 @@ def _python_type(kind: CastKind) -> type:
 
 def _annotation(node: ContractNode, *, name: str) -> object:
     if isinstance(node, ScalarNode):
-        return _python_type(node.kind)
+        declared = node.declared_type
+        if declared is None:
+            return _python_type(node.kind)
+        return {
+            "string": str,
+            "boolean": bool,
+            "integer": int,
+            "float": float,
+            "decimal": Decimal,
+            "date": date,
+            "timestamp": datetime,
+            "timestamptz": datetime,
+            "uuid": UUID,
+            "unsupported": Any,
+        }.get(declared.family, Any)
     if isinstance(node, LiteralNode):
         return cast("Any", Literal)[node.value]
     if isinstance(node, AnyNode):
@@ -173,6 +180,7 @@ def build_pydantic_models(
     *,
     infer_types: bool = False,
     casts: Sequence[str] = (),
+    spec_template: str | None = None,
 ) -> dict[str, type[BaseModel]]:
     """Build dynamic Pydantic adapters from the same contract used by exporters."""
     contracts = build_schema_contracts(
@@ -180,6 +188,7 @@ def build_pydantic_models(
         exclude,
         infer_types=infer_types,
         casts=casts,
+        spec_template=spec_template,
     )
     return {
         contract.concept_type: _pydantic_model(contract.model_name, contract.root)

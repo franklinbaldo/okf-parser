@@ -12,7 +12,6 @@ import pytest
 
 from okf_parser.declared_schema import (
     DeclaredSchemaError,
-    declared_cast_kinds,
     declared_schema_relative_path,
     parse_declared_schema,
 )
@@ -110,25 +109,29 @@ def test_parse_declared_schema_rejects_a_script_that_fails() -> None:
         parse_declared_schema("not sql at all (((", "Rotina")
 
 
-def test_declared_cast_kinds_maps_duckdb_types_to_the_shared_vocabulary() -> None:
+def test_declared_schema_preserves_full_duckdb_logical_types() -> None:
     sql = """
     CREATE TABLE "Rotina" (
         nome VARCHAR,
         ativo BOOLEAN,
-        idade INTEGER,
+        idade BIGINT,
         custo DECIMAL(18, 4),
         nascimento DATE,
-        registrado_em TIMESTAMPTZ
+        local_em TIMESTAMP,
+        registrado_em TIMESTAMPTZ,
+        identificador UUID,
+        codigos BIGINT[]
     );
     """
     schema = parse_declared_schema(sql, "Rotina")
-    kinds = declared_cast_kinds(schema)
 
-    assert kinds == {
-        "nome": "string",
-        "ativo": "boolean",
-        "idade": "integer",
-        "custo": "number",
-        "nascimento": "date",
-        "registrado_em": "datetime",
-    }
+    assert schema.columns["custo"].sql == "DECIMAL(18,4)"
+    assert schema.columns["custo"].family == "decimal"
+    assert schema.columns["custo"].precision == 18
+    assert schema.columns["custo"].scale == 4
+    assert schema.columns["local_em"].family == "timestamp"
+    assert schema.columns["registrado_em"].family == "timestamptz"
+    assert schema.columns["identificador"].family == "uuid"
+    assert schema.columns["codigos"].family == "list"
+    assert schema.columns["codigos"].element is not None
+    assert schema.columns["codigos"].element.sql == "BIGINT"

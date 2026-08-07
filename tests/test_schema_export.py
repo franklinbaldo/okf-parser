@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 import pytest
 
 from okf_parser.schema_export import (
     SchemaCastError,
     SchemaNameCollisionError,
+    build_pydantic_models,
     export_json_schema,
     export_zod_schema,
 )
@@ -93,7 +96,7 @@ def test_declared_schema_types_a_column_that_has_no_explicit_cast(tmp_path: Path
     assert report["schemas"]["rotina"]["properties"]["custo"]["type"] == "number"
 
 
-def test_declared_schema_column_degrades_to_string_on_divergent_data(tmp_path: Path) -> None:
+def test_declared_schema_keeps_declared_intent_when_data_diverges(tmp_path: Path) -> None:
     _write_concept(tmp_path / "one.md", "type: rotina\ncusto: '10.50'\n")
     _write_concept(tmp_path / "two.md", "type: rotina\ncusto: not-a-number\n")
     spec = tmp_path / "docs" / "types" / "rotina.schema.sql"
@@ -101,8 +104,11 @@ def test_declared_schema_column_degrades_to_string_on_divergent_data(tmp_path: P
     spec.write_text('CREATE TABLE "rotina" (custo DECIMAL(18, 4));', encoding="utf-8")
 
     report = export_json_schema(str(tmp_path), spec_template="docs/types/{slug}.md")
+    custo = report["schemas"]["rotina"]["properties"]["custo"]
 
-    assert report["schemas"]["rotina"]["properties"]["custo"]["type"] == "string"
+    assert custo["type"] == "number"
+    assert custo["multipleOf"] == 0.0001
+    assert custo["x-okf-duckdb-type"] == "DECIMAL(18,4)"
 
 
 def test_declared_schema_is_ignored_without_spec_template(tmp_path: Path) -> None:
@@ -288,3 +294,98 @@ def test_zod_uses_the_same_inferred_schema(tmp_path: Path) -> None:
     assert '"count": z.number().int()' in zod
     assert '"created": z.iso.date()' in zod
     assert '"type": z.literal("test_type")' in zod
+
+
+def test_declared_export_distinguishes_temporal_uuid_and_list_types(tmp_path: Path) -> None:
+    _write_concept(
+        tmp_path / "one.md",
+        "type: Evento\nlocal_em: '2026-08-07T09:30:00'\n"
+        "instante: '2026-08-07T13:30:00Z'\n"
+        "id_externo: '550e8400-e29b-41d4-a716-446655440000'\n"
+        "codigos: [1, 2]\n",
+    )
+    spec = tmp_path / "docs" / "types" / "evento.schema.sql"
+    spec.parent.mkdir(parents=True)
+    spec.write_text(
+        'CREATE TABLE "Evento" ('
+        "local_em TIMESTAMP, instante TIMESTAMPTZ, id_externo UUID, codigos BIGINT[]);",
+        encoding="utf-8",
+    )
+
+    report = export_json_schema(str(tmp_path), spec_template="docs/types/{slug}.md")
+    properties = report["schemas"]["Evento"]["properties"]
+
+    assert properties["local_em"] == {
+        "title": "Local_em",
+        "type": "string",
+        "x-okf-duckdb-type": "TIMESTAMP",
+        "x-okf-temporal-kind": "timestamp-without-time-zone",
+    }
+    assert properties["instante"]["format"] == "date-time"
+    assert properties["instante"]["x-okf-duckdb-type"] == "TIMESTAMP WITH TIME ZONE"
+    assert properties["id_externo"]["format"] == "uuid"
+    assert properties["codigos"]["type"] == "array"
+    assert properties["codigos"]["x-okf-duckdb-type"] == "BIGINT[]"
+    assert properties["codigos"]["items"]["type"] == "integer"
+    assert properties["codigos"]["items"]["x-okf-duckdb-type"] == "BIGINT"
+
+    zod = export_zod_schema(str(tmp_path), spec_template="docs/types/{slug}.md")
+    assert '"local_em": z.string()' in zod
+    assert '"instante": z.iso.datetime({ offset: true })' in zod
+    assert '"id_externo": z.uuid()' in zod
+    assert '"codigos": z.array(z.union([z.number().int(), z.bigint()]))' in zod
+
+
+def test_declared_decimal_and_bigint_use_target_specific_representations(tmp_path: Path) -> None:
+    _write_concept(tmp_path / "one.md", "type: Financeiro\nvalor: '12.34'\nsequencia: '42'\n")
+    spec = tmp_path / "docs" / "types" / "financeiro.schema.sql"
+    spec.parent.mkdir(parents=True)
+    spec.write_text(
+        'CREATE TABLE "Financeiro" (valor DECIMAL(18, 4), sequencia BIGINT);',
+        encoding="utf-8",
+    )
+
+    report = export_json_schema(str(tmp_path), spec_template="docs/types/{slug}.md")
+    properties = report["schemas"]["Financeiro"]["properties"]
+    assert properties["valor"]["type"] == "number"
+    assert properties["sequencia"]["type"] == "integer"
+
+    zod = export_zod_schema(str(tmp_path), spec_template="docs/types/{slug}.md")
+    assert '"valor": z.string()' in zod
+    assert '"sequencia": z.union([z.number().int(), z.bigint()])' in zod
+
+
+def test_declared_pydantic_models_keep_decimal_and_uuid_runtime_types(tmp_path: Path) -> None:
+    _write_concept(
+        tmp_path / "one.md",
+        "type: Registro\nvalor: '12.34'\nid_externo: '550e8400-e29b-41d4-a716-446655440000'\n",
+    )
+    spec = tmp_path / "docs" / "types" / "registro.schema.sql"
+    spec.parent.mkdir(parents=True)
+    spec.write_text(
+        'CREATE TABLE "Registro" (valor DECIMAL(18, 4), id_externo UUID);',
+        encoding="utf-8",
+    )
+
+    model = build_pydantic_models(str(tmp_path), spec_template="docs/types/{slug}.md")["Registro"]
+
+    assert model.model_fields["valor"].annotation is Decimal
+    assert model.model_fields["id_externo"].annotation is UUID
+
+
+def test_unsupported_declared_type_keeps_duckdb_identity_without_fake_json_type(
+    tmp_path: Path,
+) -> None:
+    _write_concept(tmp_path / "one.md", "type: Estruturado\ndados: qualquer\n")
+    spec = tmp_path / "docs" / "types" / "estruturado.schema.sql"
+    spec.parent.mkdir(parents=True)
+    spec.write_text('CREATE TABLE "Estruturado" (dados STRUCT(a INTEGER));', encoding="utf-8")
+
+    report = export_json_schema(str(tmp_path), spec_template="docs/types/{slug}.md")
+    dados = report["schemas"]["Estruturado"]["properties"]["dados"]
+
+    assert dados["x-okf-duckdb-type"] == "STRUCT(a INTEGER)"
+    assert "type" not in dados
+    assert '"dados": z.unknown()' in export_zod_schema(
+        str(tmp_path), spec_template="docs/types/{slug}.md"
+    )
