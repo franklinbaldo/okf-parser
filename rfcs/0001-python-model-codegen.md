@@ -75,6 +75,36 @@ one shared schema pipeline.
 - make the target available through the existing CLI/service/MCP `schema`
   surface without adding a second command hierarchy.
 
+## Usability contract
+
+The common path must stay boring:
+
+```bash
+okf-parser schema . --format pydantic
+```
+
+That command must produce useful importable source without requiring the caller
+to understand `TypeContract`, configure aliases, choose a naming policy, create a
+profile file, or learn a second command family. Safe Pydantic names, aliases for
+authored keys, protected-name handling, leading-underscore handling and nested
+model-name registration are compiler responsibilities.
+
+Advanced controls remain opt-in progressive disclosure. `--spec-template`,
+`--cast` and `--infer-types` keep their existing meanings for callers who need
+more authority, but none is required merely to get a useful Pydantic model from
+an ordinary OKF bundle.
+
+When automatic naming cannot be made unambiguous, fail loudly instead of asking
+the user to preconfigure a mapping. The error should name the authored keys or
+structural paths that conflict and, where possible, the generated identifier
+that caused the collision. A future explicit mapping option is justified only by
+real cases that cannot be handled deterministically.
+
+This is also a broader CLI constraint: adding a new internal abstraction is not
+a reason to add a new public command, mandatory config file or extra setup step.
+The public surface should expose concepts users need, not the implementation
+graph underneath them.
+
 ## Non-goals
 
 - generating OKF declarations from Python models in this RFC;
@@ -548,6 +578,8 @@ multiple generation operations that need aggregate diagnostics.
 
 ## Acceptance criteria
 
+- `okf-parser schema . --format pydantic` works without naming configuration,
+  profile scaffolding or another command family for an ordinary conformant bundle;
 - repeated generation is byte-for-byte deterministic;
 - generated source imports successfully on supported Python versions;
 - generated source passes Ruff format/check without post-processing;
