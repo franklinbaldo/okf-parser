@@ -26,7 +26,7 @@ if TYPE_CHECKING:
 
 
 class BundleImportError(ValueError):
-    """Raised when a source cannot be read, or names an id column that doesn't exist."""
+    """Raised when a source cannot be read or conflicts with import identity."""
 
 
 def _read_rows(source: str) -> tuple[list[str], list[dict[str, object]]]:
@@ -59,6 +59,8 @@ def _concept_id(row: dict[str, object], index: int, id_column: str | None) -> st
 def _frontmatter_text(yaml: YAML, concept_type: str, row: dict[str, object]) -> str:
     data: dict[str, object] = {"type": concept_type}
     for key, value in row.items():
+        if key == "type":
+            continue
         if value is not None:
             data[key] = value if isinstance(value, str) else str(value)
     buffer = StringIO()
@@ -109,10 +111,15 @@ def import_bundle(  # each argument is an independent public CLI flag.
     `overwrite=False` (the default) never touches a file that already
     exists at its destination - a matched destination is reported as
     skipped, not silently replaced. A non-unique id-column slug blocks the
-    whole call before anything is written.
+    whole call before anything is written. Source data may not define the
+    reserved `type` key because `--type` is the import's canonical concept
+    identity.
     """
     root = Path(path).resolve()
     columns, rows = _read_rows(source)
+    if "type" in columns:
+        message = "source column 'type' is reserved; use --type to set concept identity"
+        raise BundleImportError(message)
     plan, duplicate_ids = _plan(concept_type, columns, rows, id_column)
     if duplicate_ids:
         return {
