@@ -22,11 +22,6 @@ path.write_text(text, encoding="utf-8")
 # this consumer solely for narrowing.
 replace(
     "src/okf_parser/apply.py",
-    "from __future__ import annotations\n\nimport hashlib\n",
-    "from __future__ import annotations\n\nimport hashlib\n",
-)
-replace(
-    "src/okf_parser/apply.py",
     "from dataclasses import dataclass\n",
     "from collections.abc import Mapping\nfrom dataclasses import dataclass\n",
 )
@@ -53,11 +48,11 @@ text = path.read_text(encoding="utf-8")
 text = text.replace('cast("Mapping[str, YamlValue]",', 'cast("Mapping[str, Any]",')
 path.write_text(text, encoding="utf-8")
 
-# The generic CLI signature replacement matched `format` first. Restore that
-# command and attach the option to `apply`, whose service call was already wired.
+# The generic CLI signature replacement matched `format_command` first.
+# Restore it and attach the option to the actual apply function.
 replace(
     "src/okf_parser/cli.py",
-    '''def format(
+    '''def format_command(
     path: str,
     *,
     write: bool = False,
@@ -65,7 +60,7 @@ replace(
     spec_template: str | None = None,
 ) -> CliResult[JsonPayload]:
 ''',
-    '''def format(
+    '''def format_command(
     path: str,
     *,
     write: bool = False,
@@ -75,7 +70,7 @@ replace(
 )
 replace(
     "src/okf_parser/cli.py",
-    '''def apply(
+    '''def apply(  # each argument is an independent public CLI flag.
     path: str,
     *,
     sql: str | None = None,
@@ -87,7 +82,7 @@ replace(
     exclude: RepeatableStrings = None,
 ) -> CliResult[JsonPayload]:
 ''',
-    '''def apply(
+    '''def apply(  # each argument is an independent public CLI flag.
     path: str,
     *,
     sql: str | None = None,
