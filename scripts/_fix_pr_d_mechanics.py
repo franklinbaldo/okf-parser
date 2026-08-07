@@ -128,11 +128,20 @@ replace(
 ''',
 )
 
-replace(
-    "tests/test_apply.py",
-    '''    assert "  - 1" in text and "  - 2" in text
-''',
-    '''    assert "  - 1" in text
-    assert "  - 2" in text
-''',
+# The typed-list regression must test typed querying, not broaden apply's
+# pre-existing lossless YAML rewrite contract. Use ruamel's canonical block
+# sequence spelling so changing `status` can round-trip without reformatting
+# the untouched list.
+path = Path("tests/test_apply.py")
+text = path.read_text(encoding="utf-8")
+text = text.replace(
+    'tags:\\n  - 1\\n  - 2\\nstatus: low',
+    'tags:\\n- 1\\n- 2\\nstatus: low',
+    1,
 )
+text = text.replace(
+    '    assert "  - 1" in text and "  - 2" in text\n',
+    '    assert "- 1" in text\n    assert "- 2" in text\n',
+    1,
+)
+path.write_text(text, encoding="utf-8")
