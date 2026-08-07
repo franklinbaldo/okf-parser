@@ -126,15 +126,17 @@ def parse_declared_schema(sql_text: str) -> DeclaredSchema:
                 message = f"declared schema statement failed: {query}: {exc}"
                 raise DeclaredSchemaError(message) from exc
 
-        table_name = create_statements[0].query.strip().split(None, 3)[2].strip('"')
-        tables = con.execute(
-            "SELECT table_name, comment FROM duckdb_tables() WHERE table_name = ?",
-            [table_name],
-        ).fetchall()
-        if not tables:
-            message = f"declared schema's table {table_name!r} was not found after creation"
+        # The table's name is read back from the catalog, never re-derived from
+        # the CREATE TABLE text: a quoted identifier can itself contain
+        # whitespace (`"Blog Post"`), which a naive token split on the query
+        # text would cut in the wrong place. DuckDB's own parser already
+        # resolved the real name once, at CREATE time.
+        tables = con.execute("SELECT table_name, comment FROM duckdb_tables()").fetchall()
+        if len(tables) != 1:
+            names = ", ".join(repr(row[0]) for row in tables)
+            message = f"declared schema must create exactly one table, found: {names}"
             raise DeclaredSchemaError(message)
-        table_comment = tables[0][1]
+        table_name, table_comment = tables[0]
 
         columns = con.execute(
             "SELECT column_name, data_type, comment FROM duckdb_columns() "

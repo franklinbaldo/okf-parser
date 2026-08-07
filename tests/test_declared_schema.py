@@ -41,6 +41,14 @@ def test_parse_declared_schema_reads_columns_and_comments() -> None:
     assert set(schema.columns) == {"id", "registrado_em", "custo"}
 
 
+def test_parse_declared_schema_handles_a_quoted_table_name_containing_whitespace() -> None:
+    sql = 'CREATE TABLE "Blog Post" (date TIMESTAMPTZ, featured BOOLEAN);'
+    schema = parse_declared_schema(sql)
+
+    assert schema.table_name == "Blog Post"
+    assert set(schema.columns) == {"date", "featured"}
+
+
 def test_parse_declared_schema_rejects_more_than_one_create_table() -> None:
     sql = 'CREATE TABLE "A" (id VARCHAR); CREATE TABLE "B" (id VARCHAR);'
     with pytest.raises(DeclaredSchemaError, match="exactly one CREATE TABLE"):
