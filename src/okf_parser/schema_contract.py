@@ -12,6 +12,8 @@ from okf_parser.schema_lexemes import CastKind, can_classify_as, classify_lexeme
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
+    from okf_parser.duckdb_types import DuckDBLogicalType
+
 type ZodImport = Literal["zod", "astro"]
 type ContractNode = ScalarNode | LiteralNode | ObjectNode | ListNode | AnyNode
 
@@ -32,9 +34,10 @@ class SchemaNameCollisionError(SchemaExportError):
 
 @dataclass(frozen=True, slots=True)
 class ScalarNode:
-    """One scalar value classified by its exact lexical kind."""
+    """One scalar value, optionally retaining its exact declared DuckDB type."""
 
     kind: CastKind
+    declared_type: DuckDBLogicalType | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +58,7 @@ class ListNode:
 
     item: ContractNode
     item_nullable: bool
+    declared_type: DuckDBLogicalType | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,7 +91,7 @@ class TypeContract:
 class _CompileOptions:
     infer_types: bool
     casts: dict[str, CastKind]
-    declared_by_type: Mapping[str, Mapping[str, CastKind]] = field(default_factory=dict)
+    declared_by_type: Mapping[str, Mapping[str, DuckDBLogicalType]] = field(default_factory=dict)
     used_casts: set[str] = field(default_factory=set)
 
 
@@ -144,7 +148,7 @@ def unique_model_names(values: Sequence[str], suffix: str) -> dict[str, str]:
 
 
 def _scalar_node(
-    values: Sequence[str], path: str, options: _CompileOptions, concept_type: str | None
+    values: Sequence[str], path: str, options: _CompileOptions, _concept_type: str | None
 ) -> ScalarNode:
     explicit = options.casts.get(path)
     if explicit is not None:
@@ -157,18 +161,19 @@ def _scalar_node(
             message = f"cannot cast {path!r} to {explicit}: {sample!r} is incompatible"
             raise SchemaCastError(message)
         return ScalarNode(explicit)
-    # Declared casts are looked up scoped to `concept_type`, never as a flat
-    # path->kind table: a `.schema.sql` declaring `Fatura.valor` as a
-    # DECIMAL must never leak into `Pesquisa.valor` just because the two
-    # types happen to share a field name. Unlike an explicit `--cast`,
-    # advisory only - a value that doesn't fit falls through to inference
-    # or `"string"`, never raises.
-    if concept_type is not None:
-        declared = options.declared_by_type.get(concept_type, {}).get(path)
-        if declared is not None and can_classify_as(values, declared):
-            return ScalarNode(declared)
     kind = classify_lexemes(values) if options.infer_types else "string"
     return ScalarNode(kind)
+
+
+def _declared_node(declared: DuckDBLogicalType) -> ContractNode:
+    """Project a lossless DuckDB type into the language-neutral contract tree."""
+    if declared.family == "list" and declared.element is not None:
+        return ListNode(
+            item=_declared_node(declared.element),
+            item_nullable=False,
+            declared_type=declared,
+        )
+    return ScalarNode(declared.cast_kind or "string", declared_type=declared)
 
 
 def _compile_value(
@@ -179,6 +184,26 @@ def _compile_value(
     concept_type: str | None,
 ) -> ContractNode:
     non_null = [value for value in values if value is not None]
+    declared = (
+        options.declared_by_type.get(concept_type, {}).get(path)
+        if concept_type is not None and path not in options.casts
+        else None
+    )
+    if declared is not None:
+        node = _declared_node(declared)
+        if isinstance(node, ListNode):
+            items = [
+                item
+                for value in non_null
+                if isinstance(value, list)
+                for item in cast("list[object]", value)
+            ]
+            node = ListNode(
+                node.item,
+                item_nullable=any(item is None for item in items),
+                declared_type=node.declared_type,
+            )
+        return node
     if not non_null:
         return _scalar_node((), path, options, concept_type)
 
@@ -241,13 +266,13 @@ def compile_contracts(
     *,
     infer_types: bool = False,
     casts: Sequence[str] = (),
-    declared_casts_by_type: Mapping[str, Mapping[str, CastKind]] | None = None,
+    declared_types_by_type: Mapping[str, Mapping[str, DuckDBLogicalType]] | None = None,
 ) -> tuple[TypeContract, ...]:
     """Compile all observations into one language-neutral contract per type.
 
     `casts` (explicit `--cast FIELD=TYPE`) stays a single global table, same
     as always - a caller asking for a cast by field path alone accepts that
-    it applies wherever that path appears. `declared_casts_by_type` is the
+    it applies wherever that path appears. `declared_types_by_type` is the
     opposite shape on purpose: each type's `.schema.sql` only ever describes
     that type, so a declared kind is looked up scoped to `(concept_type,
     field)` and never bleeds into another type's same-named field. Where
@@ -257,7 +282,7 @@ def compile_contracts(
     options = _CompileOptions(
         infer_types=infer_types,
         casts=parse_casts(casts),
-        declared_by_type=declared_casts_by_type or {},
+        declared_by_type=declared_types_by_type or {},
     )
     names = unique_model_names(tuple(documents_by_type), "Concept")
     contracts = tuple(
@@ -285,24 +310,48 @@ def _title_for(name: str) -> str:
     return name[:1].upper() + name[1:]
 
 
-def _scalar_schema(kind: CastKind) -> dict[str, object]:
-    if kind == "boolean":
-        return {"type": "boolean"}
-    if kind == "integer":
-        return {"type": "integer"}
-    if kind == "number":
-        return {"type": "number"}
-    if kind == "date":
-        return {"type": "string", "format": "date"}
-    if kind == "datetime":
-        return {"type": "string", "format": "date-time"}
-    return {"type": "string"}
+def _declared_scalar_schema(declared: DuckDBLogicalType) -> dict[str, object]:
+    """Render one declared physical type without discarding DuckDB intent."""
+    schema: dict[str, object] = {"x-okf-duckdb-type": declared.sql}
+    if declared.family == "string":
+        schema["type"] = "string"
+    elif declared.family == "boolean":
+        schema["type"] = "boolean"
+    elif declared.family == "integer":
+        schema["type"] = "integer"
+    elif declared.family in {"float", "decimal"}:
+        schema["type"] = "number"
+        if declared.family == "decimal" and declared.scale:
+            schema["multipleOf"] = 10.0**-declared.scale
+    elif declared.family == "date":
+        schema.update({"type": "string", "format": "date"})
+    elif declared.family == "timestamp":
+        schema.update({"type": "string", "x-okf-temporal-kind": "timestamp-without-time-zone"})
+    elif declared.family == "timestamptz":
+        schema.update({"type": "string", "format": "date-time"})
+    elif declared.family == "uuid":
+        schema.update({"type": "string", "format": "uuid"})
+    return schema
+
+
+def _scalar_schema(node: ScalarNode) -> dict[str, object]:
+    if node.declared_type is not None:
+        return _declared_scalar_schema(node.declared_type)
+    schemas: dict[CastKind, dict[str, object]] = {
+        "boolean": {"type": "boolean"},
+        "integer": {"type": "integer"},
+        "number": {"type": "number"},
+        "date": {"type": "string", "format": "date"},
+        "datetime": {"type": "string", "format": "date-time"},
+        "string": {"type": "string"},
+    }
+    return schemas[node.kind]
 
 
 def node_json_schema(node: ContractNode) -> dict[str, object]:
     """Render one canonical JSON Schema fragment from the shared contract."""
     if isinstance(node, ScalarNode):
-        return _scalar_schema(node.kind)
+        return _scalar_schema(node)
     if isinstance(node, LiteralNode):
         return {"type": "string", "const": node.value}
     if isinstance(node, AnyNode):
@@ -311,7 +360,10 @@ def node_json_schema(node: ContractNode) -> dict[str, object]:
         item = node_json_schema(node.item)
         if node.item_nullable:
             item = {"anyOf": [item, {"type": "null"}]}
-        return {"type": "array", "items": item}
+        schema: dict[str, object] = {"type": "array", "items": item}
+        if node.declared_type is not None:
+            schema["x-okf-duckdb-type"] = node.declared_type.sql
+        return schema
 
     properties: dict[str, object] = {}
     required: list[str] = []
@@ -335,24 +387,44 @@ def contract_json_schema(contract: TypeContract) -> dict[str, object]:
     return {**node_json_schema(contract.root), "title": contract.model_name}
 
 
-def _scalar_zod(kind: CastKind) -> str:
-    if kind == "boolean":
-        return "z.boolean()"
-    if kind == "integer":
-        return "z.number().int()"
-    if kind == "number":
-        return "z.number()"
-    if kind == "date":
-        return "z.iso.date()"
-    if kind == "datetime":
-        return "z.iso.datetime({ offset: true, local: true })"
-    return "z.string()"
+def _declared_scalar_zod(declared: DuckDBLogicalType) -> str:
+    if declared.family == "integer":
+        return (
+            "z.number().int()"
+            if declared.is_js_safe_integer
+            else "z.union([z.number().int(), z.bigint()])"
+        )
+    renderers: dict[str, str] = {
+        "string": "z.string()",
+        "boolean": "z.boolean()",
+        "float": "z.number()",
+        "decimal": "z.string()",
+        "date": "z.iso.date()",
+        "timestamp": "z.string()",
+        "timestamptz": "z.iso.datetime({ offset: true })",
+        "uuid": "z.uuid()",
+    }
+    return renderers.get(declared.family, "z.unknown()")
+
+
+def _scalar_zod(node: ScalarNode) -> str:
+    if node.declared_type is not None:
+        return _declared_scalar_zod(node.declared_type)
+    renderers: dict[CastKind, str] = {
+        "boolean": "z.boolean()",
+        "integer": "z.number().int()",
+        "number": "z.number()",
+        "date": "z.iso.date()",
+        "datetime": "z.iso.datetime({ offset: true, local: true })",
+        "string": "z.string()",
+    }
+    return renderers[node.kind]
 
 
 def node_zod(node: ContractNode, indent: str = "") -> str:
     """Render one canonical Zod expression from the shared contract."""
     if isinstance(node, ScalarNode):
-        return _scalar_zod(node.kind)
+        return _scalar_zod(node)
     if isinstance(node, LiteralNode):
         return f"z.literal({json.dumps(node.value, ensure_ascii=False)})"
     if isinstance(node, AnyNode):

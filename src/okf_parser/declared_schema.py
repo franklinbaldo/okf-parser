@@ -25,32 +25,12 @@ from typing import TYPE_CHECKING
 
 import duckdb
 
+from okf_parser.duckdb_types import logical_type_from_catalog
 from okf_parser.type_specs import spec_relative_path
 
 if TYPE_CHECKING:
+    from okf_parser.duckdb_types import DuckDBLogicalType
     from okf_parser.schema_lexemes import CastKind
-
-_DUCKDB_TYPE_KINDS: dict[str, CastKind] = {
-    "BOOLEAN": "boolean",
-    "TINYINT": "integer",
-    "SMALLINT": "integer",
-    "INTEGER": "integer",
-    "BIGINT": "integer",
-    "HUGEINT": "integer",
-    "UTINYINT": "integer",
-    "USMALLINT": "integer",
-    "UINTEGER": "integer",
-    "UBIGINT": "integer",
-    "UHUGEINT": "integer",
-    "FLOAT": "number",
-    "DOUBLE": "number",
-    "REAL": "number",
-    "DATE": "date",
-    "TIMESTAMP": "datetime",
-    "TIMESTAMP WITH TIME ZONE": "datetime",
-    "TIMESTAMPTZ": "datetime",
-    "VARCHAR": "string",
-}
 
 
 class DeclaredSchemaError(ValueError):
@@ -62,7 +42,7 @@ class DeclaredSchema:
     """One type's declared columns, decoded from its `.schema.sql` catalog entry."""
 
     table_name: str
-    columns: dict[str, str]
+    columns: dict[str, DuckDBLogicalType]
     table_comment: str | None
     column_comments: dict[str, str]
 
@@ -79,13 +59,6 @@ def declared_schema_relative_path(spec_template: str, concept_type: str) -> str 
         return None
     stem = relative.rsplit(".", 1)[0] if "." in relative.rsplit("/", 1)[-1] else relative
     return f"{stem}.schema.sql"
-
-
-def _duckdb_type_kind(duckdb_type: str) -> CastKind | None:
-    normalized = duckdb_type.strip().upper()
-    if normalized.startswith("DECIMAL"):
-        return "number"
-    return _DUCKDB_TYPE_KINDS.get(normalized)
 
 
 def _duckdb_identifier_key(identifier: str) -> str:
@@ -132,7 +105,8 @@ def parse_declared_schema(sql_text: str, concept_type: str) -> DeclaredSchema:
         database_oid, schema_oid, table_oid, table_name, table_comment = tables[0]
 
         columns = con.execute(
-            "SELECT column_name, data_type, comment FROM duckdb_columns() "
+            "SELECT column_name, data_type, comment, numeric_precision, numeric_scale "
+            "FROM duckdb_columns() "
             "WHERE database_oid = ? AND schema_oid = ? AND table_oid = ? "
             "ORDER BY column_index",
             [database_oid, schema_oid, table_oid],
@@ -142,25 +116,15 @@ def parse_declared_schema(sql_text: str, concept_type: str) -> DeclaredSchema:
 
     return DeclaredSchema(
         table_name=table_name,
-        columns={row[0]: row[1] for row in columns},
+        columns={
+            row[0]: logical_type_from_catalog(
+                row[1], numeric_precision=row[3], numeric_scale=row[4]
+            )
+            for row in columns
+        },
         table_comment=table_comment,
         column_comments={row[0]: row[2] for row in columns if row[2] is not None},
     )
-
-
-def declared_cast_kinds(schema: DeclaredSchema) -> dict[str, CastKind]:
-    """Map each declared column to the shared `CastKind` vocabulary.
-
-    A DuckDB type outside the mapped set (a struct, a list, an unsupported
-    numeric width) is silently omitted rather than rejected: the column then
-    simply has no declared cast, same as if it were absent from the file.
-    """
-    kinds: dict[str, CastKind] = {}
-    for name, duckdb_type in schema.columns.items():
-        kind = _duckdb_type_kind(duckdb_type)
-        if kind is not None:
-            kinds[name] = kind
-    return kinds
 
 
 _DUCKDB_TYPE_FOR_KIND: dict[CastKind, str] = {
@@ -181,8 +145,10 @@ _DUCKDB_TYPE_FOR_KIND: dict[CastKind, str] = {
 # `roundtrip` marks a candidate where DuckDB's own TRY_CAST is lossy rather
 # than rejecting: `TRY_CAST('10.50' AS BIGINT)` rounds to 11 instead of
 # failing, and `TRY_CAST('2026-01-15T09:30:00Z' AS DATE)` silently drops the
-# time - both would otherwise win a column decision 5's "never lossy" rule
-# says they shouldn't. For those, a value only counts as cast-clean when
+# time. That normalization is valid for an explicitly declared physical type,
+# because decision 5 preserves the raw value beside it, but starter inference
+# should not invent such a narrowing. For those candidates a value only counts
+# as infer-clean when
 # formatting the cast result back to text reproduces the original string
 # exactly; DOUBLE and TIMESTAMPTZ don't lose information relative to the
 # narrower candidates already tried before them, so a plain non-null check
@@ -203,10 +169,11 @@ def _quote(identifier: str) -> str:
 def infer_kinds_via_duckdb(columns: dict[str, list[str | None]]) -> dict[str, CastKind]:
     """Infer every column's tightest kind in one vectorized DuckDB pass, via `TRY_CAST`.
 
-    Mirrors decision 5's runtime divergence rule exactly, at inference time:
-    a candidate type wins a column only when *every* non-null value in it
-    TRY_CASTs cleanly - the same all-or-nothing test this RFC already
-    applies when *checking* a declared column, now reused to *propose* one.
+    Starter inference is intentionally more conservative than declared-type
+    materialization: a candidate type wins only when every non-null observed
+    value fits it. Decision 5 no longer uses this as a runtime gate — declared
+    columns use per-value `TRY_CAST` — but an inferred starter schema should not
+    propose a narrow type from a mixed column without an author choosing it.
     One `CREATE TABLE` and one bulk insert hold every column at once, and
     one `SELECT` computes every column's every candidate in a single
     DuckDB round trip - column-at-a-time aggregates, not a Python loop
