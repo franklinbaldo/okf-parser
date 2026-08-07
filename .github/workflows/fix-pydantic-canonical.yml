@@ -101,6 +101,7 @@ jobs:
           PY
 
           uv run ruff format src/okf_parser/pydantic_projection.py src/okf_parser/cli.py tests/test_pydantic_source.py tests/test_cli.py tests/fixtures/pydantic_adversarial_generated.py
+          uv run ruff check src/okf_parser/pydantic_projection.py --fix --unsafe-fixes
           uv run ruff check .
           uv run ty check src tests
           uv run pytest tests/test_pydantic_source.py tests/test_cli.py
