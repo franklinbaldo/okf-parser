@@ -72,8 +72,7 @@ def test_declared_temporal_and_list_types_render_in_source(tmp_path: Path) -> No
     spec = tmp_path / "docs" / "types" / "evento.schema.sql"
     spec.parent.mkdir(parents=True)
     spec.write_text(
-        'CREATE TABLE "Evento" ('
-        "local_em TIMESTAMP, instante TIMESTAMPTZ, codigos BIGINT[]);",
+        'CREATE TABLE "Evento" (local_em TIMESTAMP, instante TIMESTAMPTZ, codigos BIGINT[]);',
         encoding="utf-8",
     )
 
