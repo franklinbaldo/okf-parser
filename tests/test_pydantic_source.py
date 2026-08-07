@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from decimal import Decimal
-from typing import TYPE_CHECKING, Any, cast
+from pathlib import Path
+from typing import Any, cast
 from uuid import UUID
 
 import pytest
@@ -12,9 +13,6 @@ from pydantic import BaseModel, ValidationError
 from okf_parser.schema_contract import SchemaNameCollisionError
 from okf_parser.schema_export import build_pydantic_models, export_pydantic_source
 from okf_parser.service import schema_bundle
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _write_concept(path: Path, frontmatter: str) -> None:
@@ -43,11 +41,11 @@ def test_pydantic_source_happy_path_is_deterministic_and_importable(tmp_path: Pa
     first = export_pydantic_source(str(tmp_path), spec_template="docs/types/{slug}.md")
     second = export_pydantic_source(str(tmp_path), spec_template="docs/types/{slug}.md")
     via_service = schema_bundle(str(tmp_path), "pydantic", spec_template="docs/types/{slug}.md")
+    expected = (Path(__file__).parent / "fixtures" / "pydantic_generated.py").read_text(
+        encoding="utf-8"
+    )
 
-    assert first == second == via_service
-    assert "class RegistroConcept(BaseModel):" in first
-    assert "valor: Decimal" in first
-    assert "id_externo: UUID" in first
+    assert first == second == via_service == expected
 
     model = _source_model(first, "RegistroConcept")
     value = model.model_validate(
