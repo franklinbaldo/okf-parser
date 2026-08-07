@@ -67,8 +67,7 @@ def _path_label(path: StructuralPath) -> str:
 def _normalized_identifier(authored: str) -> str:
     normalized = unicodedata.normalize("NFKC", authored)
     candidate = "".join(
-        character if character == "_" or character.isalnum() else "_"
-        for character in normalized
+        character if character == "_" or character.isalnum() else "_" for character in normalized
     ).strip("_")
     if not candidate:
         candidate = "field"

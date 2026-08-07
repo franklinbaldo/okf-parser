@@ -138,8 +138,7 @@ def test_field_alias_collision_fails_in_both_pydantic_projections(tmp_path: Path
 def test_nested_model_name_collision_reports_both_structural_paths(tmp_path: Path) -> None:
     _write_concept(
         tmp_path / "x.md",
-        "type: X\na:\n  structure_b:\n    value: one\n"
-        "a_structure:\n  b:\n    other: two\n",
+        "type: X\na:\n  structure_b:\n    value: one\na_structure:\n  b:\n    other: two\n",
     )
 
     for operation in (build_pydantic_models, export_pydantic_source):
