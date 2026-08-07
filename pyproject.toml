@@ -37,7 +37,7 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling.build"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.sdist]
@@ -98,7 +98,10 @@ runtime-evaluated-base-classes = ["pydantic.BaseModel"]
 convention = "google"
 
 [[tool.ty.overrides]]
-include = ["tests/fixtures/pydantic_generated.py"]
+include = [
+  "tests/fixtures/pydantic_generated.py",
+  "tests/fixtures/pydantic_adversarial_generated.py",
+]
 
 [tool.ty.overrides.rules]
 # Pydantic intentionally uses a non-None annotation with a None Field default
