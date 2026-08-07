@@ -68,8 +68,8 @@ one shared schema pipeline.
 - preserve RFC 0006 target-specific mappings such as `Decimal`, `UUID`, lists,
   `TIMESTAMP` and `TIMESTAMPTZ` without reducing them back to a coarse cast
   family;
-- preserve authored YAML field names even when they are not valid Python
-  identifiers;
+- preserve authored YAML field names even when they are not safe Pydantic/Python
+  attribute names;
 - keep producer extensions accepted by default;
 - make output byte-for-byte deterministic for identical input and options;
 - make the target available through the existing CLI/service/MCP `schema`
@@ -207,21 +207,33 @@ Nested object models may use the same policy initially. A later RFC may add a
 stricter target option if a consumer explicitly wants closed application
 models.
 
+The implementation should align `build_pydantic_models()` with the same
+configuration so runtime-generated and source-generated models do not disagree
+about producer extensions.
+
 ### Requiredness and nullability
 
 The renderer preserves the existing independent contract dimensions:
 
 - required, non-nullable: `field: T`;
 - required, nullable: `field: T | None`;
-- optional, non-nullable: `field: T | None = None` in the first implementation;
+- optional, non-nullable: `field: T = Field(default=None)`;
 - optional, nullable: `field: T | None = None`.
 
-The current runtime adapter also uses `None` as the default for absent fields.
-The source renderer must stay semantically aligned with it.
+The apparently unusual third form is deliberate. Pydantic v2 accepts omission
+because the field has a default, while an explicitly supplied `None` is still
+rejected because the annotation remains `T`. Widening that annotation to
+`T | None` would collapse the contract's distinction between absence and an
+authored null.
 
-A future contract representation may distinguish "missing" from an authored
-`null` default more precisely. That change belongs in the shared contract, not
-only in the Pydantic renderer.
+The current dynamic adapter already represents optional non-nullable fields as
+annotation `T` with default `None`. The source renderer must stay semantically
+aligned with that behavior rather than making its Python spelling superficially
+more conventional but less precise.
+
+A future contract representation may model the default value itself as a
+separate dimension. That change belongs in the shared contract, not only in the
+Pydantic renderer.
 
 ### Concept type discriminator
 
@@ -236,17 +248,26 @@ normalized Python class name.
 
 ## Field names and aliases
 
-YAML keys are not constrained to Python identifiers. A source generator must
-therefore separate the authored key from the Python attribute name.
+YAML keys are not constrained to safe Pydantic/Python attribute names. A source
+generator must therefore separate the authored key from the Python attribute
+name.
 
-For a key that is already a non-keyword Python identifier, use it directly.
+A field can use its authored spelling directly only when all of the following
+hold:
 
-For any other key, generate a deterministic safe identifier and preserve the
-authored key with `Field(alias=...)`:
+- it is a valid Python identifier;
+- it is not a Python keyword;
+- it does not collide with configuration or protected names used by
+  `BaseModel`, such as `model_config` or `model_dump`;
+- it does not collide with another generated attribute in the same model.
+
+Otherwise the renderer generates a deterministic safe identifier and preserves
+the authored key with `Field(alias=...)`:
 
 ```yaml
 customer-id: abc
 class: retail
+model_dump: custom
 ```
 
 may become:
@@ -254,15 +275,20 @@ may become:
 ```python
 customer_id: str = Field(alias="customer-id")
 class_: str = Field(alias="class")
+model_dump_: str = Field(alias="model_dump")
 ```
+
+The same mapping helper must also be used by `build_pydantic_models()`. Dynamic
+Pydantic models can otherwise fail or warn for authored keys that happen to
+shadow `BaseModel` members even though those keys are legal OKF frontmatter.
 
 Rules for safe identifiers must be deterministic and collision checked within a
 model. Two distinct authored keys must never silently map to the same Python
 attribute.
 
-When aliases are present, generated models must allow validation by alias. The
-exact Pydantic configuration should be the smallest configuration required for
-that behavior and must be pinned by tests.
+When aliases are present, generated models must validate authored keys through
+the alias. The exact Pydantic configuration should be the smallest
+configuration required for that behavior and must be pinned by tests.
 
 ## Target type projection
 
@@ -329,8 +355,8 @@ information from the same `TypeContract`.
 
 ## Imports
 
-Imports are derived from the annotations actually emitted and sorted
-canonically.
+Imports are derived from the annotations and field definitions actually emitted
+and sorted canonically.
 
 Potential imports include:
 
@@ -369,14 +395,21 @@ subprocess merely to stabilize output.
 contract and should be tested for semantic equivalence across the supported
 subset.
 
+The implementation may refactor the dynamic adapter to share Pydantic-specific
+field-name mapping and configuration helpers with the source renderer. Those
+helpers are target projection policy; they do not belong in `TypeContract`
+unless another target later demonstrates the same requirement.
+
 Examples of equivalence include:
 
-- the same required field names;
-- the same accepted aliases;
+- the same authored field names/aliases;
+- the same requiredness and explicit-null behavior;
 - `Decimal` and `UUID` runtime annotations;
 - list element types and nullability;
 - literal `type` discrimination;
-- acceptance of unknown producer fields.
+- acceptance of unknown producer fields;
+- safe handling of authored keys that shadow Python keywords or `BaseModel`
+  members.
 
 The source generator must not call `model_json_schema()` on the dynamic models
 and then reverse-engineer Python from JSON Schema. Both paths should consume the
@@ -456,34 +489,41 @@ The first implementation reuses existing schema compilation failures:
 
 Source-specific failures should be added only for conditions the renderer
 cannot represent honestly, such as two authored keys colliding after safe
-Python-identifier generation.
+Pydantic/Python attribute generation.
 
 A separate family of `GEN00x` diagnostics is not introduced until there are
 multiple generation operations that need aggregate diagnostics.
 
 ## Implementation plan
 
-1. Add a deterministic field-identifier/alias helper with collision tests.
-2. Add a pure `render_pydantic_source(contracts)` renderer beside `render_zod`.
-3. Add `export_pydantic_source()` beside the existing schema exporters.
-4. Add `pydantic` to the schema format accepted by service, CLI and MCP.
-5. Pin semantic equivalence against `build_pydantic_models()` for representative
-   contracts.
-6. Add declared-type regressions for `DECIMAL`, `UUID`, timestamp families and
+1. Add a deterministic Pydantic field-name/alias helper with collisions,
+   keywords and `BaseModel` protected-name tests.
+2. Refactor `build_pydantic_models()` to use the same field mapping and
+   `extra="allow"` policy.
+3. Add a pure `render_pydantic_source(contracts)` renderer beside `render_zod`.
+4. Add `export_pydantic_source()` beside the existing schema exporters.
+5. Add `pydantic` to the schema format accepted by service, CLI and MCP.
+6. Pin semantic equivalence against `build_pydantic_models()` for representative
+   contracts, including optional-non-nullable fields.
+7. Add declared-type regressions for `DECIMAL`, `UUID`, timestamp families and
    arrays.
-7. Add identifier/keyword/Unicode alias regressions.
-8. Document stdout/file-redirection and CI drift-check examples.
+8. Add identifier/keyword/Unicode/`BaseModel` alias regressions.
+9. Document stdout/file-redirection and CI drift-check examples.
 
 ## Acceptance criteria
 
 - repeated generation is byte-for-byte deterministic;
 - generated source imports successfully on supported Python versions;
 - generated source passes Ruff format/check without post-processing;
-- top-level generated models accept unknown frontmatter fields;
-- authored field names survive through aliases where Python identifiers differ;
+- top-level generated models accept and preserve unknown frontmatter fields;
+- authored field names survive through aliases where Python/Pydantic attribute
+  names differ;
 - alias normalization collisions fail loudly;
+- optional non-nullable fields accept omission but reject explicit `null`;
 - JSON Schema, Zod, dynamic Pydantic and Pydantic source all compile from the
   same `TypeContract` objects;
+- dynamic and source Pydantic projections agree on field aliases, nullability,
+  producer extensions and protected-name handling;
 - declared `DECIMAL`, UUID, timestamp and array families use the expected
   target-specific Python annotations;
 - unsupported declared families become `Any` without discarding their identity
@@ -508,5 +548,6 @@ stdout.
 
 Proposed.
 
-The implementation should begin with the source renderer over the existing
-`TypeContract`. No new intermediate representation is required.
+The implementation should begin with the Pydantic-specific field mapping and
+source renderer over the existing `TypeContract`. No new intermediate
+representation is required.
