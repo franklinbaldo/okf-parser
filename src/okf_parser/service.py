@@ -13,11 +13,25 @@ from okf_parser.bundle import load_bundle, validate_path
 from okf_parser.duckdb import attach_okf
 from okf_parser.formatting import FormatReport, format_path
 from okf_parser.schema_export import export_json_schema, export_zod_schema
+from okf_parser.spec_scaffold import scaffold_missing_specs
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from okf_parser.schema_contract import ZodImport
+
+
+def init_bundle(
+    path: str,
+    spec_template: str,
+    exclude: Sequence[str] = (),
+    *,
+    write: bool = False,
+) -> dict[str, object]:
+    """Scaffold a minimal specification document for every type in use that lacks one."""
+    root = Path(path).resolve()
+    bundle = load_bundle(root, exclude)
+    return scaffold_missing_specs(bundle.root, bundle.concept_types, spec_template, write=write)
 
 
 def check_bundle(

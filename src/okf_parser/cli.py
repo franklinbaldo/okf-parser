@@ -18,6 +18,7 @@ from okf_parser.service import (
     check_format,
     export_duckdb,
     graph_bundle,
+    init_bundle,
     inventory_bundle,
     schema_bundle,
     write_format,
@@ -78,6 +79,19 @@ def check(
     """Validate every Markdown file recursively as OKF v0.2."""
     payload = check_bundle(path, exclude or (), require_spec, normative_spec=normative_spec)
     return CliResult(payload, 0 if payload["conformant"] else 1)
+
+
+@app.command
+def init(
+    path: str,
+    *,
+    spec_template: str,
+    exclude: RepeatableStrings = None,
+    write: bool = False,
+) -> CliResult[JsonPayload]:
+    """Scaffold a minimal specification document for every type missing one."""
+    payload = init_bundle(path, spec_template, exclude or (), write=write)
+    return CliResult(payload, 1 if payload["collisions"] else 0)
 
 
 @app.command

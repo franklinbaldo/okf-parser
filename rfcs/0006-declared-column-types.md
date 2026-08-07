@@ -919,6 +919,64 @@ For everything else, the rest of the mapping follows the JSON Schema
 vocabulary `schema_export.py` already emits — the exporter's
 existing vocabulary, not a new one.
 
+### 11. `init` scaffolds the missing specification documents, never a declaration
+
+`--require-spec`/`--spec-template` (decision 1) only ever *reports* a
+missing `docs/types/{slug}.md`; nothing in RFC 0005 or this RFC creates
+one. A bundle adopting either rule for the first time can have dozens of
+types in use and zero specification documents, and hand-creating each one
+at its exact derived path is exactly the kind of bookkeeping this RFC
+already refuses to make an author do by hand elsewhere (decision 1's whole
+premise is that the path is *computable*, not authored).
+
+`init <path> --spec-template TEMPLATE` computes `bundle.concept_types`,
+derives each type's path the same way `check --require-spec` already does
+(`type_specs.spec_relative_path`), and for every type whose document does
+not yet exist, writes a minimal stub:
+
+```markdown
+---
+type: Spec
+---
+
+# Rotina
+
+TODO: describe this type's frontmatter fields and semantics.
+```
+
+Three properties keep `init` inside this RFC's existing guarantees rather
+than becoming a second source of truth:
+
+- **Never overwrites.** A document that already exists at the derived path
+  is left untouched, unconditionally — `init` only fills gaps, the same
+  posture `check --require-spec` already takes toward existing documents.
+- **Dry-run by default, `--write` to create.** Without `--write`, `init`
+  reports which paths it would create (the same shape `check
+  --require-spec`'s diagnostics already use) and creates nothing — the
+  same write-gate `apply` already uses for the same reason.
+- **Scaffolds the narrative document only, never a `.schema.sql`.** A
+  spec's prose has no wrong answer to infer; a `.schema.sql`'s column types
+  do, and guessing at one from observed data would hand back exactly the
+  kind of tool-invented contract decision 5a's closed type set exists to
+  avoid. Generating a *starter* declaration from `schema --infer-types`'s
+  own inference is a plausible follow-up, deliberately not built here.
+
+### 12. `init` --require-spec derived-path collisions raise before writing anything
+
+Decision 1 already diagnoses two types slugging to the same document as an
+advisory violation `check` reports but neither the type keeps its
+declaration. `init` cannot leave that decision to `check`: two types would
+race to scaffold the *same* file, and whichever ran last would silently
+overwrite the first type's stub content with its own — invisible under the
+"never overwrites an existing file" guarantee above, since by the time the
+second type is scaffolded the file already exists *because of the first
+type*, not because an author wrote it. `init` therefore computes every
+collision up front (the same `type_slug()` check decision 1 already runs)
+and refuses to write anything — not even the non-colliding types — until
+the invocation names disjoint paths, exactly the fail-closed posture
+`apply --write` already takes toward a script that touched more than one
+type.
+
 ## Deferred to RFC 0007: writeback
 
 Two distinct writeback problems are deferred, and an earlier draft of this
