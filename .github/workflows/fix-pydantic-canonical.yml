@@ -63,7 +63,7 @@ jobs:
 
           uv sync --frozen --all-groups
 
-          python - <<'PY'
+          uv run python - <<'PY'
           from pathlib import Path
           from tempfile import TemporaryDirectory
 
