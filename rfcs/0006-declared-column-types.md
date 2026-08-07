@@ -55,12 +55,16 @@ declared type to be useful today.
 
 **A declared column is never the only copy of a document's data.**
 Underneath every declared column sits a hidden, unconditionally lossless
-`VARCHAR` column holding the field exactly as authored; the declared
-column is a DuckDB *generated* column computed from it. Casting a document
-into a physical type can round, truncate, or fail outright — that is
-inherent to what a physical type is — but it never has to be the thing
-that decides whether the original text survives. Decision 5 is where this
-is built and why two earlier drafts of the cast rule needed it.
+raw column — `VARCHAR` for a scalar field, `VARCHAR[]` for a declared
+`T[]` field — holding the field exactly as authored; the declared column
+is a DuckDB *generated* column computed from it. Casting a document into a
+physical type can round, truncate, or fail outright — that is inherent to
+what a physical type is — but it never has to be the thing that decides
+whether the original text survives. The raw column is compiler-owned:
+under the `__okf_` prefix `apply` already reserves, protected the same way
+`apply` already protects its other internal columns, never a target an
+`--sql` script can rename or overwrite. Decision 5 is where this is built
+and why two earlier drafts of the cast rule needed it.
 
 ## Motivation
 
@@ -134,12 +138,35 @@ diagnostics, which is what makes this opt-in at the invocation level too.
 
 ### 2. The contract is DuckDB's own DDL, parsed by DuckDB
 
-The file's grammar is exactly one **declarative** `CREATE TABLE` — the
-`CREATE TABLE name (column type, ...)` form and nothing else — followed by
-zero or more `COMMENT ON TABLE`/`COMMENT ON COLUMN` statements. No
-`INSERT`, no `ATTACH`, no second table, no pragma, and specifically **no
-`CREATE TABLE ... AS SELECT`**, no `CREATE OR REPLACE`, no `CREATE TABLE
-... AS` of any shape, no generated columns.
+The file's grammar is exactly one **declarative** `CREATE TABLE` — a plain
+or `OR REPLACE` `CREATE TABLE name (column type, ...)`, with authored
+generated columns permitted inside it — followed by zero or more `COMMENT
+ON TABLE`/`COMMENT ON COLUMN` statements. No `INSERT`, no `ATTACH`, no
+second table, no pragma, and specifically **no `CREATE TABLE ... AS
+SELECT`**, no `CREATE TABLE ... AS` of any other shape. This corrects an
+earlier draft, which additionally listed `CREATE OR REPLACE` and generated
+columns as rejected forms — decision 4 already established that neither
+is dangerous (the connection is fresh and disposable, and a generated
+column's expression is never evaluated against zero rows), so forbidding
+them contradicted the decision that actually governs what's safe. Naming
+them accepted here removes that contradiction rather than leaving the
+prohibition unenforced.
+
+**An author's own generated column and the compiler's synthesized ones
+(decision 5) are unrelated.** A declaration is free to write its own
+`GENERATED ALWAYS AS` expression on a column — DuckDB accepts it as part
+of the same declarative `CREATE TABLE` form, and it is preserved through
+the catalog read like any other column property that isn't a name or a
+type. But that expression **does not cross into materialization**: the
+compiler reads only the column's *name* and its *type* (`duckdb_columns()`
+reports a generated column's type like any other) from the declaration's
+catalog, and decision 5 builds its own raw-plus-generated pair from that
+name and type — an authored generation expression is simply not one of
+the three things v1 reads from a declaration (decision 5's "names, types,
+comments"). This is not a gap; it is the same rule applied consistently:
+an authored constraint is preserved-but-unread today (decision 5), and an
+authored generated-column expression is preserved-but-unread by the same
+logic.
 
 CTAS deserves being named rather than left to "no `SELECT`", because it is
 the one form that looks exactly like what this decision wants and is not:
@@ -186,9 +213,21 @@ Consequences worth stating, because they are the reason for this choice:
 - **No new dependency.** DuckDB is already a hard dependency; nothing else
   is needed to read a declaration. (The JSON Schema alternative required
   adopting a Draft 2020-12 meta-schema validator.)
-- **The declaration is the DDL that gets run.** There is no translation
-  step between what the author wrote and what the table becomes, so the
-  two cannot drift.
+- **DuckDB's own normalized catalog is the one intermediate representation,
+  not the declaration's source text.** An earlier draft claimed "the
+  declaration is the DDL that gets run, so there is no translation step" —
+  that stopped being true once decision 5 introduced the raw/generated
+  split: what materializes on `apply`'s ephemeral table and `duckdb`'s
+  persistent one is never the declaration file's `CREATE TABLE` re-run
+  verbatim, it is a *different* `CREATE TABLE` the compiler synthesizes —
+  one raw `VARCHAR`/`VARCHAR[]` column and one generated column, per
+  declared field, built from the name and type this decision's parse
+  reads out of the declaration's own catalog. The declaration is
+  authoritative for *name* and *type*; the physical table shape is the
+  compiler's, always. This is a translation with exactly one
+  well-specified input (a `(name, type)` pair per column) and one
+  well-specified output (decision 5's pair) — narrow enough that "cannot
+  drift" still holds, just not by being literally the same DDL.
 
 A file that fails this shape validation — a second statement type, a
 missing `CREATE TABLE`, a syntax error DuckDB rejects — is a **malformed
@@ -306,19 +345,67 @@ when one column is asked to be both the lossless record and the physical
 value.
 
 So this RFC now keeps two, and only the compiler-facing surface changes:
-a hidden `VARCHAR` column carrying the document's text exactly as
-authored, and the declared column as a **generated column** computed from
-it:
+a hidden raw column carrying the document's text exactly as authored, and
+the declared column as a **generated column** computed from it. The raw
+column's own type follows the shape of what it carries, not a single
+fixed type:
 
 ```sql
+-- scalar field
+"__okf_raw_custo" VARCHAR,
 "custo" DECIMAL(18,4) GENERATED ALWAYS AS (TRY_CAST(__okf_raw_custo AS DECIMAL(18,4)))
+
+-- array field
+"__okf_raw_tags" VARCHAR[],
+"tags" BIGINT[] GENERATED ALWAYS AS (TRY_CAST(__okf_raw_tags AS BIGINT[]))
 ```
 
-`__okf_raw_custo` is not something a declaration writes — it is
+**`VARCHAR` for scalar fields, `VARCHAR[]` for a declared `T[]` field —
+never a single "raw is always `VARCHAR`" rule**, which an earlier draft
+stated and then contradicted by using `list_filter`/`list_count` (below),
+both of which require an actual list argument, not text. The raw column
+does not need to preserve YAML style, quoting, or indentation — that is
+already `__okf_frontmatter`'s job (RFC 0005) — only the observed value at
+the granularity DuckDB's own list type gives it: element order and
+per-element text, with `NULL` elements representable, verified against an
+empty array (`[]`) and a `NULL`-holding array both round-tripping cleanly
+through this shape.
+
+`__okf_raw_<field>` is not something a declaration writes — it is
 synthesized by the compiler for every declared column, named under the
 `__okf_` prefix `apply` already reserves and rejects from authored fields
 (`apply.py:_check_reserved_field_names`), so a declaration or a document
 using that name collides with an existing rule rather than a new one.
+
+**That existing rule protects the *name* from authoring; it does not, by
+itself, protect the *column* from a deliberate operator script — and this
+RFC closes that gap explicitly rather than leaving it as an implication.**
+Verified: `apply.py:_check_reserved_field_names` stops a document or a
+declaration from *naming* a field `__okf_raw_custo`, but a compiled
+`__okf_raw_custo` is an ordinary writable `VARCHAR` column once it
+exists — `UPDATE "Rotina" SET __okf_raw_custo = '5'` succeeds today,
+verified, exactly the write path the generated column above was built to
+close for `custo` itself. This is not a meaningful risk under this RFC's
+threat model — reaching it needs an operator deliberately writing
+`--sql` naming an internal column, the same posture `apply --sql` already
+trusts for everything else it executes — but it would contradict "a
+declared field is read-only" and would confuse whatever RFC 0007 builds
+on top of raw as the writeback target. So, extending the same reserved-
+prefix protection `apply` already applies, rather than inventing a second
+mechanism: every `__okf_raw_<field>` the compiler creates is added to
+`apply`'s existing protected-column set (`_PROTECTED_COLUMNS`,
+`apply.py:_check_result_schema`) for the duration of that run — its name,
+type, and value may not be the target of `ADD`/`DROP`/`RENAME COLUMN` or
+of the trailing `UPDATE`'s assignment list, the same class of rejection a
+script touching `__okf_path` already gets today. It is never listed in
+`field_names`, never appears in the public schema diff `apply` reports,
+and is never a key `apply`'s writeback compiles into frontmatter — the
+raw column is compiler-internal *state*, not a frontmatter *field*, the
+same distinction RFC 0005 already draws for `__okf_body`/
+`__okf_frontmatter`. It is created and dropped only in the pair its
+generated column requires: when a declaration legitimately removes a
+field, `apply`'s compiled `DROP COLUMN` drops both `__okf_raw_<field>`
+and `<field>` together, as one internal operation — never independently.
 
 This buys three things at once, verified rather than assumed:
 
@@ -371,15 +458,34 @@ never on a cast result:
 | --- | --- |
 | integer (`BIGINT`) | `regexp_matches(v, '^[+-]?[0-9]+(\.0+)?$')` |
 | fixed-point (`DECIMAL(p,s)`) | `regexp_matches(v, '^[+-]?[0-9]+(\.[0-9]{0,s}0*)?$')` (`s` from the declared scale) |
-| `TIMESTAMP` (naive) | ISO 8601, no offset, ≤ 6 fractional-second digits |
-| `TIMESTAMPTZ` | ISO 8601, offset present, ≤ 6 fractional-second digits |
-| `DATE` | a bare date, or a `TIMESTAMP`/`TIMESTAMPTZ` whose time-of-day is exactly midnight |
+| `TIMESTAMP` (naive) | `regexp_matches(v, '^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,6})?)?$')` |
+| `TIMESTAMPTZ` | `regexp_matches(v, '^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,6})?)?(Z\|[+-][0-9]{2}(:?[0-9]{2})?)$')` |
+| `DATE` | a bare `YYYY-MM-DD`, or `TIMESTAMP`'s pattern above at `00:00[:00[.0+]]` with **no** offset, or `TIMESTAMPTZ`'s pattern above at `00:00[:00[.0+]]` with offset restricted to `Z`/`+00`/`+00:00` — see below for why a non-`+00` offset is excluded even at midnight |
 | `T[]` | `T`'s predicate applied to every element (below) |
 | `VARCHAR`, `BOOLEAN`, `UUID`, `DOUBLE` | `TRY_CAST` succeeding is itself exact — no lossy path from text exists for these |
 
 Each predicate is combined with `TRY_CAST(v AS T) IS NOT NULL` — a value
 can satisfy the text shape and still be out of range (`DECIMAL(3,0)` given
-`'999999'`), and `TRY_CAST` catches that independently.
+`'999999'`), and `TRY_CAST` catches that independently. This division of
+labour is deliberate and worth stating precisely: `TRY_CAST` alone decides
+*validity and range* (does this parse as a `T` at all, does it fit); the
+lexical predicate alone decides *whether the chosen physical
+representation would discard something the text expressed* — the two
+checks answer different questions and neither substitutes for the other.
+
+**`DATE` excludes a non-`+00` offset even at exact midnight, and this was
+found by testing the cast DuckDB actually performs, not by reasoning about
+what "midnight" should mean.** `TRY_CAST(v AS DATE)` does not convert
+through the offset first — it is a **textual truncation** of the
+date-literal component, verified: `TRY_CAST('2024-05-09T23:00:00-03' AS
+DATE)` returns `2024-05-09`, the literal date substring, even though that
+instant is `2024-05-10 02:00:00+00` — a different UTC calendar day.
+Casting the same text to `TIMESTAMPTZ` confirms it: `2024-05-10
+02:00:00+00`. A naive "midnight in its own offset is safe for `DATE`"
+rule would have accepted `'2024-05-09T23:00:00-03'` as an exact `DATE`
+and silently materialized the wrong day. Restricting the offset-bearing
+form to `Z`/`+00`/`+00:00` closes this — at UTC, DuckDB's textual
+truncation and the semantically correct date coincide, and only there.
 
 `DOUBLE` stays exact-by-`TRY_CAST`-alone deliberately: binary floating
 point cannot represent most decimal fractions exactly, so a lexical
@@ -588,6 +694,17 @@ DuckDB error from `extract_statements()`/execution, the same way any other
 malformed `--sql` script fails today — no new check to write, no
 before/after comparison, nothing that could itself have a gap.
 
+That protects the generated column; it says nothing about the raw column
+behind it, which is an ordinary writable column until decision 5's
+protected-column rule is applied — `UPDATE t SET __okf_raw_custo = '5'`
+is not blocked by anything DuckDB does automatically, verified. Decision
+5 covers exactly that gap by extending `apply`'s existing
+`_PROTECTED_COLUMNS` set to include every `__okf_raw_<field>` for the
+run's duration; a script naming one is rejected the same way one naming
+`__okf_path` already is. Read-only, for a declared field, means both
+columns are closed to `--sql`, not only the one DuckDB happens to guard
+by itself.
+
 **`RENAME COLUMN` on a typed column is rejected outright, not because the
 guard above doesn't reach it, but because it targets the wrong column.**
 `ALTER TABLE "Rotina" RENAME COLUMN custo TO valor` would rename the
@@ -651,20 +768,49 @@ codebase already decides correctly with an existence check plus an
 explicit flag.
 
 **A type's table is never dropped automatically when the type disappears
-from the bundle.** This is the one place this RFC is more conservative
-than an earlier draft, deliberately: distinguishing "a table `duckdb`
-created and should now retire" from "a table something else put there"
-requires exactly the ownership state (marker or manifest) just rejected
-above as unnecessary complexity for the *write* path — and for *deletion*
-the cost of getting it wrong is not symmetric with the cost of getting it
-wrong on write. A stale table left behind costs disk and one line in a
-listing; a table deleted by a wrong guess is gone. `duckdb` instead
-reports stale tables — a table present in `{schema}_types` whose name is
-not a currently-declared type — as part of its existing diagnostics
-output, and does not remove them. Removing one is a separate, explicit
-`duckdb --prune-stale-types` operation an operator invokes deliberately,
-naming exactly what it will drop before it drops it; it is out of this
-RFC's scope and listed under Open questions.
+from the bundle, and the diagnostic that reports it is named
+`unrecognized`, not `stale`.** This is the one place this RFC is more
+conservative than an earlier draft, deliberately: distinguishing "a table
+`duckdb` created and should now retire" from "a table something else put
+there" requires exactly the ownership state (marker or manifest) just
+rejected above as unnecessary complexity for the *write* path — and for
+*deletion* the cost of getting it wrong is not symmetric with the cost of
+getting it wrong on write. A table left behind costs disk and one line in
+a listing; a table deleted by a wrong guess is gone. **"Stale" was the
+wrong word for a table this design has no way to attribute** — without a
+manifest, `duckdb` cannot tell "a type this command materialized before,
+whose type has since been removed from the bundle" (genuinely stale) from
+"a table a different process or a different tool put in this schema"
+(never this command's to begin with); calling either one "stale" implies
+a provenance claim the no-manifest design deliberately doesn't make. The
+diagnostic name is corrected to match what is actually known: a table
+present in `{schema}_types` whose name is not a currently-declared type is
+reported as **unrecognized**, and `duckdb` does not remove it. Removing
+one is a separate, explicit operation an operator invokes deliberately,
+naming exactly what it will drop before it drops it; that command is not
+designed here — only that automatic deletion isn't it — and is listed
+under Open questions, not committed to a `--prune-stale-types` name this
+decision doesn't actually specify.
+
+**Raw columns are part of the persisted table, queryable, and not treated
+as a second thing to hide or export.** `{schema}_types` is not designed
+here as a stripped-down public view — it is the same table shape decision
+5 already builds for `apply`'s ephemeral database, persisted. Each
+declared field's hidden `__okf_raw_<field>` column sits beside its
+generated column in the physical table, appears in `SELECT *`, and is
+available for a consumer who wants to audit "what did the compiler
+actually see" against "what the typed projection computed" — the same
+comparison decision 5's design exists to make possible. The `__okf_`
+prefix is the signal that it is compiler-owned and outside the declared
+surface, exactly as it already signals for `__okf_path`/`__okf_body` on
+the four contract tables; nothing new is being asked of that prefix here.
+Two boundaries keep this from leaking further than intended: `schema
+--schema-format json|zod` (decision 9) never emits a raw column as a
+property — its export walks the *declared* schema, and raw columns are
+not declared, they are synthesized — and a declaration's `COMMENT ON
+COLUMN` always names the public column, never the raw one, so comments
+read exactly as authored regardless of this. In `apply`, raw columns
+carry the write protection decision 5 now specifies explicitly.
 
 Types with no declaration get no table there. `{schema}_types` is the
 declared surface; RFC 0005's inference is not persisted, and `concepts`
@@ -917,16 +1063,13 @@ doesn't target.
   RFC says tables, matching the four contract tables; views would avoid the
   copy but need the source relation to be queryable from the persisted
   database, which the current output does not guarantee.
-- `duckdb --prune-stale-types` (decision 7b): the explicit, separate
-  deletion command for tables whose type no longer exists in the bundle.
-  Not designed here — only that automatic deletion isn't it.
+- The explicit, separate deletion command for `{schema}_types` tables
+  whose type no longer exists in the bundle (decision 7b calls the state
+  `unrecognized` and specifies that automatic deletion isn't the answer;
+  the command itself, its name, and its confirmation shape are not
+  designed here).
 - In-artifact comment provenance (decision 6) if git history ever proves
   insufficient.
-- Whether raw columns (decision 5) should be queryable at all outside
-  `apply`'s internals — `duckdb`'s persistent output could expose
-  `__okf_raw_<column>` alongside the typed one for a consumer who wants
-  the authored text a cast rounded away, or could keep it fully internal
-  to compilation. This RFC does not decide it either way.
 - Constraints (decision 5, excluded from v1): whether a later RFC reads
   `duckdb_constraints()` for `NOT NULL`/`CHECK`/`UNIQUE`/`PRIMARY KEY`, and
   what evaluating each against documents means. `DEFAULT` likely never
