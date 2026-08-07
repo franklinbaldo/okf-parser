@@ -9,6 +9,7 @@ from typing import Annotated, Literal, cast
 
 from cyclopts import App, Parameter
 from fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from okf_parser.duckdb import BundleExportError
@@ -59,13 +60,6 @@ app = App(
     name="okf-parser",
     help="Validate and inspect OKF bundles with Ibis and NetworkX.",
     result_action=_render_cli_result,
-)
-mcp = FastMCP(
-    name="okf-parser",
-    instructions=(
-        "Deterministic tools for validating and inspecting Open Knowledge Format bundles. "
-        "Formatting checks are read-only; no tool exposed here rewrites files."
-    ),
 )
 
 
@@ -234,15 +228,17 @@ def serve(
     transport: McpTransport = "stdio",
     host: str = "127.0.0.1",
     port: int = 8000,
+    *,
+    allow_write: bool = False,
 ) -> None:
-    """Serve read-only inspection tools through MCP."""
+    """Serve effect-aware MCP tools, exposing explicit commit tools only on opt-in."""
+    server = build_mcp(allow_write=allow_write)
     if transport == "stdio":
-        mcp.run()
+        server.run()
         return
-    mcp.run(transport=transport, host=host, port=port)
+    server.run(transport=transport, host=host, port=port)
 
 
-@mcp.tool(name="check")
 def mcp_check(
     path: str,
     exclude: RepeatableStrings = None,
@@ -254,20 +250,17 @@ def mcp_check(
     return check_bundle(path, exclude or (), require_spec, normative_spec=normative_spec)
 
 
-@mcp.tool(name="inventory")
 def mcp_inventory(path: str, exclude: RepeatableStrings = None) -> dict[str, object]:
     """Count concepts by type."""
     return inventory_bundle(path, exclude or ())
 
 
-@mcp.tool(name="graph")
 def mcp_graph(path: str, exclude: RepeatableStrings = None) -> dict[str, object]:
     """Summarize resolved concept relationships."""
     return graph_bundle(path, exclude or ())
 
 
-@mcp.tool(name="schema")
-def mcp_schema(  # MCP exposes the same independent schema flags.
+def mcp_schema(
     path: str,
     *,
     schema_format: Annotated[SchemaFormat, Field(alias="format")] = "json",
@@ -289,10 +282,270 @@ def mcp_schema(  # MCP exposes the same independent schema flags.
     )
 
 
-@mcp.tool(name="format_check")
 def mcp_format_check(path: str, exclude: RepeatableStrings = None) -> dict[str, object]:
     """Check mdformat style without modifying files."""
     return check_format(path, exclude or ())
+
+
+def mcp_apply_preview(
+    path: str,
+    *,
+    sql: str | None = None,
+    type: str | None = None,
+    field: str | None = None,
+    from_: Annotated[str | None, Field(alias="from")] = None,
+    to: str | None = None,
+    exclude: RepeatableStrings = None,
+    spec_template: str | None = None,
+) -> dict[str, object]:
+    """Compute an apply candidate without committing bundle changes."""
+    return apply_bundle(
+        path,
+        sql=sql,
+        type_name=type,
+        field_name=field,
+        from_value=from_,
+        to_value=to,
+        write=False,
+        exclude=exclude or (),
+        spec_template=spec_template,
+    )
+
+
+def mcp_apply_write(
+    path: str,
+    *,
+    sql: str | None = None,
+    type: str | None = None,
+    field: str | None = None,
+    from_: Annotated[str | None, Field(alias="from")] = None,
+    to: str | None = None,
+    exclude: RepeatableStrings = None,
+    spec_template: str | None = None,
+) -> dict[str, object]:
+    """Commit an apply mutation using the same guarded service path as the CLI."""
+    return apply_bundle(
+        path,
+        sql=sql,
+        type_name=type,
+        field_name=field,
+        from_value=from_,
+        to_value=to,
+        write=True,
+        exclude=exclude or (),
+        spec_template=spec_template,
+    )
+
+
+def mcp_init_preview(
+    path: str,
+    spec_template: str,
+    exclude: RepeatableStrings = None,
+    *,
+    infer_schema: bool = False,
+) -> dict[str, object]:
+    """Plan missing specification files without creating them."""
+    return init_bundle(
+        path,
+        spec_template,
+        exclude or (),
+        write=False,
+        infer_schema=infer_schema,
+    )
+
+
+def mcp_init_write(
+    path: str,
+    spec_template: str,
+    exclude: RepeatableStrings = None,
+    *,
+    infer_schema: bool = False,
+) -> dict[str, object]:
+    """Create missing specification files using the existing scaffold service."""
+    return init_bundle(
+        path,
+        spec_template,
+        exclude or (),
+        write=True,
+        infer_schema=infer_schema,
+    )
+
+
+def mcp_import_preview(
+    source: str,
+    path: str,
+    type: str,
+    *,
+    id_column: str | None = None,
+    overwrite: bool = False,
+) -> dict[str, object]:
+    """Plan a tabular import without creating or replacing concept files."""
+    return import_bundle(
+        source,
+        path,
+        type,
+        id_column=id_column,
+        write=False,
+        overwrite=overwrite,
+    )
+
+
+def mcp_import_write(
+    source: str,
+    path: str,
+    type: str,
+    *,
+    id_column: str | None = None,
+    overwrite: bool = False,
+) -> dict[str, object]:
+    """Commit a tabular import using the existing import service."""
+    return import_bundle(
+        source,
+        path,
+        type,
+        id_column=id_column,
+        write=True,
+        overwrite=overwrite,
+    )
+
+
+def mcp_format_write(path: str, exclude: RepeatableStrings = None) -> dict[str, object]:
+    """Rewrite Markdown files into canonical format."""
+    return write_format(path, exclude or ())
+
+
+def mcp_duckdb_export(
+    path: str,
+    database: str = "okf.duckdb",
+    schema: str = "okf",
+    *,
+    overwrite: bool = False,
+    exclude: RepeatableStrings = None,
+    spec_template: str | None = None,
+) -> dict[str, object]:
+    """Materialize the bundle into a persistent DuckDB database."""
+    return export_duckdb(
+        path,
+        database,
+        schema,
+        overwrite=overwrite,
+        exclude=exclude or (),
+        spec_template=spec_template,
+    )
+
+
+def _tool_annotations(
+    *,
+    read_only: bool,
+    destructive: bool,
+    idempotent: bool,
+    open_world: bool,
+) -> ToolAnnotations:
+    """Build explicit MCP effect metadata without relying on protocol defaults."""
+    return ToolAnnotations(
+        readOnlyHint=read_only,
+        destructiveHint=destructive,
+        idempotentHint=idempotent,
+        openWorldHint=open_world,
+    )
+
+
+def build_mcp(*, allow_write: bool = False) -> FastMCP:
+    """Construct an isolated MCP profile with optional explicit commit authority."""
+    server = FastMCP(
+        name="okf-parser",
+        instructions=(
+            "Deterministic OKF inspection and preview tools. Explicit commit tools are "
+            "available only when the server is launched with --allow-write. Tool annotations "
+            "describe maximum effects and are hints, not authorization."
+        ),
+    )
+
+    server.tool(
+        name="check",
+        annotations=_tool_annotations(
+            read_only=True, destructive=False, idempotent=True, open_world=False
+        ),
+    )(mcp_check)
+    server.tool(
+        name="inventory",
+        annotations=_tool_annotations(
+            read_only=True, destructive=False, idempotent=True, open_world=False
+        ),
+    )(mcp_inventory)
+    server.tool(
+        name="graph",
+        annotations=_tool_annotations(
+            read_only=True, destructive=False, idempotent=True, open_world=False
+        ),
+    )(mcp_graph)
+    server.tool(
+        name="schema",
+        annotations=_tool_annotations(
+            read_only=False, destructive=True, idempotent=False, open_world=True
+        ),
+    )(mcp_schema)
+    server.tool(
+        name="format_check",
+        annotations=_tool_annotations(
+            read_only=True, destructive=False, idempotent=True, open_world=False
+        ),
+    )(mcp_format_check)
+    server.tool(
+        name="apply_preview",
+        annotations=_tool_annotations(
+            read_only=False, destructive=True, idempotent=False, open_world=True
+        ),
+    )(mcp_apply_preview)
+    server.tool(
+        name="init_preview",
+        annotations=_tool_annotations(
+            read_only=True, destructive=False, idempotent=True, open_world=False
+        ),
+    )(mcp_init_preview)
+    server.tool(
+        name="import_preview",
+        annotations=_tool_annotations(
+            read_only=True, destructive=False, idempotent=True, open_world=True
+        ),
+    )(mcp_import_preview)
+
+    if allow_write:
+        server.tool(
+            name="format_write",
+            annotations=_tool_annotations(
+                read_only=False, destructive=True, idempotent=True, open_world=False
+            ),
+        )(mcp_format_write)
+        server.tool(
+            name="apply_write",
+            annotations=_tool_annotations(
+                read_only=False, destructive=True, idempotent=False, open_world=True
+            ),
+        )(mcp_apply_write)
+        server.tool(
+            name="init_write",
+            annotations=_tool_annotations(
+                read_only=False, destructive=False, idempotent=True, open_world=False
+            ),
+        )(mcp_init_write)
+        server.tool(
+            name="import_write",
+            annotations=_tool_annotations(
+                read_only=False, destructive=True, idempotent=False, open_world=True
+            ),
+        )(mcp_import_write)
+        server.tool(
+            name="duckdb_export",
+            annotations=_tool_annotations(
+                read_only=False, destructive=True, idempotent=False, open_world=True
+            ),
+        )(mcp_duckdb_export)
+
+    return server
+
+
+mcp = build_mcp()
 
 
 def run_mcp_stdio() -> None:

@@ -11,9 +11,11 @@ description: Every CLI command and MCP tool exposed by okf-parser, with flags an
 FastMCP (`okf-parser-mcp`, or `okf-parser serve`) and share the same service
 functions and payloads where both surfaces exist.
 
-The MCP surface currently exposes `check`, `inventory`, `graph`, `schema` and
-`format_check`. File-creating and mutating operations (`import`, `init`,
-`apply`, `format --write` and `duckdb`) remain CLI-only today.
+The default MCP profile is commit-disabled and exposes inspection plus faithful
+preview tools. `okf-parser serve --allow-write` adds explicit commit tools; the
+zero-argument `okf-parser-mcp` entry point remains commit-disabled. Tool-level MCP
+annotations describe each tool's maximum possible effect and are descriptive hints,
+not an authorization boundary.
 
 Most commands print one JSON object to stdout. `schema --format zod` prints the
 Zod source as plain text. Exit status is command-specific and described below.
@@ -61,7 +63,7 @@ as one concept document of `TYPE`.
 Exits `1` when the import plan contains duplicate ids. Other invalid inputs are
 reported as command errors.
 
-No MCP equivalent today.
+MCP tools: `import_preview`; `import_write` with `--allow-write`.
 
 ## `init`
 
@@ -80,7 +82,7 @@ Scaffolds missing type specification documents at paths derived from
 Exits `1` when a planned specification or schema path collides with an existing
 file that cannot be safely scaffolded.
 
-No MCP equivalent today.
+MCP tools: `init_preview`; `init_write` with `--allow-write`.
 
 ## `inventory`
 
@@ -138,7 +140,7 @@ would change are left on disk and listed in `payload["skipped_paths"]`; see
 [Formatting](../README.md#quick-start) in the README for what "protected"
 means.
 
-MCP tool: `format_check`; no write-format MCP tool is exposed today.
+MCP tools: `format_check`; `format_write` with `--allow-write`.
 
 ## `apply`
 
@@ -169,7 +171,7 @@ not directly writable; undeclared scalar fields retain RFC 0005 write semantics.
 reports the candidate changes. Exits `1` when `payload["succeeded"]` is false,
 including validation or write-conflict failures.
 
-No MCP equivalent today.
+MCP tools: `apply_preview`; `apply_write` with `--allow-write`. Both accept `spec_template`.
 
 ## `duckdb`
 
@@ -191,14 +193,19 @@ Materializes the bundle's concepts and links into a DuckDB database file.
 On a name collision without `--overwrite`, exits `1` with
 `{"error", "schema", "existing_tables"}` in the payload instead of raising.
 
-No MCP equivalent today.
+MCP tool: `duckdb_export` with `--allow-write`; it also accepts `spec_template`.
 
 ## `serve`
 
 ```bash
-uv run okf-parser serve [--transport stdio|http|sse] [--host HOST] [--port PORT]
+uv run okf-parser serve [--transport stdio|http|sse] [--host HOST] [--port PORT] [--allow-write]
 ```
 
 Runs the MCP server. `stdio` (default) is what `okf-parser-mcp` runs directly;
-`http` and `sse` bind `--host` and `--port` for network transports. It currently
-serves the five MCP tools listed above.
+`http` and `sse` bind `--host` and `--port` for network transports. The default
+profile exposes `check`, `inventory`, `graph`, `schema`, `format_check`,
+`apply_preview`, `init_preview`, and `import_preview`. `--allow-write` additionally
+exposes `format_write`, `apply_write`, `init_write`, `import_write`, and
+`duckdb_export`. Because `schema` and `apply_preview` may execute trusted RFC 0006
+`.schema.sql`, commit-disabled is intentionally not advertised as globally
+side-effect-free.

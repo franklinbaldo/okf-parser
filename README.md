@@ -53,11 +53,18 @@ uv run okf-parser format path/to/bundle
 uv run okf-parser format path/to/bundle --write
 uv run okf-parser duckdb path/to/bundle knowledge.duckdb
 uv run okf-parser duckdb path/to/bundle knowledge.duckdb --overwrite
+uv run okf-parser serve
+uv run okf-parser serve --allow-write
 ```
 
 The command exits with status `1` only when normative errors exist. Broken
 cross-links are warnings because OKF v0.2 explicitly says they do not make a
 bundle non-conformant.
+
+The MCP server is commit-disabled by default. `serve --allow-write` exposes explicit
+commit tools for formatting, relational apply, spec scaffolding, import, and DuckDB
+export; preview tools remain available without the flag. Effect annotations describe
+maximum tool effects but are not authorization or sandboxing.
 
 `format` is an opinionated canonicalizer, not a syntax-preserving rewriter. It
 keeps [mdformat](https://mdformat.readthedocs.io/) as its base and replaces only

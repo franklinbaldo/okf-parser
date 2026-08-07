@@ -1,7 +1,7 @@
 ---
 type: RFC
 title: Effect-aware MCP mutation tools
-status: proposed
+status: accepted
 description: Expose okf-parser write capabilities through MCP with per-tool effect metadata, explicit commit-tool enablement, preview/commit separation, and no server-wide read-only fiction
 ---
 
@@ -260,14 +260,14 @@ The initial matrix is:
 | `graph` | `true` | n/a | n/a | `false` |
 | `schema` | `false` | `true` | `false` | `true` |
 | `format_check` | `true` | n/a | n/a | `false` |
-| `apply_preview` | `true` | n/a | n/a | `false` |
+| `apply_preview` | `false` | `true` | `false` | `true` |
 | `init_preview` | `true` | n/a | n/a | `false` |
 | `import_preview` | `true` | n/a | n/a | `true` |
 | `format_write` | `false` | `true` | `true` | `false` |
-| `apply_write` | `false` | `true` | `false` | `false` |
+| `apply_write` | `false` | `true` | `false` | `true` |
 | `init_write` | `false` | `false` | `true` | `false` |
 | `import_write` | `false` | `true` | `false` | `true` |
-| `duckdb_export` | `false` | `true` | `false` | `false` |
+| `duckdb_export` | `false` | `true` | `false` | `true` |
 
 `destructiveHint` is omitted/irrelevant for tools annotated read-only.
 
@@ -323,13 +323,14 @@ A tool's annotation is not permanent metadata detached from implementation.
 If another RFC adds a capability that expands what a tool can do, its
 annotations must be reviewed in the same PR.
 
-In particular, RFC 0006 intends declared schemas eventually to reach `apply`
-and `duckdb`. If an `apply_preview` implementation begins executing the same
-trusted declaration SQL, its current `readOnlyHint=true` may cease to be
-accurate. The integrating PR must either preserve a genuinely read-only
-execution path or change the annotation conservatively.
-
-This is why annotation tests belong next to capability tests.
+RFC 0006 now reaches both `apply` and `duckdb`. Therefore `apply_preview`
+accepts `spec_template` and can execute trusted declaration SQL even though it does
+not commit the candidate frontmatter changes. Its annotation is consequently
+non-read-only, destructive, non-idempotent and open-world at the static tool level.
+`apply_write` and `duckdb_export` are likewise open-world because they accept the
+same declaration capability. This is the concrete example of why annotation tests
+belong next to capability tests: a later capability expansion changed the honest
+metadata without changing the preview/commit product distinction.
 
 ### 8. Annotations are never the safety mechanism
 
@@ -491,6 +492,7 @@ apply_preview(
     from_: str | None = None,
     to: str | None = None,
     exclude: list[str] | None = None,
+    spec_template: str | None = None,
 ) -> dict[str, object]
 
 apply_write(...same arguments...) -> dict[str, object]
@@ -525,6 +527,7 @@ duckdb_export(
     schema: str = "okf",
     overwrite: bool = False,
     exclude: list[str] | None = None,
+    spec_template: str | None = None,
 ) -> dict[str, object]
 ```
 
@@ -544,11 +547,12 @@ An implementation should choose the smaller of:
 2. construct the FastMCP instance through a factory that conditionally
    registers commit tools.
 
-The first is preferred if FastMCP visibility state is cleanly isolated. The
-second is preferable if mutable global visibility leaks between tests or
-multiple in-process server constructions.
+The implementation uses the second: `build_mcp(allow_write=...)` constructs an
+isolated FastMCP server and conditionally registers commit tools. This avoids a
+process-global visibility switch entirely, so constructing a write-capable profile
+cannot leak authority into the default profile.
 
-The RFC does not mandate the mechanism. It mandates the observable contract:
+The observable contract remains mechanism-independent. It mandates the observable contract:
 
 - both profiles can be constructed independently in one test process;
 - default profile has no explicit commit tools;
