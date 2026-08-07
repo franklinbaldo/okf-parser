@@ -1,0 +1,53 @@
+name: Add RFC 0001 usability contract
+
+on:
+  push:
+    branches:
+      - rfc/0001-shared-contract-pydantic
+
+concurrency:
+  group: add-rfc0001-usability
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: rfc/0001-shared-contract-pydantic
+          fetch-depth: 0
+      - name: Make ease of use normative
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("rfcs/0001-python-model-codegen.md")
+          text = path.read_text(encoding="utf-8")
+
+          goals_tail = """- make the target available through the existing CLI/service/MCP `schema`\n  surface without adding a second command hierarchy.\n\n## Non-goals\n"""
+          usability = """- make the target available through the existing CLI/service/MCP `schema`\n  surface without adding a second command hierarchy.\n\n## Usability contract\n\nThe common path must stay boring:\n\n```bash\nokf-parser schema . --format pydantic\n```\n\nThat command must produce useful importable source without requiring the caller\nto understand `TypeContract`, configure aliases, choose a naming policy, create a\nprofile file, or learn a second command family. Safe Pydantic names, aliases for\nauthored keys, protected-name handling, leading-underscore handling and nested\nmodel-name registration are compiler responsibilities.\n\nAdvanced controls remain opt-in progressive disclosure. `--spec-template`,\n`--cast` and `--infer-types` keep their existing meanings for callers who need\nmore authority, but none is required merely to get a useful Pydantic model from\nan ordinary OKF bundle.\n\nWhen automatic naming cannot be made unambiguous, fail loudly instead of asking\nthe user to preconfigure a mapping. The error should name the authored keys or\nstructural paths that conflict and, where possible, the generated identifier\nthat caused the collision. A future explicit mapping option is justified only by\nreal cases that cannot be handled deterministically.\n\nThis is also a broader CLI constraint: adding a new internal abstraction is not\na reason to add a new public command, mandatory config file or extra setup step.\nThe public surface should expose concepts users need, not the implementation\ngraph underneath them.\n\n## Non-goals\n"""
+          if goals_tail not in text:
+              raise SystemExit("goals anchor not found")
+          text = text.replace(goals_tail, usability, 1)
+
+          acceptance = """- repeated generation is byte-for-byte deterministic;\n"""
+          acceptance_new = """- `okf-parser schema . --format pydantic` works without naming configuration,\n  profile scaffolding or another command family for an ordinary conformant bundle;\n- repeated generation is byte-for-byte deterministic;\n"""
+          if acceptance not in text:
+              raise SystemExit("acceptance anchor not found")
+          text = text.replace(acceptance, acceptance_new, 1)
+          path.write_text(text, encoding="utf-8")
+          PY
+
+          git rm -f .github/workflows/add-rfc0001-usability.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "docs: make RFC 0001 ease of use normative"
+          git push origin HEAD:rfc/0001-shared-contract-pydantic
