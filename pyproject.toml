@@ -1,6 +1,6 @@
 [project]
 name = "okf-parser"
-version = "0.15.0"
+version = "0.15.1"
 description = "Relational inspection and validation for Open Knowledge Format bundles"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -74,7 +74,22 @@ ignore = [
 runtime-evaluated-base-classes = ["pydantic.BaseModel"]
 
 [tool.ruff.lint.per-file-ignores]
-"src/okf_parser/cli.py" = ["T201"]
+# PLR0913: every listed function's arguments are independent public CLI/API
+# flags or distinct compile/write-path inputs, not a sign the function
+# should take fewer of them - see each module's docstring.
+# S608: the only dynamic SQL in these files quotes identifiers and
+# '-doubles string literals rather than interpolating raw input (apply.py's
+# `_build_sugar_sql`, bundle_import.py's source-path replacement scan).
+# A002: cli.py's `type` parameters name the domain concept `type`, matching
+# every other surface (frontmatter, service functions) for the same flag.
+# BLE001: apply.py's frontmatter round-trip probe treats any load/dump
+# failure alike, by construction - see `_round_trips_losslessly`.
+"src/okf_parser/apply.py" = ["BLE001", "PLR0913", "S608"]
+"src/okf_parser/bundle_import.py" = ["PLR0913", "S608"]
+"src/okf_parser/declared_schema.py" = ["S608"]
+"src/okf_parser/cli.py" = ["A002", "PLR0913", "T201"]
+"src/okf_parser/schema_export.py" = ["PLR0913"]
+"src/okf_parser/service.py" = ["PLR0913"]
 "tests/*" = ["D103", "PLR2004", "S101"]
 
 [tool.ruff.lint.pydocstyle]

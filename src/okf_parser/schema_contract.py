@@ -87,6 +87,7 @@ class TypeContract:
 class _CompileOptions:
     infer_types: bool
     casts: dict[str, CastKind]
+    declared_by_type: Mapping[str, Mapping[str, CastKind]] = field(default_factory=dict)
     used_casts: set[str] = field(default_factory=set)
 
 
@@ -142,7 +143,9 @@ def unique_model_names(values: Sequence[str], suffix: str) -> dict[str, str]:
     return names
 
 
-def _scalar_node(values: Sequence[str], path: str, options: _CompileOptions) -> ScalarNode:
+def _scalar_node(
+    values: Sequence[str], path: str, options: _CompileOptions, concept_type: str | None
+) -> ScalarNode:
     explicit = options.casts.get(path)
     if explicit is not None:
         options.used_casts.add(path)
@@ -154,6 +157,16 @@ def _scalar_node(values: Sequence[str], path: str, options: _CompileOptions) -> 
             message = f"cannot cast {path!r} to {explicit}: {sample!r} is incompatible"
             raise SchemaCastError(message)
         return ScalarNode(explicit)
+    # Declared casts are looked up scoped to `concept_type`, never as a flat
+    # path->kind table: a `.schema.sql` declaring `Fatura.valor` as a
+    # DECIMAL must never leak into `Pesquisa.valor` just because the two
+    # types happen to share a field name. Unlike an explicit `--cast`,
+    # advisory only - a value that doesn't fit falls through to inference
+    # or `"string"`, never raises.
+    if concept_type is not None:
+        declared = options.declared_by_type.get(concept_type, {}).get(path)
+        if declared is not None and can_classify_as(values, declared):
+            return ScalarNode(declared)
     kind = classify_lexemes(values) if options.infer_types else "string"
     return ScalarNode(kind)
 
@@ -163,10 +176,11 @@ def _compile_value(
     *,
     path: str,
     options: _CompileOptions,
+    concept_type: str | None,
 ) -> ContractNode:
     non_null = [value for value in values if value is not None]
     if not non_null:
-        return _scalar_node((), path, options)
+        return _scalar_node((), path, options, concept_type)
 
     if all(isinstance(value, dict) for value in non_null):
         if path in options.casts:
@@ -178,7 +192,7 @@ def _compile_value(
     if all(isinstance(value, list) for value in non_null):
         items = [item for value in non_null for item in cast("list[object]", value)]
         return ListNode(
-            item=_compile_value(items, path=path, options=options),
+            item=_compile_value(items, path=path, options=options, concept_type=concept_type),
             item_nullable=any(item is None for item in items),
         )
 
@@ -188,7 +202,7 @@ def _compile_value(
             raise SchemaCastError(message)
         return AnyNode()
 
-    return _scalar_node([str(value) for value in non_null], path, options)
+    return _scalar_node([str(value) for value in non_null], path, options, concept_type)
 
 
 def _compile_object(
@@ -213,7 +227,9 @@ def _compile_object(
             nullable = False
             value: ContractNode = LiteralNode(concept_type)
         else:
-            value = _compile_value(present, path=field_path, options=options)
+            value = _compile_value(
+                present, path=field_path, options=options, concept_type=concept_type
+            )
         fields.append(FieldContract(name, required, nullable, value))
     return ObjectNode(tuple(fields))
 
@@ -223,9 +239,24 @@ def compile_contracts(
     *,
     infer_types: bool = False,
     casts: Sequence[str] = (),
+    declared_casts_by_type: Mapping[str, Mapping[str, CastKind]] | None = None,
 ) -> tuple[TypeContract, ...]:
-    """Compile all observations into one language-neutral contract per type."""
-    options = _CompileOptions(infer_types=infer_types, casts=parse_casts(casts))
+    """Compile all observations into one language-neutral contract per type.
+
+    `casts` (explicit `--cast FIELD=TYPE`) stays a single global table, same
+    as always - a caller asking for a cast by field path alone accepts that
+    it applies wherever that path appears. `declared_casts_by_type` is the
+    opposite shape on purpose: each type's `.schema.sql` only ever describes
+    that type, so a declared kind is looked up scoped to `(concept_type,
+    field)` and never bleeds into another type's same-named field. Where
+    both apply to one type's field, the explicit cast wins (`_scalar_node`
+    checks it first) - precedence still resolved per type, not globally.
+    """
+    options = _CompileOptions(
+        infer_types=infer_types,
+        casts=parse_casts(casts),
+        declared_by_type=declared_casts_by_type or {},
+    )
     names = unique_model_names(tuple(documents_by_type), "Concept")
     contracts = tuple(
         TypeContract(

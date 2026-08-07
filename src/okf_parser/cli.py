@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import dataclass
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
 from cyclopts import App, Parameter
 from fastmcp import FastMCP
@@ -18,6 +18,8 @@ from okf_parser.service import (
     check_format,
     export_duckdb,
     graph_bundle,
+    import_bundle,
+    init_bundle,
     inventory_bundle,
     schema_bundle,
     write_format,
@@ -80,6 +82,42 @@ def check(
     return CliResult(payload, 0 if payload["conformant"] else 1)
 
 
+@app.command(name="import")
+def import_command(  # each argument is an independent public CLI flag.
+    source: str,
+    path: str,
+    *,
+    type: str,  # the domain name for this flag is `type`.
+    id_column: str | None = None,
+    write: bool = False,
+    overwrite: bool = False,
+) -> CliResult[JsonPayload]:
+    """Materialize every row of a DuckDB-readable source (CSV, Parquet, JSON) as a concept."""
+    payload = import_bundle(
+        source, path, type, id_column=id_column, write=write, overwrite=overwrite
+    )
+    return CliResult(payload, 1 if payload["duplicate_ids"] else 0)
+
+
+@app.command
+def init(
+    path: str,
+    *,
+    spec_template: str,
+    exclude: RepeatableStrings = None,
+    write: bool = False,
+    infer_schema: bool = False,
+) -> CliResult[JsonPayload]:
+    """Scaffold a missing specification document, and optionally a starter `.schema.sql`."""
+    payload = init_bundle(
+        path, spec_template, exclude or (), write=write, infer_schema=infer_schema
+    )
+    specs = cast("dict[str, object]", payload["specs"])
+    schemas = cast("dict[str, object]", payload["schemas"]) if infer_schema else None
+    has_collisions = bool(specs["collisions"]) or bool(schemas and schemas["collisions"])
+    return CliResult(payload, 1 if has_collisions else 0)
+
+
 @app.command
 def inventory(path: str, *, exclude: RepeatableStrings = None) -> CliResult[JsonPayload]:
     """Count concepts by type using an Ibis relation."""
@@ -93,7 +131,7 @@ def graph(path: str, *, exclude: RepeatableStrings = None) -> CliResult[JsonPayl
 
 
 @app.command
-def schema(  # noqa: PLR0913 - each argument is an independent public CLI flag.
+def schema(  # each argument is an independent public CLI flag.
     path: str,
     *,
     schema_format: CliSchemaFormat = "json",
@@ -101,6 +139,7 @@ def schema(  # noqa: PLR0913 - each argument is an independent public CLI flag.
     cast: RepeatableStrings = None,
     exclude: RepeatableStrings = None,
     zod_import: ZodImport = "zod",
+    spec_template: str | None = None,
 ) -> CliResult[JsonPayload | str]:
     """Export canonical JSON Schema or generic/Astro Zod definitions."""
     return CliResult(
@@ -111,6 +150,7 @@ def schema(  # noqa: PLR0913 - each argument is an independent public CLI flag.
             infer_types=infer_types,
             casts=cast or (),
             zod_import=zod_import,
+            spec_template=spec_template,
         )
     )
 
@@ -129,11 +169,11 @@ def format_command(
 
 
 @app.command
-def apply(  # noqa: PLR0913 - each argument is an independent public CLI flag.
+def apply(  # each argument is an independent public CLI flag.
     path: str,
     *,
     sql: str | None = None,
-    type: str | None = None,  # noqa: A002 - the domain name for this flag is `type`.
+    type: str | None = None,  # the domain name for this flag is `type`.
     field: str | None = None,
     from_: Annotated[str | None, Parameter(name="from")] = None,
     to: str | None = None,
@@ -217,7 +257,7 @@ def mcp_graph(path: str, exclude: RepeatableStrings = None) -> dict[str, object]
 
 
 @mcp.tool(name="schema")
-def mcp_schema(  # noqa: PLR0913 - MCP exposes the same independent schema flags.
+def mcp_schema(  # MCP exposes the same independent schema flags.
     path: str,
     *,
     schema_format: Annotated[SchemaFormat, Field(alias="format")] = "json",
@@ -225,6 +265,7 @@ def mcp_schema(  # noqa: PLR0913 - MCP exposes the same independent schema flags
     cast: RepeatableStrings = None,
     exclude: RepeatableStrings = None,
     zod_import: ZodImport = "zod",
+    spec_template: str | None = None,
 ) -> dict[str, object] | str:
     """Export canonical schemas, optionally inferring or declaring scalar types."""
     return schema_bundle(
@@ -234,6 +275,7 @@ def mcp_schema(  # noqa: PLR0913 - MCP exposes the same independent schema flags
         infer_types=infer_types,
         casts=cast or (),
         zod_import=zod_import,
+        spec_template=spec_template,
     )
 
 

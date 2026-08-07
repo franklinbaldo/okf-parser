@@ -10,6 +10,12 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from pydantic import BaseModel, create_model
 
 from okf_parser.bundle import load_bundle
+from okf_parser.declared_schema import (
+    DeclaredSchemaError,
+    declared_cast_kinds,
+    declared_schema_relative_path,
+    parse_declared_schema,
+)
 from okf_parser.schema_contract import (
     AnyNode,
     ContractNode,
@@ -36,12 +42,13 @@ if TYPE_CHECKING:
 type FieldDefinition = tuple[Any, Any]
 
 
-def _documents_by_type(
+def documents_by_type(
     path: str,
     exclude: Sequence[str],
 ) -> dict[str, list[dict[str, object]]]:
+    """Every concept's raw frontmatter, grouped by its authored `type`."""
     bundle = load_bundle(Path(path), exclude)
-    documents_by_type: dict[str, list[dict[str, object]]] = {}
+    by_type: dict[str, list[dict[str, object]]] = {}
     for row in bundle.concepts.execute().to_dict(orient="records"):
         concept_type = str(row.get("concept_type") or "concept")
         frontmatter_raw = row.get("frontmatter_json")
@@ -52,10 +59,48 @@ def _documents_by_type(
         if not isinstance(frontmatter, dict):
             message = f"concept {row.get('path')!r} frontmatter is not an object"
             raise SchemaExportError(message)
-        documents_by_type.setdefault(concept_type, []).append(
-            cast("dict[str, object]", frontmatter)
-        )
-    return documents_by_type
+        by_type.setdefault(concept_type, []).append(cast("dict[str, object]", frontmatter))
+    return by_type
+
+
+def _declared_casts_by_type(
+    root: str,
+    concept_types: Sequence[str],
+    spec_template: str | None,
+) -> dict[str, dict[str, CastKind]]:
+    """Read every type's own declared schema, indexed by `(concept_type, field)`.
+
+    Kept strictly per type and handed to `compile_contracts` as a mapping
+    keyed by `concept_type`, never flattened into a single global
+    `field=kind` list: a `.schema.sql` for `Fatura` declaring `valor` as a
+    `DECIMAL` must never leak into an unrelated `Pesquisa.valor` field just
+    because the two types happen to share a name. `compile_contracts`
+    itself decides, per type and per field, whether the declared kind
+    actually fits the observed data (advisory, never raises) and whether an
+    explicit `--cast` for that field takes precedence.
+
+    Per RFC 0006, an ill-formed or absent `.schema.sql` is never an error
+    here - a type simply keeps compiling exactly as it did without a
+    declaration.
+    """
+    if spec_template is None:
+        return {}
+    by_type: dict[str, dict[str, CastKind]] = {}
+    for concept_type in concept_types:
+        relative = declared_schema_relative_path(spec_template, concept_type)
+        if relative is None:
+            continue
+        schema_path = Path(root) / relative
+        if not schema_path.is_file():
+            continue
+        try:
+            declared = parse_declared_schema(schema_path.read_text(encoding="utf-8"), concept_type)
+        except DeclaredSchemaError:
+            continue
+        kinds = declared_cast_kinds(declared)
+        if kinds:
+            by_type[concept_type] = kinds
+    return by_type
 
 
 def build_schema_contracts(
@@ -64,12 +109,16 @@ def build_schema_contracts(
     *,
     infer_types: bool = False,
     casts: Sequence[str] = (),
+    spec_template: str | None = None,
 ) -> tuple[TypeContract, ...]:
     """Compile bundle observations into deterministic language-neutral contracts."""
+    observed = documents_by_type(path, exclude)
+    declared_by_type = _declared_casts_by_type(path, tuple(observed), spec_template)
     return compile_contracts(
-        _documents_by_type(path, exclude),
+        observed,
         infer_types=infer_types,
         casts=casts,
+        declared_casts_by_type=declared_by_type,
     )
 
 
@@ -137,6 +186,7 @@ def export_json_schema(
     *,
     infer_types: bool = False,
     casts: Sequence[str] = (),
+    spec_template: str | None = None,
 ) -> dict[str, Any]:
     """Export the canonical JSON Schema representation for each concept type."""
     contracts = build_schema_contracts(
@@ -144,6 +194,7 @@ def export_json_schema(
         exclude,
         infer_types=infer_types,
         casts=casts,
+        spec_template=spec_template,
     )
     schemas = {contract.concept_type: contract_json_schema(contract) for contract in contracts}
     return {
@@ -155,13 +206,14 @@ def export_json_schema(
     }
 
 
-def export_zod_schema(
+def export_zod_schema(  # each argument is an independent public export flag.
     path: str,
     exclude: Sequence[str] = (),
     *,
     infer_types: bool = False,
     casts: Sequence[str] = (),
     zod_import: ZodImport = "zod",
+    spec_template: str | None = None,
 ) -> str:
     """Generate canonical Zod declarations, using generic Zod by default."""
     contracts = build_schema_contracts(
@@ -169,6 +221,7 @@ def export_zod_schema(
         exclude,
         infer_types=infer_types,
         casts=casts,
+        spec_template=spec_template,
     )
     return render_zod(contracts, zod_import=zod_import)
 

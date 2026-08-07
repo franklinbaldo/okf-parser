@@ -10,14 +10,56 @@ import networkx as nx
 
 from okf_parser.apply import apply_bundle as _apply_bundle
 from okf_parser.bundle import load_bundle, validate_path
+from okf_parser.bundle_import import import_bundle as _import_bundle
 from okf_parser.duckdb import attach_okf
 from okf_parser.formatting import FormatReport, format_path
+from okf_parser.schema_export import documents_by_type as _documents_by_type
 from okf_parser.schema_export import export_json_schema, export_zod_schema
+from okf_parser.spec_scaffold import scaffold_missing_declared_schemas, scaffold_missing_specs
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from okf_parser.schema_contract import ZodImport
+
+
+def init_bundle(
+    path: str,
+    spec_template: str,
+    exclude: Sequence[str] = (),
+    *,
+    write: bool = False,
+    infer_schema: bool = False,
+) -> dict[str, object]:
+    """Scaffold a missing specification document, and optionally a starter `.schema.sql`.
+
+    `infer_schema` runs the same `schema --infer-types` inference used
+    elsewhere to propose a starter declaration for whichever types still
+    lack a `.schema.sql`; it never touches a file that already exists.
+    """
+    root = Path(path).resolve()
+    bundle = load_bundle(root, exclude)
+    specs = scaffold_missing_specs(bundle.root, bundle.concept_types, spec_template, write=write)
+    if not infer_schema:
+        return {"specs": specs}
+    observed = _documents_by_type(path, exclude)
+    schemas = scaffold_missing_declared_schemas(bundle.root, spec_template, observed, write=write)
+    return {"specs": specs, "schemas": schemas}
+
+
+def import_bundle(  # each argument is an independent public CLI flag.
+    source: str,
+    path: str,
+    concept_type: str,
+    *,
+    id_column: str | None = None,
+    write: bool = False,
+    overwrite: bool = False,
+) -> dict[str, object]:
+    """Materialize every row of a DuckDB-readable source as one concept document."""
+    return _import_bundle(
+        source, path, concept_type, id_column=id_column, write=write, overwrite=overwrite
+    )
 
 
 def check_bundle(
@@ -66,7 +108,7 @@ def graph_bundle(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
     }
 
 
-def schema_bundle(  # noqa: PLR0913 - service mirrors the independent public schema flags.
+def schema_bundle(  # service mirrors the independent public schema flags.
     path: str,
     fmt: str = "json",
     exclude: Sequence[str] = (),
@@ -74,6 +116,7 @@ def schema_bundle(  # noqa: PLR0913 - service mirrors the independent public sch
     infer_types: bool = False,
     casts: Sequence[str] = (),
     zod_import: ZodImport = "zod",
+    spec_template: str | None = None,
 ) -> dict[str, object] | str:
     """Export canonical JSON Schema or generic/Astro Zod definitions."""
     if fmt == "zod":
@@ -83,12 +126,14 @@ def schema_bundle(  # noqa: PLR0913 - service mirrors the independent public sch
             infer_types=infer_types,
             casts=casts,
             zod_import=zod_import,
+            spec_template=spec_template,
         )
     return export_json_schema(
         path,
         exclude,
         infer_types=infer_types,
         casts=casts,
+        spec_template=spec_template,
     )
 
 
@@ -113,7 +158,7 @@ def write_format(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
     return _format_payload(format_path(Path(path), write=True, exclude=exclude))
 
 
-def apply_bundle(  # noqa: PLR0913 - each argument is an independent public CLI flag.
+def apply_bundle(  # each argument is an independent public CLI flag.
     path: str,
     *,
     sql: str | None = None,

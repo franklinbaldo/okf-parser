@@ -141,7 +141,7 @@ def _round_trips_losslessly(yaml: YAML, frontmatter_text: str) -> bool:
         data = yaml.load(frontmatter_text)
         buffer = StringIO()
         yaml.dump(data, buffer)
-    except Exception:  # noqa: BLE001 - any load/dump failure means "cannot round-trip"
+    except Exception:  # any load/dump failure means "cannot round-trip"
         return False
     return buffer.getvalue().rstrip("\n") == frontmatter_text.rstrip("\n")
 
@@ -795,7 +795,7 @@ def _compile_changed_field_value(
     return None if was_present else _NOT_APPLICABLE
 
 
-def _compile_row_diff(  # noqa: PLR0913 - each argument is a distinct compile input.
+def _compile_row_diff(  # each argument is a distinct compile input.
     concept: _Concept,
     field_names: Sequence[str],
     removed_columns: frozenset[str],
@@ -932,12 +932,12 @@ def _build_sugar_sql(type_name: str, field_name: str, from_value: str, to_value:
     quoted_field = _quote_ident(field_name)
     # Identifiers are quoted and string literals are '-doubled, not interpolated raw.
     return (
-        f"UPDATE {_quote_ident(type_name)} SET {quoted_field} = '{escaped_to}' "  # noqa: S608
+        f"UPDATE {_quote_ident(type_name)} SET {quoted_field} = '{escaped_to}' "
         f"WHERE {quoted_field} = '{escaped_from}'"
     )
 
 
-def apply_bundle(  # noqa: PLR0913 - each argument is an independent public CLI flag.
+def apply_bundle(  # each argument is an independent public CLI flag.
     path: str,
     *,
     sql: str | None = None,
@@ -1051,7 +1051,7 @@ def _snapshot_manifest(root: Path, exclude: Sequence[str]) -> dict[str, tuple[in
     return manifest
 
 
-def _stage_validate_write(  # noqa: PLR0913 - each argument is a distinct write-path input.
+def _stage_validate_write(  # each argument is a distinct write-path input.
     root: Path,
     exclude: Sequence[str],
     candidates: dict[str, tuple[_RawDocument, str, Path]],
