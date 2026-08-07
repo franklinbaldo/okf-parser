@@ -318,6 +318,17 @@ is never re-executed anywhere past the one connection it ran on.
 
 ### 5. Raw is the truth; typed is a generated projection over it
 
+> **Status: open, pending reconsideration.** This decision's own
+> whole-column-degrades-to-`VARCHAR` fallback rule is in tension with the
+> raw/generated split it establishes: once a lossless raw column exists
+> underneath every declared column, a per-*value* `TRY_CAST` generated
+> column (NULL only on the rows that actually diverge, raw text always
+> intact, a diagnostic per divergent row) is available and may be the
+> better rule — one bad document would then stop degrading typing for
+> every other document of the same type. Recorded here rather than
+> resolved now; not implemented in code either way yet (`apply`/`duckdb`
+> don't compile declared types at all today - see the changelog).
+
 Two review rounds tried to make one physical column serve two jobs at
 once — carry the document's exact content, and carry a physical type —
 and broke on both a numeric and a temporal counterexample each time. A
@@ -825,6 +836,19 @@ in CI as on a laptop unless the flag is passed.
 
 ### 9. `schema` exports the declaration, not a measurement of the data
 
+> **Status: open, pending reconsideration.** The implemented
+> `schema --spec-template` path does not currently do this: a declared
+> column whose data doesn't fit falls back to inference/`string` in the
+> export (advisory, matching decision 7's spirit), it does not keep
+> exporting the declared type with a side diagnostic as stated below. The
+> real fix is almost certainly to stop treating "schema export" as one
+> mode at all and expose **declared**, **effective**, and **observed**
+> as distinct, explicitly named outputs — a caller wanting the producer's
+> stated intent regardless of current data, and a caller wanting what the
+> data actually supports today, both have legitimate, different uses for
+> `schema`, and one flag cannot serve both without lying to one of them.
+> Left as prose, not implemented as decided.
+
 For a type with a declaration, `schema` emits the **declared** types —
 `--infer-types` is not consulted for a declared column, and a `--cast`
 naming a declared column is a diagnostic ("cast conflicts with declared
@@ -868,6 +892,20 @@ specified type's export become closed-world by fiat": it does not; only
 type is authored, presence is still observed.
 
 ### 10. Physical types are read back in DuckDB's normalized spelling
+
+> **Status: open, pending reconsideration.** The export table below is not
+> semantically closed and does not match the implementation in at least
+> two ways flagged in review: `DECIMAL(p,s)` mapping to JSON Schema
+> `string` is inconsistent with JSON Schema's `number` supporting
+> arbitrary precision (the implementation already exports `DECIMAL` as
+> `number`, contradicting this row); and `TIMESTAMP` (no offset) and
+> `TIMESTAMPTZ` cannot both honestly map to JSON Schema `format: date-time`
+> (RFC 3339), which requires an offset a naive timestamp doesn't carry.
+> Resolving this properly needs the current closed `CastKind` vocabulary
+> (`string`/`boolean`/`integer`/`number`/`date`/`datetime`) replaced with a
+> representation that preserves the full DuckDB type, not just this
+> table's collapsed six-way classification — deliberately deferred to its
+> own round rather than patched row-by-row here.
 
 Every place a type is named downstream — DDL this RFC issues, diagnostics,
 the `schema` export — uses the spelling DuckDB's catalog reports

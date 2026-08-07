@@ -33,7 +33,6 @@ from okf_parser.schema_contract import (
     model_name,
     render_zod,
 )
-from okf_parser.schema_lexemes import can_classify_as
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -64,26 +63,30 @@ def documents_by_type(
     return by_type
 
 
-def _declared_casts(
+def _declared_casts_by_type(
     root: str,
-    documents_by_type: dict[str, list[dict[str, object]]],
+    concept_types: Sequence[str],
     spec_template: str | None,
-    explicit_casts: Sequence[str],
-) -> list[str]:
-    """Compile a `field=kind` cast per declared column that its data actually supports.
+) -> dict[str, dict[str, CastKind]]:
+    """Read every type's own declared schema, indexed by `(concept_type, field)`.
 
-    Per RFC 0006, an ill-formed or absent `.schema.sql` is never an error here
-    - a type simply keeps compiling exactly as it did without a declaration -
-    and a declared column whose data doesn't uniformly support the declared
-    kind quietly has no cast added for it, leaving that field to infer_types
-    or the default string, rather than raising the way an explicit `--cast`
-    does. An explicit `--cast` for the same field always wins.
+    Kept strictly per type and handed to `compile_contracts` as a mapping
+    keyed by `concept_type`, never flattened into a single global
+    `field=kind` list: a `.schema.sql` for `Fatura` declaring `valor` as a
+    `DECIMAL` must never leak into an unrelated `Pesquisa.valor` field just
+    because the two types happen to share a name. `compile_contracts`
+    itself decides, per type and per field, whether the declared kind
+    actually fits the observed data (advisory, never raises) and whether an
+    explicit `--cast` for that field takes precedence.
+
+    Per RFC 0006, an ill-formed or absent `.schema.sql` is never an error
+    here - a type simply keeps compiling exactly as it did without a
+    declaration.
     """
     if spec_template is None:
-        return []
-    explicit_fields = {specification.split("=", 1)[0].strip() for specification in explicit_casts}
-    additional: list[str] = []
-    for concept_type, documents in documents_by_type.items():
+        return {}
+    by_type: dict[str, dict[str, CastKind]] = {}
+    for concept_type in concept_types:
         relative = declared_schema_relative_path(spec_template, concept_type)
         if relative is None:
             continue
@@ -94,13 +97,10 @@ def _declared_casts(
             declared = parse_declared_schema(schema_path.read_text(encoding="utf-8"), concept_type)
         except DeclaredSchemaError:
             continue
-        for field, kind in declared_cast_kinds(declared).items():
-            if field in explicit_fields:
-                continue
-            values = [str(doc[field]) for doc in documents if isinstance(doc.get(field), str)]
-            if values and can_classify_as(values, kind):
-                additional.append(f"{field}={kind}")
-    return additional
+        kinds = declared_cast_kinds(declared)
+        if kinds:
+            by_type[concept_type] = kinds
+    return by_type
 
 
 def build_schema_contracts(
@@ -113,14 +113,12 @@ def build_schema_contracts(
 ) -> tuple[TypeContract, ...]:
     """Compile bundle observations into deterministic language-neutral contracts."""
     observed = documents_by_type(path, exclude)
-    effective_casts = (
-        *casts,
-        *_declared_casts(path, observed, spec_template, casts),
-    )
+    declared_by_type = _declared_casts_by_type(path, tuple(observed), spec_template)
     return compile_contracts(
         observed,
         infer_types=infer_types,
-        casts=effective_casts,
+        casts=casts,
+        declared_casts_by_type=declared_by_type,
     )
 
 
