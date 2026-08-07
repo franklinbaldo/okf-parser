@@ -90,7 +90,9 @@ def _duckdb_type_kind(duckdb_type: str) -> CastKind | None:
 
 def _duckdb_identifier_key(identifier: str) -> str:
     """Fold ASCII letters the same way DuckDB resolves quoted identifiers."""
-    return "".join(chr(ord(char) + 32) if "A" <= char <= "Z" else char for char in identifier)
+    return "".join(
+        chr(ord(char) + 32) if "A" <= char <= "Z" else char for char in identifier
+    )
 
 
 def parse_declared_schema(sql_text: str, concept_type: str) -> DeclaredSchema:
