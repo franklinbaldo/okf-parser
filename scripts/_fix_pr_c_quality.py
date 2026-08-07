@@ -11,6 +11,22 @@ def replace(path: str, old: str, new: str) -> None:
 
 replace(
     "src/okf_parser/typed_tables.py",
+    '''    from collections.abc import Mapping, Sequence
+''',
+    '''    from collections.abc import Iterable, Mapping, Sequence
+''',
+)
+replace(
+    "src/okf_parser/typed_tables.py",
+    '''    concept_types: Sequence[str],
+    spec_template: str | None,
+''',
+    '''    concept_types: Iterable[str],
+    spec_template: str | None,
+''',
+)
+replace(
+    "src/okf_parser/typed_tables.py",
     '''    def __init__(self, schema_name: str, tables: tuple[str, ...]) -> None:
         self.schema_name = schema_name
 ''',
@@ -53,14 +69,36 @@ replace(
 )
 replace(
     "src/okf_parser/typed_tables.py",
-    '''    columns = list(_INTERNAL_COLUMNS)
+    '''            field.name: cast("DuckDBLogicalType", field.declared_type)
+            for field in plan.fields
+            if field.declared_type is not None
+''',
+    '''            field.name: field.declared_type
+            for field in plan.fields
+            if field.declared_type is not None
+''',
+)
+replace(
+    "src/okf_parser/typed_tables.py",
+    '''def _insert_columns(plan: TypedTablePlan) -> tuple[str, ...]:
+    columns = list(_INTERNAL_COLUMNS)
     for field in plan.fields:
         columns.append(field.raw_name if field.declared else field.name)
     return tuple(cast("str", name) for name in columns)
 ''',
-    '''    columns = list(_INTERNAL_COLUMNS)
-    columns.extend(field.raw_name if field.declared else field.name for field in plan.fields)
-    return tuple(cast("str", name) for name in columns)
+    '''def _insert_name(field: TypedFieldPlan) -> str:
+    if not field.declared:
+        return field.name
+    if field.raw_name is None:
+        message = f"declared field {field.name!r} has no raw column"
+        raise TypedTableError(message)
+    return field.raw_name
+
+
+def _insert_columns(plan: TypedTablePlan) -> tuple[str, ...]:
+    columns = list(_INTERNAL_COLUMNS)
+    columns.extend(_insert_name(field) for field in plan.fields)
+    return tuple(columns)
 ''',
 )
 replace(
@@ -72,5 +110,14 @@ replace(
 "src/okf_parser/duckdb.py" = ["PLR0913"]
 "src/okf_parser/typed_tables.py" = ["S608"]
 "src/okf_parser/cli.py" = ["A002", "PLR0913", "T201"]
+''',
+)
+replace(
+    "tests/test_duckdb.py",
+    '''    assert connection.execute('DESCRIBE okf_types."Rotina"').fetchone()[0] == "manual"
+''',
+    '''    description = connection.execute('DESCRIBE okf_types."Rotina"').fetchone()
+    assert description is not None
+    assert description[0] == "manual"
 ''',
 )
