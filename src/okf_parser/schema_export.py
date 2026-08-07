@@ -68,35 +68,44 @@ def _declared_casts_by_type(
     concept_types: Sequence[str],
     spec_template: str | None,
 ) -> dict[str, dict[str, CastKind]]:
-    """Read every type's own declared schema, indexed by `(concept_type, field)`.
+    """Read each type's declaration without hiding collisions or malformed files.
 
-    Kept strictly per type and handed to `compile_contracts` as a mapping
-    keyed by `concept_type`, never flattened into a single global
-    `field=kind` list: a `.schema.sql` for `Fatura` declaring `valor` as a
-    `DECIMAL` must never leak into an unrelated `Pesquisa.valor` field just
-    because the two types happen to share a name. `compile_contracts`
-    itself decides, per type and per field, whether the declared kind
-    actually fits the observed data (advisory, never raises) and whether an
-    explicit `--cast` for that field takes precedence.
-
-    Per RFC 0006, an ill-formed or absent `.schema.sql` is never an error
-    here - a type simply keeps compiling exactly as it did without a
-    declaration.
+    Declarations stay indexed by `(concept_type, field)`, never flattened.
+    Because schema export does not yet expose RFC 0006's planned declaration
+    diagnostics channel, an existing but unusable declaration fails loudly
+    instead of being silently treated as absent. Likewise, if two types
+    derive the same existing `.schema.sql` path, neither can safely claim
+    that file, so export fails with the collision named explicitly.
     """
     if spec_template is None:
         return {}
-    by_type: dict[str, dict[str, CastKind]] = {}
+
+    types_by_path: dict[str, list[str]] = {}
     for concept_type in concept_types:
         relative = declared_schema_relative_path(spec_template, concept_type)
-        if relative is None:
-            continue
+        if relative is not None:
+            types_by_path.setdefault(relative, []).append(concept_type)
+
+    by_type: dict[str, dict[str, CastKind]] = {}
+    for relative, owners in sorted(types_by_path.items()):
         schema_path = Path(root) / relative
         if not schema_path.is_file():
             continue
+        if len(owners) > 1:
+            names = ", ".join(repr(name) for name in sorted(owners))
+            message = f"declared schema path collision at {relative!r}: {names}"
+            raise SchemaExportError(message)
+
+        concept_type = owners[0]
         try:
-            declared = parse_declared_schema(schema_path.read_text(encoding="utf-8"), concept_type)
-        except DeclaredSchemaError:
-            continue
+            sql_text = schema_path.read_text(encoding="utf-8")
+            declared = parse_declared_schema(sql_text, concept_type)
+        except (OSError, UnicodeError, DeclaredSchemaError) as exc:
+            message = (
+                f"invalid declared schema for {concept_type!r} at {relative!r}: {exc}"
+            )
+            raise SchemaExportError(message) from exc
+
         kinds = declared_cast_kinds(declared)
         if kinds:
             by_type[concept_type] = kinds
