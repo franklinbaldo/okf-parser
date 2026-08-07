@@ -43,6 +43,42 @@ text = path.read_text(encoding="utf-8")
 text = text.replace('cast("Mapping[str, YamlValue]",', 'cast("Mapping[str, Any]",')
 path.write_text(text, encoding="utf-8")
 
+# A pandas-backed `execute()` snapshot re-infers physical types from values:
+# DECIMAL(18,2) can shrink to DECIMAL(4,2), all-NULL generated fields become
+# null, and empty list data can become array<null>. Arrow preserves DuckDB's
+# catalog schema, which is required for relation set-difference checks.
+replace(
+    "src/okf_parser/apply.py",
+    "            table=ibis.memtable(con.table(type_name).execute()),\n",
+    "            table=ibis.memtable(con.table(type_name).to_pyarrow()),\n",
+)
+
+# Keep the pre-existing user-facing collision diagnostic specific; other
+# planner failures retain their typed-materialization message.
+replace(
+    "src/okf_parser/apply.py",
+    '''        except (duckdb.CatalogException, TypedTableError) as exc:
+            msg = (
+                f'type "{type_name}" could not be materialized under DuckDB identifier '
+                f"semantics: {exc}"
+            )
+            raise ApplyError(msg) from exc
+''',
+    '''        except duckdb.CatalogException as exc:
+            msg = (
+                f'type "{type_name}" collides with another type under DuckDB '
+                f"identifier equality: {exc}"
+            )
+            raise ApplyError(msg) from exc
+        except TypedTableError as exc:
+            msg = (
+                f'type "{type_name}" could not be materialized under DuckDB identifier '
+                f"semantics: {exc}"
+            )
+            raise ApplyError(msg) from exc
+''',
+)
+
 # The generic CLI signature replacement matched `format_command` first.
 # Restore it and attach the option to the actual apply function.
 replace(
