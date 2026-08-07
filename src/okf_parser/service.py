@@ -35,7 +35,7 @@ def init_bundle(
     return scaffold_missing_specs(bundle.root, bundle.concept_types, spec_template, write=write)
 
 
-def import_bundle(  # noqa: PLR0913 - each argument is an independent public CLI flag.
+def import_bundle(  # each argument is an independent public CLI flag.
     source: str,
     path: str,
     concept_type: str,
@@ -96,7 +96,7 @@ def graph_bundle(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
     }
 
 
-def schema_bundle(  # noqa: PLR0913 - service mirrors the independent public schema flags.
+def schema_bundle(  # service mirrors the independent public schema flags.
     path: str,
     fmt: str = "json",
     exclude: Sequence[str] = (),
@@ -146,7 +146,7 @@ def write_format(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
     return _format_payload(format_path(Path(path), write=True, exclude=exclude))
 
 
-def apply_bundle(  # noqa: PLR0913 - each argument is an independent public CLI flag.
+def apply_bundle(  # each argument is an independent public CLI flag.
     path: str,
     *,
     sql: str | None = None,

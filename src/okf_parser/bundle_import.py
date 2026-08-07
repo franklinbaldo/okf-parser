@@ -35,7 +35,7 @@ def _read_rows(source: str) -> tuple[list[str], list[dict[str, object]]]:
     try:
         try:
             # The string literal is '-doubled above, not interpolated raw.
-            relation = con.sql(f"SELECT * FROM '{escaped}'")  # noqa: S608
+            relation = con.sql(f"SELECT * FROM '{escaped}'")
         except duckdb.Error as exc:
             message = f"could not read {source!r}: {exc}"
             raise BundleImportError(message) from exc
@@ -94,7 +94,7 @@ def _plan(
     return plan, duplicates
 
 
-def import_bundle(  # noqa: PLR0913 - each argument is an independent public CLI flag.
+def import_bundle(  # each argument is an independent public CLI flag.
     source: str,
     path: str,
     concept_type: str,

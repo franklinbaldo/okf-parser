@@ -209,7 +209,7 @@ def export_json_schema(
     }
 
 
-def export_zod_schema(  # noqa: PLR0913 - each argument is an independent public export flag.
+def export_zod_schema(  # each argument is an independent public export flag.
     path: str,
     exclude: Sequence[str] = (),
     *,

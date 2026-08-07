@@ -83,11 +83,11 @@ def check(
 
 
 @app.command(name="import")
-def import_command(  # noqa: PLR0913 - each argument is an independent public CLI flag.
+def import_command(  # each argument is an independent public CLI flag.
     source: str,
     path: str,
     *,
-    type: str,  # noqa: A002 - the domain name for this flag is `type`.
+    type: str,  # the domain name for this flag is `type`.
     id_column: str | None = None,
     write: bool = False,
     overwrite: bool = False,
@@ -125,7 +125,7 @@ def graph(path: str, *, exclude: RepeatableStrings = None) -> CliResult[JsonPayl
 
 
 @app.command
-def schema(  # noqa: PLR0913 - each argument is an independent public CLI flag.
+def schema(  # each argument is an independent public CLI flag.
     path: str,
     *,
     schema_format: CliSchemaFormat = "json",
@@ -163,11 +163,11 @@ def format_command(
 
 
 @app.command
-def apply(  # noqa: PLR0913 - each argument is an independent public CLI flag.
+def apply(  # each argument is an independent public CLI flag.
     path: str,
     *,
     sql: str | None = None,
-    type: str | None = None,  # noqa: A002 - the domain name for this flag is `type`.
+    type: str | None = None,  # the domain name for this flag is `type`.
     field: str | None = None,
     from_: Annotated[str | None, Parameter(name="from")] = None,
     to: str | None = None,
@@ -251,7 +251,7 @@ def mcp_graph(path: str, exclude: RepeatableStrings = None) -> dict[str, object]
 
 
 @mcp.tool(name="schema")
-def mcp_schema(  # noqa: PLR0913 - MCP exposes the same independent schema flags.
+def mcp_schema(  # MCP exposes the same independent schema flags.
     path: str,
     *,
     schema_format: Annotated[SchemaFormat, Field(alias="format")] = "json",
