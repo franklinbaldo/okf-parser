@@ -27,7 +27,7 @@ from okf_parser.service import (
 )
 
 type McpTransport = Literal["stdio", "http", "sse"]
-type SchemaFormat = Literal["json", "zod"]
+type SchemaFormat = Literal["json", "zod", "pydantic"]
 type ZodImport = Literal["zod", "astro"]
 type CliSchemaFormat = Annotated[SchemaFormat, Parameter(name="format")]
 type RepeatableStrings = list[str] | None
@@ -135,7 +135,7 @@ def schema(  # each argument is an independent public CLI flag.
     zod_import: ZodImport = "zod",
     spec_template: str | None = None,
 ) -> CliResult[JsonPayload | str]:
-    """Export canonical JSON Schema or generic/Astro Zod definitions."""
+    """Export JSON Schema, Zod, or importable Pydantic source."""
     return CliResult(
         schema_bundle(
             path,
@@ -286,7 +286,7 @@ def mcp_schema(
     zod_import: ZodImport = "zod",
     spec_template: str | None = None,
 ) -> dict[str, object] | str:
-    """Export canonical schemas, optionally inferring or declaring scalar types."""
+    """Export schemas or validation source from one shared contract."""
     return schema_bundle(
         path,
         schema_format,
