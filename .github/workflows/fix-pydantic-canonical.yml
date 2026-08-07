@@ -27,21 +27,33 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          def replace_once(path: str, old: str, new: str) -> None:
-              file = Path(path)
-              text = file.read_text(encoding="utf-8")
-              if old not in text and new not in text:
-                  raise SystemExit(f"expected text not found in {path}")
-              if old in text:
-                  if text.count(old) != 1:
-                      raise SystemExit(f"ambiguous replacement in {path}")
-                  file.write_text(text.replace(old, new), encoding="utf-8")
-
-          replace_once(
-              "src/okf_parser/cli.py",
-              '    if isinstance(result.payload, str):\n        sys.stdout.write(result.payload + "\\n")\n',
-              '    if isinstance(result.payload, str):\n        text = result.payload\n        sys.stdout.write(text if text.endswith("\\n") else text + "\\n")\n',
+          projection = Path("src/okf_parser/pydantic_projection.py")
+          text = projection.read_text(encoding="utf-8")
+          text = text.replace(
+              "_MAX_STRING_LITERAL = 64\n",
+              "_MAX_STRING_LITERAL = 64\n_MAX_SOURCE_LINE = 100\n",
           )
+          old_model_name = '''def _pydantic_model_name(suggested: str, path: StructuralPath) -> str:\n    """Keep emitted class names comfortably inside the repository line limit."""\n    provenance = "\\x1f".join((*path, suggested))\n    return _bounded_identifier(\n        suggested,\n        provenance,\n        limit=_MAX_PYDANTIC_MODEL_NAME,\n        fallback="Model",\n    )\n'''
+          new_model_name = '''def _pydantic_model_name(suggested: str, path: StructuralPath) -> str:\n    """Keep emitted class names bounded while preserving CapWords spelling."""\n    if len(suggested) <= _MAX_PYDANTIC_MODEL_NAME:\n        return suggested\n    provenance = "\\x1f".join((*path, suggested))\n    digest = hashlib.sha256(provenance.encode("utf-8")).hexdigest()[:10]\n    suffix = f"H{digest}"\n    prefix = suggested[: _MAX_PYDANTIC_MODEL_NAME - len(suffix)].rstrip("_") or "Model"\n    return f"{prefix}{suffix}"\n'''
+          if old_model_name not in text and new_model_name not in text:
+              raise SystemExit("model-name helper not found")
+          text = text.replace(old_model_name, new_model_name)
+          text = text.replace("<= 100", "<= _MAX_SOURCE_LINE")
+          old_nullable = '''    if field_contract.nullable:\n        compact = f"    {field_contract.name}: {annotation.compact} = None"\n        if annotation.lines is None and len(compact) <= _MAX_SOURCE_LINE:\n            return [compact]\n        return _render_annotation_assignment(field_contract, " = None")\n'''
+          new_nullable = '''    if field_contract.nullable:\n        compact = f"    {field_contract.name}: {annotation.compact} = None"\n        lines = (\n            [compact]\n            if annotation.lines is None and len(compact) <= _MAX_SOURCE_LINE\n            else _render_annotation_assignment(field_contract, " = None")\n        )\n        return lines\n'''
+          if old_nullable not in text and new_nullable not in text:
+              raise SystemExit("nullable renderer block not found")
+          text = text.replace(old_nullable, new_nullable)
+          projection.write_text(text, encoding="utf-8")
+
+          cli = Path("src/okf_parser/cli.py")
+          text = cli.read_text(encoding="utf-8")
+          old_cli = '    if isinstance(result.payload, str):\n        sys.stdout.write(result.payload + "\\n")\n'
+          new_cli = '    if isinstance(result.payload, str):\n        text = result.payload\n        sys.stdout.write(text if text.endswith("\\n") else text + "\\n")\n'
+          if old_cli not in text and new_cli not in text:
+              raise SystemExit("CLI text renderer not found")
+          text = text.replace(old_cli, new_cli)
+          cli.write_text(text, encoding="utf-8")
 
           pydantic_tests = Path("tests/test_pydantic_source.py")
           text = pydantic_tests.read_text(encoding="utf-8")
@@ -51,7 +63,7 @@ jobs:
 
           cli_tests = Path("tests/test_cli.py")
           text = cli_tests.read_text(encoding="utf-8")
-          if "from typing import TYPE_CHECKING" in text and "import pytest" not in text:
+          if "import pytest" not in text:
               text = text.replace(
                   "from typing import TYPE_CHECKING\n\nfrom okf_parser.cli import format_command\n",
                   "from typing import TYPE_CHECKING, Literal\n\nimport pytest\n\nfrom okf_parser.cli import app, format_command\nfrom okf_parser.service import schema_bundle\n",
@@ -62,7 +74,6 @@ jobs:
           PY
 
           uv sync --frozen --all-groups
-
           uv run python - <<'PY'
           from pathlib import Path
           from tempfile import TemporaryDirectory
