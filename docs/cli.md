@@ -18,8 +18,9 @@ annotations describe each tool's maximum possible effect and are descriptive hin
 not an authorization boundary.
 
 Most commands print one JSON object to stdout. `schema --format zod` and
-`schema --format pydantic` print source code as plain text. Exit status is
-command-specific and described below.
+`schema --format pydantic` print source as plain text. Text output preserves an
+existing final newline instead of adding a second one. Exit status is command-specific
+and described below.
 
 Commands that walk an existing bundle accept `--exclude` (repeatable) where
 shown, in addition to any `.okfignore`; see
@@ -129,6 +130,11 @@ keys and protected `model_*` names — while preserving the authored key as the
 validation alias. Truly ambiguous name collisions fail with the conflicting
 keys or structural paths in the error instead of requiring preconfiguration.
 
+Generated internal Pydantic identifiers are also bounded deterministically when
+valid OKF keys or concept types are very long. A stable digest suffix preserves
+identity, and long aliases, literals and annotations are emitted in canonical
+multiline form rather than relying on a later formatter pass.
+
 - `--format` — `json` (default), `zod`, or `pydantic`.
 - `--infer-types` — infer scalar types from observed frontmatter values instead
   of leaving them untyped.
@@ -145,6 +151,11 @@ shell redirection is enough when a file is desired:
 ```bash
 uv run okf-parser schema path/to/bundle --format pydantic > generated_models.py
 ```
+
+The redirected bytes are the renderer bytes: if the source already ends in its
+canonical newline, the CLI does not append a second blank line. Checked-in short
+and adversarial source snapshots exercise this contract against the repository's
+Ruff formatting and lint rules.
 
 MCP tool: `schema` with the same `json`, `zod`, and `pydantic` format choices
 (`format` is represented internally by the Python parameter `schema_format`).
