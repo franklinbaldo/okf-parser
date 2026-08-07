@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, cast
@@ -60,6 +61,55 @@ def test_pydantic_source_happy_path_is_deterministic_and_importable(tmp_path: Pa
     assert dumped["valor"] == Decimal("12.34")
     assert dumped["id_externo"] == UUID("550e8400-e29b-41d4-a716-446655440000")
     assert value.model_extra == {"extension": "preserved"}
+
+
+def test_declared_temporal_and_list_types_render_in_source(tmp_path: Path) -> None:
+    _write_concept(
+        tmp_path / "evento.md",
+        "type: Evento\nlocal_em: '2026-08-07T09:30:00'\n"
+        "instante: '2026-08-07T13:30:00Z'\ncodigos: [1, 2]\n",
+    )
+    spec = tmp_path / "docs" / "types" / "evento.schema.sql"
+    spec.parent.mkdir(parents=True)
+    spec.write_text(
+        'CREATE TABLE "Evento" ('
+        "local_em TIMESTAMP, instante TIMESTAMPTZ, codigos BIGINT[]);",
+        encoding="utf-8",
+    )
+
+    source = export_pydantic_source(str(tmp_path), spec_template="docs/types/{slug}.md")
+
+    assert "codigos: list[int]" in source
+    assert "instante: datetime" in source
+    assert "local_em: datetime" in source
+
+    model = _source_model(source, "EventoConcept")
+    value = model.model_validate(
+        {
+            "type": "Evento",
+            "local_em": "2026-08-07T09:30:00",
+            "instante": "2026-08-07T13:30:00Z",
+            "codigos": [1, 2],
+        }
+    )
+    dumped = value.model_dump()
+    assert dumped["codigos"] == [1, 2]
+    assert isinstance(dumped["local_em"], datetime)
+    assert isinstance(dumped["instante"], datetime)
+
+
+def test_nested_models_are_children_first_and_need_no_rebuild(tmp_path: Path) -> None:
+    _write_concept(tmp_path / "x.md", "type: X\nprofile:\n  name: Alice\n")
+
+    source = export_pydantic_source(str(tmp_path))
+    nested = "class XConceptProfileStructure(BaseModel):"
+    outer = "class XConcept(BaseModel):"
+
+    assert source.index(nested) < source.index(outer)
+
+    model = _source_model(source, "XConcept")
+    value = model.model_validate({"type": "X", "profile": {"name": "Alice"}})
+    assert value.model_dump()["profile"]["name"] == "Alice"
 
 
 def test_dynamic_and_source_models_share_automatic_alias_policy(tmp_path: Path) -> None:
