@@ -32,13 +32,14 @@ import tempfile
 from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import duckdb
 import ibis
 from ruamel.yaml import YAML
 
 from okf_parser.bundle import validate_path
+from okf_parser.declared_schema import DeclaredSchema, DeclaredSchemaError
 from okf_parser.discovery import IGNORED_DIRECTORIES, is_markdown_filename
 from okf_parser.exclusion import ExclusionRules
 from okf_parser.models import Severity
@@ -48,9 +49,18 @@ from okf_parser.parser import (
     is_reserved_document,
     parse_document_text,
 )
+from okf_parser.typed_tables import (
+    TypedTableError,
+    TypedTablePlan,
+    compile_typed_table_plan,
+    discover_declared_schemas,
+    duckdb_identifier_key,
+    field_input_value,
+)
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
+    from typing import Any
 
     import ibis.backends.duckdb as ibis_duckdb
 
@@ -337,6 +347,85 @@ def _check_reserved_field_names(type_name: str, field_names: Sequence[str]) -> N
             raise ApplyError(msg)
 
 
+def _typed_table_ddl(plan: TypedTablePlan) -> str:
+    columns = [
+        '"__okf_path" VARCHAR',
+        '"__okf_concept_id" VARCHAR',
+        '"__okf_logical_key" VARCHAR',
+        '"__okf_body" VARCHAR',
+        '"__okf_body_lines" VARCHAR[]',
+        '"__okf_frontmatter" VARCHAR',
+    ]
+    for field in plan.fields:
+        if not field.declared:
+            columns.append(f"{_quote_ident(field.name)} VARCHAR")
+            continue
+        raw_name = field.raw_name
+        raw_type = field.raw_sql_type
+        declared_type = field.declared_type
+        if raw_name is None or raw_type is None or declared_type is None:
+            msg = f"declared field {field.name!r} has an incomplete typed-table plan"
+            raise ApplyError(msg)
+        columns.append(f"{_quote_ident(raw_name)} {raw_type}")
+        columns.append(
+            f"{_quote_ident(field.name)} {declared_type.sql} GENERATED ALWAYS AS "
+            f"(TRY_CAST({_quote_ident(raw_name)} AS {declared_type.sql})) VIRTUAL"
+        )
+    return f"CREATE TEMP TABLE {_quote_ident(plan.concept_type)} ({', '.join(columns)})"
+
+
+def _typed_insert_columns(plan: TypedTablePlan) -> tuple[str, ...]:
+    columns = [
+        "__okf_path",
+        "__okf_concept_id",
+        "__okf_logical_key",
+        "__okf_body",
+        "__okf_body_lines",
+        "__okf_frontmatter",
+    ]
+    for field in plan.fields:
+        if field.declared:
+            if field.raw_name is None:
+                msg = f"declared field {field.name!r} has no raw carrier"
+                raise ApplyError(msg)
+            columns.append(field.raw_name)
+        else:
+            columns.append(field.name)
+    return tuple(columns)
+
+
+def _typed_row_values(concept: _Concept, plan: TypedTablePlan) -> tuple[object, ...]:
+    frontmatter = cast("Mapping[str, Any]", concept.frontmatter)
+    values: list[object] = [
+        concept.relative,
+        concept.concept_id,
+        concept.concept_id,
+        concept.body,
+        concept.body.splitlines(),
+        concept.raw.frontmatter_text,
+    ]
+    values.extend(field_input_value(frontmatter, field) for field in plan.fields)
+    return tuple(values)
+
+
+def _build_typed_table(
+    con: IbisConnection,
+    plan: TypedTablePlan,
+    concepts: Sequence[_Concept],
+) -> None:
+    native = con.raw_sql(_typed_table_ddl(plan))
+    columns = _typed_insert_columns(plan)
+    rows = [_typed_row_values(concept, plan) for concept in concepts]
+    if not rows:
+        return
+    column_sql = ", ".join(_quote_ident(name) for name in columns)
+    placeholders = ", ".join("?" for _ in columns)
+    native.executemany(
+        f"INSERT INTO {_quote_ident(plan.concept_type)} ({column_sql}) VALUES ({placeholders})",
+        rows,
+    )
+
+
 def _build_table(
     con: IbisConnection,
     table_name: str,
@@ -390,9 +479,15 @@ class _MaterializeResult:
     fields_by_type: dict[str, list[str]]
     concepts_by_type: dict[str, list[_Concept]]
     structured_by_type: dict[str, frozenset[str]]
+    declared_by_type: dict[str, frozenset[str]]
+    protected_by_type: dict[str, frozenset[str]]
 
 
-def _materialize(con: IbisConnection, concepts: Sequence[_Concept]) -> _MaterializeResult:
+def _materialize(
+    con: IbisConnection,
+    concepts: Sequence[_Concept],
+    declarations: Mapping[str, DeclaredSchema],
+) -> _MaterializeResult:
     """Build one table per type inside the script's catalog; return its field names.
 
     No pre-mutation snapshot is created as a table here: a real `type` could be
@@ -407,36 +502,70 @@ def _materialize(con: IbisConnection, concepts: Sequence[_Concept]) -> _Material
 
     fields_by_type: dict[str, list[str]] = {}
     structured_by_type: dict[str, frozenset[str]] = {}
+    declared_by_type: dict[str, frozenset[str]] = {}
+    protected_by_type: dict[str, frozenset[str]] = {}
     for type_name, type_concepts in sorted(by_type.items()):
         kinds = _field_kinds(type_concepts)
-        # Checked against every authored key, not just the scalar-writable
-        # ones: a structured key under the reserved prefix is just as much a
-        # collision, even though it never becomes a column at all.
         _check_reserved_field_names(type_name, [*kinds.scalar, *kinds.structured])
+        declaration = declarations.get(type_name)
+        declared_names: frozenset[str] = frozenset()
+        protected = _PROTECTED_COLUMNS
         try:
-            _build_table(con, type_name, kinds.scalar, type_concepts)
+            if declaration is None:
+                _build_table(con, type_name, kinds.scalar, type_concepts)
+                public_fields = kinds.scalar
+                structured = kinds.structured
+            else:
+                plan = compile_typed_table_plan(
+                    type_name,
+                    [cast("Mapping[str, Any]", concept.frontmatter) for concept in type_concepts],
+                    declaration,
+                )
+                _build_typed_table(con, plan, type_concepts)
+                public_fields = [field.name for field in plan.fields]
+                declared_names = frozenset(field.name for field in plan.fields if field.declared)
+                declared_keys = {duckdb_identifier_key(name) for name in declared_names}
+                structured = frozenset(
+                    name
+                    for name in kinds.structured
+                    if duckdb_identifier_key(name) not in declared_keys
+                )
+                raw_names = {
+                    field.raw_name
+                    for field in plan.fields
+                    if field.declared and field.raw_name is not None
+                }
+                protected = frozenset({*_PROTECTED_COLUMNS, *raw_names})
         except duckdb.CatalogException as exc:
             msg = (
                 f'type "{type_name}" collides with another type under DuckDB '
                 f"identifier equality: {exc}"
             )
             raise ApplyError(msg) from exc
-        # Defense in depth, not a re-implementation of DuckDB's folding rules:
-        # verify the catalog actually stored exactly the columns intended,
-        # in case DuckDB ever silently dedups or renames on its own.
-        created = set(_describe(con, type_name)) - _PROTECTED_COLUMNS
-        if created != set(kinds.scalar):
+        except TypedTableError as exc:
             msg = (
-                f'type "{type_name}" columns were not stored as authored: '
-                f"expected {sorted(kinds.scalar)}, got {sorted(created)}"
+                f'type "{type_name}" could not be materialized under DuckDB identifier '
+                f"semantics: {exc}"
+            )
+            raise ApplyError(msg) from exc
+
+        created = set(_describe(con, type_name)) - protected
+        if created != set(public_fields):
+            msg = (
+                f'type "{type_name}" columns were not stored as planned: '
+                f"expected {sorted(public_fields)}, got {sorted(created)}"
             )
             raise ApplyError(msg)
-        fields_by_type[type_name] = kinds.scalar
-        structured_by_type[type_name] = kinds.structured
+        fields_by_type[type_name] = public_fields
+        structured_by_type[type_name] = structured
+        declared_by_type[type_name] = declared_names
+        protected_by_type[type_name] = protected
     return _MaterializeResult(
         fields_by_type=fields_by_type,
         concepts_by_type=by_type,
         structured_by_type=structured_by_type,
+        declared_by_type=declared_by_type,
+        protected_by_type=protected_by_type,
     )
 
 
@@ -462,7 +591,7 @@ def _snapshot_types(
     return {
         type_name: _TypeSnapshot(
             schema=_describe(con, type_name),
-            table=ibis.memtable(con.table(type_name).execute()),
+            table=ibis.memtable(con.table(type_name).to_pyarrow()),
         )
         for type_name in fields_by_type
     }
@@ -534,7 +663,11 @@ def _fetch_rows(con: IbisConnection, table: str) -> dict[str, dict[str, object]]
 
 
 def _check_alter_shape(
-    before: dict[str, dict[str, str]], after: dict[str, dict[str, str]], query: str
+    before: dict[str, dict[str, str]],
+    after: dict[str, dict[str, str]],
+    query: str,
+    declared_by_type: Mapping[str, frozenset[str]],
+    protected_by_type: Mapping[str, frozenset[str]],
 ) -> tuple[str, str, str] | None:
     """Reject any ALTER whose catalog delta isn't a single add/drop/rename column.
 
@@ -570,9 +703,30 @@ def _check_alter_shape(
     if not (is_add or is_drop or is_rename):
         msg = f"ALTER statement must add, drop, or rename exactly one column: {query}"
         raise ApplyError(msg)
+
+    protected_keys = {
+        duckdb_identifier_key(name) for name in protected_by_type.get(type_name, frozenset())
+    }
+    changed_keys = {duckdb_identifier_key(name) for name in removed | added}
+    if protected_keys & changed_keys:
+        msg = f"ALTER statement touched a compiler-owned protected column: {query}"
+        raise ApplyError(msg)
+
+    declared_keys = {
+        duckdb_identifier_key(name) for name in declared_by_type.get(type_name, frozenset())
+    }
+    if is_add and declared_keys & {duckdb_identifier_key(name) for name in added}:
+        msg = f"ALTER statement cannot add a field still owned by the declaration: {query}"
+        raise ApplyError(msg)
     if is_rename:
         (old_name,) = removed
         (new_name,) = added
+        if (
+            duckdb_identifier_key(old_name) in declared_keys
+            or duckdb_identifier_key(new_name) in declared_keys
+        ):
+            msg = f"ALTER statement cannot rename a declared field: {query}"
+            raise ApplyError(msg)
         return (type_name, old_name, new_name)
     return None
 
@@ -582,6 +736,8 @@ def _run_transaction(
     type_names: Sequence[str],
     alter_queries: list[str],
     update_query: str,
+    declared_by_type: Mapping[str, frozenset[str]],
+    protected_by_type: Mapping[str, frozenset[str]],
 ) -> tuple[frozenset[str], dict[str, dict[str, str]]]:
     """Run the script; return selected concept IDs and the rename chain, per type.
 
@@ -611,7 +767,13 @@ def _run_transaction(
             before = {t: _describe(con, t) for t in type_names}
             con.raw_sql(query)
             after = {t: _describe(con, t) for t in type_names}
-            rename = _check_alter_shape(before, after, query)
+            rename = _check_alter_shape(
+                before,
+                after,
+                query,
+                declared_by_type,
+                protected_by_type,
+            )
             if rename is not None:
                 type_name, old_name, new_name = rename
                 type_renamed = renamed_by_type.setdefault(type_name, {})
@@ -688,11 +850,14 @@ def _type_of_selected(
 
 
 def _check_result_schema(
-    after_schema: dict[str, str], before_schema: dict[str, str], structured: frozenset[str]
+    after_schema: dict[str, str],
+    before_schema: dict[str, str],
+    structured: frozenset[str],
+    protected: frozenset[str],
 ) -> None:
     after_cols = set(after_schema)
     before_cols = set(before_schema)
-    missing_protected = _PROTECTED_COLUMNS - after_cols
+    missing_protected = protected - after_cols
     if missing_protected:
         msg = f"script removed protected columns: {sorted(missing_protected)}"
         raise ApplyError(msg)
@@ -726,7 +891,7 @@ def _check_result_schema(
             raise ApplyError(msg)
 
 
-def _check_result_rows(before: ibis.Table, after: ibis.Table) -> None:
+def _check_result_rows(before: ibis.Table, after: ibis.Table, protected: frozenset[str]) -> None:
     """Row identity/cardinality and protected-column tamper checks, via Ibis.
 
     `before` is a detached `ibis.memtable`, `after` a live view of the
@@ -745,7 +910,7 @@ def _check_result_rows(before: ibis.Table, after: ibis.Table) -> None:
         after_aliased,
         before["__okf_concept_id"] == after_aliased["__okf_concept_id__after"],
     )
-    for column in sorted(_PROTECTED_COLUMNS):
+    for column in sorted(protected):
         # column is one of the fixed _PROTECTED_COLUMNS names, not caller input.
         tampered = joined.filter(~joined[column].identical_to(joined[f"{column}__after"]))
         row = tampered.select("__okf_concept_id").limit(1).execute()
@@ -801,6 +966,7 @@ def _compile_row_diff(  # each argument is a distinct compile input.
     removed_columns: frozenset[str],
     renamed_from: dict[str, str],
     after_row: dict[str, object],
+    read_only_fields: frozenset[str],
     *,
     selected: bool,
 ) -> dict[str, str | None]:
@@ -832,6 +998,8 @@ def _compile_row_diff(  # each argument is a distinct compile input.
         if name in removed_columns:
             if name in concept.frontmatter:
                 diff[name] = None
+            continue
+        if name in read_only_fields:
             continue
         origin = renamed_from.get(name)
         if origin is not None:
@@ -867,7 +1035,12 @@ def _execute_script(
     """
     snapshots = _snapshot_types(con, materialized.fields_by_type)
     selected_ids, renamed_by_type = _run_transaction(
-        con, list(materialized.fields_by_type), alter_queries, update_query
+        con,
+        list(materialized.fields_by_type),
+        alter_queries,
+        update_query,
+        materialized.declared_by_type,
+        materialized.protected_by_type,
     )
 
     touched = _find_touched_type(con, snapshots)
@@ -885,14 +1058,16 @@ def _execute_script(
 
     after_schema = _describe(con, touched)
     structured = materialized.structured_by_type[touched]
-    _check_result_schema(after_schema, snapshots[touched].schema, structured)
+    protected = materialized.protected_by_type[touched]
+    declared = materialized.declared_by_type[touched]
+    _check_result_schema(after_schema, snapshots[touched].schema, structured, protected)
 
-    _check_result_rows(snapshots[touched].table, con.table(touched))
+    _check_result_rows(snapshots[touched].table, con.table(touched), protected)
 
     after_rows = _fetch_rows(con, touched)
     field_names = materialized.fields_by_type[touched]
-    all_field_names = sorted((set(after_schema) | set(field_names)) - _PROTECTED_COLUMNS)
-    removed_columns = frozenset(snapshots[touched].schema) - set(after_schema) - _PROTECTED_COLUMNS
+    all_field_names = sorted((set(after_schema) | set(field_names)) - protected)
+    removed_columns = frozenset(snapshots[touched].schema) - set(after_schema) - protected
     row_diffs = tuple(
         _RowDiff(concept_id=concept.concept_id, changed_fields=diff)
         for concept in materialized.concepts_by_type[touched]
@@ -903,6 +1078,7 @@ def _execute_script(
                 removed_columns,
                 renamed_from,
                 after_rows[concept.concept_id],
+                declared,
                 selected=concept.concept_id in selected_ids,
             ),
         )
@@ -947,6 +1123,7 @@ def apply_bundle(  # each argument is an independent public CLI flag.
     to_value: str | None = None,
     write: bool = False,
     exclude: Sequence[str] = (),
+    spec_template: str | None = None,
 ) -> dict[str, object]:
     """Mutate frontmatter fields across a bundle, per RFC 0005."""
     root = Path(path).resolve()
@@ -977,10 +1154,17 @@ def apply_bundle(  # each argument is an independent public CLI flag.
             (v.code, v.path, v.message) for v in baseline.violations if v.severity == Severity.ERROR
         }
 
+        declarations = discover_declared_schemas(
+            root,
+            {concept.concept_type for concept in concepts},
+            spec_template,
+        )
         con = ibis.duckdb.connect()
-        materialized = _materialize(con, concepts)
+        if declarations:
+            con.raw_sql("SET TimeZone = 'UTC'")
+        materialized = _materialize(con, concepts, declarations)
         outcome = _execute_script(con, materialized, alter_queries, update_query)
-    except ApplyError as exc:
+    except (ApplyError, DeclaredSchemaError, TypedTableError) as exc:
         return ApplyResult(succeeded=False, error=str(exc)).to_dict()
 
     if outcome.touched_type is None or not outcome.row_diffs:
