@@ -57,8 +57,8 @@ def test_pydantic_source_happy_path_is_deterministic_and_importable(tmp_path: Pa
             "extension": "preserved",
         }
     )
-    assert value.valor == Decimal("12.34")
-    assert value.id_externo == UUID("550e8400-e29b-41d4-a716-446655440000")
+    assert getattr(value, "valor") == Decimal("12.34")
+    assert getattr(value, "id_externo") == UUID("550e8400-e29b-41d4-a716-446655440000")
     assert value.model_extra == {"extension": "preserved"}
 
 
@@ -95,7 +95,7 @@ def test_dynamic_and_source_models_share_automatic_alias_policy(tmp_path: Path) 
                 "customer-id": "value",
             }
         )
-        assert value.private_ == "value"
+        assert getattr(value, "private_") == "value"
         with pytest.raises(ValidationError):
             model.model_validate(
                 {
@@ -119,7 +119,7 @@ def test_optional_non_nullable_accepts_omission_but_rejects_null(tmp_path: Path)
 
     for model in (dynamic, generated):
         omitted = model.model_validate({"type": "Pessoa"})
-        assert omitted.apelido is None
+        assert getattr(omitted, "apelido") is None
         with pytest.raises(ValidationError):
             model.model_validate({"type": "Pessoa", "apelido": None})
 
