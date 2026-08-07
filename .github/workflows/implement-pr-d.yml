@@ -9,6 +9,10 @@ on:
       - main
     types: [opened, synchronize, reopened]
 
+concurrency:
+  group: pr43-typed-apply
+  cancel-in-progress: true
+
 permissions:
   contents: write
 
