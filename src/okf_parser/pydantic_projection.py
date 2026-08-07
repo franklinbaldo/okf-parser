@@ -8,7 +8,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, create_model
@@ -24,7 +24,9 @@ from okf_parser.schema_contract import (
     TypeContract,
     model_name,
 )
-from okf_parser.schema_lexemes import CastKind
+
+if TYPE_CHECKING:
+    from okf_parser.schema_lexemes import CastKind
 
 type FieldDefinition = tuple[Any, Any]
 type StructuralPath = tuple[str, ...]
@@ -240,44 +242,47 @@ class _SourceModel:
     fields: tuple[_SourceField, ...]
 
 
+@dataclass(slots=True)
+class _SourceContext:
+    registry: PydanticModelNameRegistry = field(default_factory=PydanticModelNameRegistry)
+    imports: _SourceImports = field(default_factory=_SourceImports)
+    models: list[_SourceModel] = field(default_factory=list)
+
+
 def _source_scalar(node: ScalarNode, imports: _SourceImports) -> str:
     declared = node.declared_type
     if declared is None:
-        if node.kind == "date":
-            imports.datetime_names.add("date")
-            return "date"
-        if node.kind == "datetime":
-            imports.datetime_names.add("datetime")
-            return "datetime"
-        return {
+        annotation = {
             "string": "str",
             "boolean": "bool",
             "integer": "int",
             "number": "float",
+            "date": "date",
+            "datetime": "datetime",
         }[node.kind]
+    else:
+        annotation = {
+            "string": "str",
+            "boolean": "bool",
+            "integer": "int",
+            "float": "float",
+            "decimal": "Decimal",
+            "date": "date",
+            "timestamp": "datetime",
+            "timestamptz": "datetime",
+            "uuid": "UUID",
+            "unsupported": "Any",
+        }.get(declared.family, "Any")
 
-    family = declared.family
-    if family == "decimal":
+    if annotation in {"date", "datetime"}:
+        imports.datetime_names.add(annotation)
+    elif annotation == "Decimal":
         imports.decimal = True
-        return "Decimal"
-    if family == "uuid":
+    elif annotation == "UUID":
         imports.uuid = True
-        return "UUID"
-    if family == "date":
-        imports.datetime_names.add("date")
-        return "date"
-    if family in {"timestamp", "timestamptz"}:
-        imports.datetime_names.add("datetime")
-        return "datetime"
-    if family == "unsupported":
+    elif annotation == "Any":
         imports.typing_names.add("Any")
-        return "Any"
-    return {
-        "string": "str",
-        "boolean": "bool",
-        "integer": "int",
-        "float": "float",
-    }.get(family, "Any")
+    return annotation
 
 
 def _source_annotation(
@@ -285,29 +290,22 @@ def _source_annotation(
     *,
     suggested_name: str,
     path: StructuralPath,
-    registry: PydanticModelNameRegistry,
-    imports: _SourceImports,
-    models: list[_SourceModel],
+    context: _SourceContext,
 ) -> str:
     if isinstance(node, ScalarNode):
-        annotation = _source_scalar(node, imports)
-        if annotation == "Any":
-            imports.typing_names.add("Any")
-        return annotation
+        return _source_scalar(node, context.imports)
     if isinstance(node, LiteralNode):
-        imports.typing_names.add("Literal")
+        context.imports.typing_names.add("Literal")
         return f"Literal[{json.dumps(node.value, ensure_ascii=False)}]"
     if isinstance(node, AnyNode):
-        imports.typing_names.add("Any")
+        context.imports.typing_names.add("Any")
         return "Any"
     if isinstance(node, ListNode):
         item = _source_annotation(
             node.item,
             suggested_name=f"{suggested_name}Item",
             path=(*path, "[]"),
-            registry=registry,
-            imports=imports,
-            models=models,
+            context=context,
         )
         if node.item_nullable:
             item = f"{item} | None"
@@ -316,9 +314,7 @@ def _source_annotation(
         suggested_name,
         node,
         path=path,
-        registry=registry,
-        imports=imports,
-        models=models,
+        context=context,
     )
     return suggested_name
 
@@ -328,11 +324,9 @@ def _collect_source_model(
     node: ObjectNode,
     *,
     path: StructuralPath,
-    registry: PydanticModelNameRegistry,
-    imports: _SourceImports,
-    models: list[_SourceModel],
+    context: _SourceContext,
 ) -> None:
-    registry.register(name, path)
+    context.registry.register(name, path)
     used: dict[str, str] = {}
     source_fields: list[_SourceField] = []
     for field_contract in node.fields:
@@ -342,14 +336,14 @@ def _collect_source_model(
             field_contract.value,
             suggested_name=nested_name,
             path=(*path, field_contract.name),
-            registry=registry,
-            imports=imports,
-            models=models,
+            context=context,
         )
         if field_contract.nullable:
             annotation = f"{annotation} | None"
-        if mapped.alias is not None or (not field_contract.required and not field_contract.nullable):
-            imports.field = True
+        if mapped.alias is not None or (
+            not field_contract.required and not field_contract.nullable
+        ):
+            context.imports.field = True
         source_fields.append(
             _SourceField(
                 mapped.python_name,
@@ -359,7 +353,7 @@ def _collect_source_model(
                 mapped.alias,
             )
         )
-    models.append(_SourceModel(name, tuple(source_fields)))
+    context.models.append(_SourceModel(name, tuple(source_fields)))
 
 
 def _render_imports(imports: _SourceImports, *, has_models: bool) -> list[str]:
@@ -399,21 +393,17 @@ def _render_field(field_contract: _SourceField) -> str:
 
 def render_pydantic_source(contracts: tuple[TypeContract, ...]) -> str:
     """Render deterministic importable Pydantic v2 source from shared contracts."""
-    registry = PydanticModelNameRegistry()
-    imports = _SourceImports()
-    models: list[_SourceModel] = []
+    context = _SourceContext()
     for contract in contracts:
         _collect_source_model(
             contract.model_name,
             contract.root,
             path=(contract.concept_type,),
-            registry=registry,
-            imports=imports,
-            models=models,
+            context=context,
         )
 
-    lines = _render_imports(imports, has_models=bool(models))
-    for model in models:
+    lines = _render_imports(context.imports, has_models=bool(context.models))
+    for model in context.models:
         lines.extend(["", "", f"class {model.name}(BaseModel):"])
         lines.append('    model_config = ConfigDict(extra="allow")')
         if model.fields:
