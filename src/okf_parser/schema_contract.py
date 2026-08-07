@@ -192,7 +192,7 @@ def _compile_value(
     if all(isinstance(value, list) for value in non_null):
         items = [item for value in non_null for item in cast("list[object]", value)]
         return ListNode(
-            item=_compile_value(items, path=path, options=options, concept_type=concept_type),
+            item=_compile_value(items, path=path, options=options, concept_type=None),
             item_nullable=any(item is None for item in items),
         )
 
@@ -215,6 +215,8 @@ def _compile_object(
     keys = {key for document in documents for key in document}
     if concept_type is not None:
         keys.update(("type", "title", "description"))
+        if not parent_path:
+            keys.update(options.declared_by_type.get(concept_type, {}))
 
     fields: list[FieldContract] = []
     for name in sorted(keys):

@@ -88,6 +88,11 @@ def _duckdb_type_kind(duckdb_type: str) -> CastKind | None:
     return _DUCKDB_TYPE_KINDS.get(normalized)
 
 
+def _duckdb_identifier_key(identifier: str) -> str:
+    """Fold ASCII letters the same way DuckDB resolves quoted identifiers."""
+    return "".join(chr(ord(char) + 32) if "A" <= char <= "Z" else char for char in identifier)
+
+
 def parse_declared_schema(sql_text: str, concept_type: str) -> DeclaredSchema:
     """Run a `.schema.sql` script whole, then check only its post-condition.
 
@@ -96,11 +101,11 @@ def parse_declared_schema(sql_text: str, concept_type: str) -> DeclaredSchema:
     decide what it means and in what order its statements run; nothing here
     re-derives or restricts that. Afterward, the connection's own catalog
     (`duckdb_tables()`, `duckdb_columns()`) must show exactly one
-    non-temporary table named for `concept_type` - table name is the type's
-    identity (decision 3), so a script that produced zero, two, or a
-    differently-named table has not declared this type, regardless of how
-    it tried. Any other table the script created (a staging table, a join
-    source) is simply not looked at.
+    non-temporary table whose identifier resolves as `concept_type` - table
+    identity follows DuckDB's ASCII case-insensitive identifier semantics,
+    while the authored spelling read back from the catalog is preserved.
+    Any other table the script created (a staging table, a join source) is
+    simply not looked at.
     """
     con = duckdb.connect()
     try:
@@ -110,23 +115,27 @@ def parse_declared_schema(sql_text: str, concept_type: str) -> DeclaredSchema:
             message = f"declared schema script failed: {exc}"
             raise DeclaredSchemaError(message) from exc
 
-        tables = con.execute(
-            "SELECT table_name, comment FROM duckdb_tables() "
-            "WHERE table_name = ? AND NOT temporary",
-            [concept_type],
+        catalog_tables = con.execute(
+            "SELECT database_oid, schema_oid, table_oid, table_name, comment "
+            "FROM duckdb_tables() WHERE NOT temporary"
         ).fetchall()
+        expected_key = _duckdb_identifier_key(concept_type)
+        tables = [
+            row for row in catalog_tables if _duckdb_identifier_key(str(row[3])) == expected_key
+        ]
         if not tables:
             message = f"declared schema script did not leave behind a table named {concept_type!r}"
             raise DeclaredSchemaError(message)
         if len(tables) > 1:
             message = f"declared schema script left more than one table named {concept_type!r}"
             raise DeclaredSchemaError(message)
-        table_name, table_comment = tables[0]
+        database_oid, schema_oid, table_oid, table_name, table_comment = tables[0]
 
         columns = con.execute(
             "SELECT column_name, data_type, comment FROM duckdb_columns() "
-            "WHERE table_name = ? ORDER BY column_index",
-            [table_name],
+            "WHERE database_oid = ? AND schema_oid = ? AND table_oid = ? "
+            "ORDER BY column_index",
+            [database_oid, schema_oid, table_oid],
         ).fetchall()
     finally:
         con.close()
