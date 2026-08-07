@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - feat/typed-duckdb-materialization
+  pull_request:
+    branches:
+      - main
+    types: [synchronize]
 
 concurrency:
   group: pr38-rfc-cleanup
@@ -14,7 +18,7 @@ permissions:
 
 jobs:
   cleanup:
-    if: github.actor != 'github-actions[bot]'
+    if: (github.head_ref == 'feat/typed-duckdb-materialization' || github.ref_name == 'feat/typed-duckdb-materialization') && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
