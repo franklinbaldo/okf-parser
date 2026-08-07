@@ -1,8 +1,8 @@
 ---
 type: RFC
 title: Declared column types for concept tables
-status: proposed
-description: Let an optional DuckDB DDL file sitting beside a type's specification document declare that type's physical column types and catalog comments, compiled into every relational surface, advisory in every direction and never a block
+status: accepted
+description: Let an optional trusted DuckDB SQL file beside a type specification declare physical column types, compiled consistently into schema export, persistent DuckDB, and apply
 ---
 
 # RFC 0006: Declared column types for concept tables
@@ -43,15 +43,16 @@ Declaration buys **typed intent without sacrificing source fidelity**. A
 declared field stays typed even when individual rows diverge: DuckDB's
 `TRY_CAST` is applied per value, and an incompatible value becomes `NULL`
 only in the typed projection while the raw carrier remains available. One
-bad document never widens the whole column back to `VARCHAR`. Divergence is
-advisory by default (decisions 5 and 8).
+bad document never widens the whole column back to `VARCHAR`. Value divergence
+is represented in data, not as a second control plane: the typed projection is
+`NULL` for that row and the raw carrier remains available (decisions 5 and 8).
 
 v1 reads column names, normalized logical types, and comments from the
 declaration catalog. Constraints are not read. `schema` exports the lossless
-type IR; persistent `duckdb` materializes raw plus typed snapshot columns;
-`apply` is the remaining integration step and will use the same projection as
-a generated read-only column (decision 7a). Nothing writes back into the
-declaration file (deferred to RFC 0007).
+type IR; persistent `duckdb` materializes raw plus stored typed snapshots; and
+`apply` materializes the same logical pair with a generated read-only typed
+projection (decision 7a). Nothing writes back into the declaration file
+(deferred to RFC 0007).
 
 **A declared column is never the only copy of a document's data.** The
 compiler keeps a raw carrier beside the typed projection — `VARCHAR` for a
@@ -76,19 +77,27 @@ Three things are missing at once, and one file supplies all three:
   `VARCHAR` column is a lexicographic comparison that happens to work for
   ISO-8601 and silently misbehaves for anything else. Declared `TIMESTAMPTZ`
   makes it a real comparison.
-- **Drift detection.** A declared type is a checkable claim. When a document
-  starts carrying `"n/a"` in an integer field, something should say so —
-  today nothing can, because nothing was ever claimed.
+- **Drift visibility.** A declared type is a checkable claim. When a document
+  starts carrying `"n/a"` in an integer field, the typed projection and raw
+  carrier make the mismatch queryable instead of silently changing the column's
+  physical meaning.
 - **Documentation in the catalog.** The prose describing a field lives in a
   Markdown body that no relational consumer reads. `COMMENT ON` puts it
   where a SQL client will actually show it.
 
 ## Relationship to RFC 0005
 
-Purely additive. RFC 0005's compilation is the fallback path and stays the
-behaviour for every type that does not opt in, and the behaviour any
-single column falls back *to* when its declaration doesn't hold. This RFC
-adds no new command and no new required field.
+Purely additive. A type with no declaration follows RFC 0005 unchanged. When a
+valid declaration exists, its public fields gain typed projections while authored
+source values remain available through compiler-owned raw carriers. A malformed
+or ambiguous declaration is an invocation error on surfaces that were explicitly
+asked to discover declarations; it is not silently reinterpreted as an absent
+declaration. Value-level cast failure is different: it never rejects the bundle or
+widens the column, because decision 5 represents it as typed `NULL` plus preserved
+raw input.
+
+This RFC adds no required bundle field and does not change runs that omit
+`--spec-template`.
 
 ## Decision
 
@@ -111,26 +120,21 @@ and makes the declaration's location computable from it. A type with a
 specification document and no `.schema.sql` beside it is a type that did
 not opt in — not a diagnostic.
 
-**Two types can still derive the same path, and this RFC diagnoses it
-rather than pretending otherwise.** `type_slug()` is deliberately not
-injective — it strips accents and case — and RFC 0005 documents the exact
-counterexample: `"Revisao Ciencia"` and `"Revisão Ciência"` both slug to
-`revisao-ciencia`. So two distinct types can point at one `.schema.sql`.
-That is a **derived-path collision**: an advisory diagnostic naming both
-types and the shared file, and *neither* type gets a declaration — both
-fall back to RFC 0005 compilation (decision 7's whole-declaration
-fallback). Silently letting one type's declaration govern another's table
-would be the one outcome worse than not typing either.
+**Two types can still derive the same path, and this RFC rejects the
+ambiguity rather than guessing.** `type_slug()` is deliberately not injective —
+it strips accents and case — and RFC 0005 documents the exact counterexample:
+`"Revisao Ciencia"` and `"Revisão Ciência"` both slug to `revisao-ciencia`.
+When two types resolve to one declaration path, declaration discovery raises an
+explicit error naming the shared path and owners. Neither type is allowed to
+borrow the other's declaration.
 
-**The template must reach every surface.** `--require-spec` is currently
-`check`'s alone (`cli.py`, `service.py`), so `apply`, `duckdb`, and
-`schema` have no way to derive anything today. This RFC adds the same
-template option, under the name `--spec-template`, to all four commands and
-to their MCP equivalents; `check --require-spec` keeps its current name and
-meaning (existence enforcement) and, when both are given, they must agree
-or it is an operator error. A command run without a template performs no
-declaration discovery at all — RFC 0005 behaviour throughout, no
-diagnostics, which is what makes this opt-in at the invocation level too.
+**The template reaches the surfaces that actually consume declarations.**
+`schema`, `duckdb`, and `apply` accept `--spec-template`; `init` uses the same
+template to scaffold narrative specs and optionally starter declarations.
+`check --require-spec` remains a separate existence rule for specification
+documents and does not execute `.schema.sql`. A relational command run without
+`--spec-template` performs no declaration discovery at all, which preserves RFC
+0005 behaviour and keeps execution of trusted SQL explicitly opt-in.
 
 ### 2. The contract is DuckDB's own SQL, executed whole and checked by post-condition
 
@@ -172,12 +176,14 @@ After the script runs:
     at further.
 ```
 
-A script that fails to execute, or whose catalog afterward holds zero,
-two, or a differently-named table for the type, is a **malformed
-declaration**: advisory diagnostic, and that type compiles exactly as if
-no declaration existed (decision 7). Everything else about *how* the
-table came to exist — one `CREATE TABLE`, a CTAS over a `read_csv`, a
-chain of temp tables joined together — is invisible past that check.
+A script that fails to execute, or whose catalog afterward does not expose
+the required table identity, is a **malformed declaration** and the consuming
+command fails explicitly. The caller opted into executing a declaration; silently
+treating a broken file as if it were absent would hide authoring mistakes and make
+the same bundle compile differently depending on whether anyone noticed an
+advisory message. Everything else about *how* the table came to exist — one
+`CREATE TABLE`, a CTAS over a `read_csv`, or staging tables joined together — is
+invisible past the catalog post-condition.
 
 ```sql
 -- All three are equally valid declarations for `Rotina`.
@@ -212,24 +218,21 @@ Consequences worth stating, because they are the reason for this choice:
   whitespace, case, and every type spelling DuckDB accepts are parsed by
   DuckDB. This removes the *grammar*, not the *semantics*: decision 5a
   still names a closed set of types v1 knows how to cast and export, and a
-  declaration is free to use a type outside it (the declaration stays
-  well-formed; that one column simply isn't typed).
+  declaration may use a type outside the first target-mapped families; its
+  normalized DuckDB spelling still survives in the lossless IR, and each target
+  decides how much of that physical type it can represent truthfully.
 - **No new dependency.** DuckDB is already a hard dependency; nothing else
   is needed to read a declaration. (The JSON Schema alternative required
   adopting a Draft 2020-12 meta-schema validator.)
 - **DuckDB's own normalized catalog is the one intermediate representation,
   not the declaration's source text.** What materializes on `apply`'s
   ephemeral table and `duckdb`'s persistent one is never the declaration
-  script's `CREATE TABLE` re-run verbatim — it is a *different*
-  `CREATE TABLE` the compiler synthesizes, one raw `VARCHAR`/`VARCHAR[]`
-  column and one generated column per declared field, built from the name
-  and type this decision's post-condition read out of the resulting
-  table's catalog entry. The declaration is authoritative for *name* and
-  *type*; the physical table shape is the compiler's, always. This is a
-  translation with exactly one well-specified input (a `(name, type)` pair
-  per column) and one well-specified output (decision 5's pair) — narrow
-  enough that "cannot drift" still holds, regardless of how elaborate the
-  script that produced the input was.
+  script's `CREATE TABLE` re-run verbatim. Both consumers compile the same
+  raw-plus-typed logical plan from catalog `(name, type)` pairs: `apply`
+  realizes the typed side as a virtual generated projection, while persistent
+  `duckdb` stores it as an ordinary snapshot column. The declaration is
+  authoritative for public name and physical type; consumer-specific storage
+  remains compiler-owned.
 - **The answer to "why SQL instead of JSON Schema" gets stronger, not
   weaker.** It stops being only "DuckDB validates the type names" and
   becomes "the declaration can be a complete, executable, introspectable
@@ -378,161 +381,91 @@ that cannot faithfully represent that family emits no invented standard type.
 
 ### 5b. Declared, undeclared, and unobserved columns
 
-A declaration and the observed documents will not agree on the column set,
-and each direction has one rule:
+A declaration and the observed documents need not agree on the column set:
 
 - **declared and observed** — typed per decision 5;
-- **declared, never observed in any document** — the column exists in the
-  materialized table, typed as declared, holding `NULL` in every row. A
-  declaration is a statement of intent (decision 9); a field no document
-  has filled in yet is exactly the case where that intent is the only
-  information available. No diagnostic: not yet used is not an error;
-- **observed, not declared** — the column exists, `VARCHAR`, as RFC 0005
-  compiles it today, plus one advisory diagnostic per undeclared field.
-  A declaration is not a closed-world schema: it never suppresses data.
-  The diagnostic exists because a field nobody declared is usually either
-  a typo or a schema that has moved on, and both are worth seeing.
+- **declared, never observed** — the public column still exists with its declared
+  DuckDB type and is `NULL` for every row; declaration is producer intent, not a
+  summary of only today's populated keys;
+- **observed, not declared** — scalar fields remain ordinary `VARCHAR` columns, as
+  RFC 0005 already compiles them. A declaration is not a closed-world schema and
+  never suppresses authored data. Structured undeclared values remain outside
+  `apply`'s writable scalar namespace under RFC 0005's existing rule.
 
-Two names that collide under DuckDB's case-insensitive identifier equality
-(`custo` declared, `Custo` observed) are the same column, and the declared
-spelling is the one the table uses. Two *declared* columns colliding that
-way cannot happen — DuckDB rejects the `CREATE TABLE` itself, so it lands
-in decision 2's malformed-declaration path.
+Two names that collide under DuckDB's case-insensitive identifier equality are one
+column; the declared spelling is canonical when one side is declared. Two declared
+columns that collide are rejected by DuckDB while executing the declaration.
 
-RFC 0005's reserved columns — the `__okf_` prefix `apply` already refuses
-to let a document author use (`apply.py:_check_reserved_field_names`) —
-are outside a declaration's reach: declaring one is an advisory diagnostic
-and that entry is ignored. They keep the shape RFC 0005 gives them.
+Compiler-owned `__okf_` names are outside the public declared field set. A
+`.schema.sql` entry under that prefix is ignored when the public typed plan is
+built; those names remain owned by the compiler.
 
-### 6. Comments: the declaration is canonical, existing comments are never destroyed
+### 6. Comments: persistent catalog metadata follows the declaration
 
-`COMMENT ON TABLE`/`COMMENT ON COLUMN` in the declaration are re-issued
-against every table this RFC materializes — `apply`'s ephemeral table and
-`duckdb`'s output alike.
+`COMMENT ON TABLE` and `COMMENT ON COLUMN` are read from the declaration catalog.
+Persistent `duckdb` re-applies declared comments to `{schema}_types` so SQL clients
+see the authored documentation next to the typed snapshot. On explicit overwrite,
+an existing comment for which the declaration supplies no replacement is preserved
+rather than silently destroyed.
 
-Two rules govern what happens to comments already present in a persistent
-target:
+`apply` does not materialize comments into its ephemeral catalog: comments do not
+affect filtering, mutation, or writeback, and that database disappears at the end
+of the invocation. `schema` currently consumes declared physical types, not catalog
+comments, so this RFC does not claim a description mapping that the exporters do
+not implement.
 
-- a comment the declaration **does** specify is overwritten by the
-  declaration's text: the file is canonical, and a materialization is a
-  recompilation, not a merge;
-- a comment the declaration **does not** specify, on a table or column that
-  already carries one, is **preserved, never dropped**, and reported as an
-  advisory diagnostic ("catalog comment not declared"). Prose that exists
-  outside the declaration is information; silently deleting it on the next
-  run would be the worst possible handling of it.
+Comments do not enter `apply`'s bounded `--sql` grammar. Declaration prose is edited
+in `.schema.sql`; Git remains the history mechanism. Declaration/comment writeback
+is deferred to RFC 0007.
 
-Comments do **not** enter `apply`'s `--sql` grammar. RFC 0005's script
-shape (leading `ALTER TABLE`s, one trailing `UPDATE`) is unchanged; a
-comment is edited by editing the declaration file, which is no heavier.
+### 7. Declaration failure and value divergence are different contracts
 
-**Comment history is explicitly out of scope.** The declaration is a
-version-controlled file, so git already holds every previous wording with
-its author and date; encoding a second history inside the artifact would
-duplicate that badly. If a need for in-artifact provenance emerges, it is
-its own RFC (see Open questions).
+There is no advisory-fallback state machine in v1.
 
-### 7. Divergence is advisory, and "advisory" names a defined fallback
+- **No declaration file** is normal opt-out: RFC 0005 behaviour applies.
+- **A declaration was requested but cannot be discovered, read, executed, or matched
+  to its concept type** is an explicit command error. Derived-path collisions are
+  errors for the same reason: there is no unambiguous declaration to compile.
+- **A valid declaration meets a value that DuckDB cannot cast** is data, not a
+  declaration failure. `TRY_CAST` yields typed `NULL` for that row while the raw
+  carrier remains unchanged; the public column keeps its declared type.
+- **An export target has a smaller vocabulary than DuckDB** is target-local. The
+  lossless DuckDB type stays in the IR/metadata and the target emits only semantics
+  it can state truthfully.
 
-No declaration failure and no data divergence ever rejects a bundle,
-blocks a table, or suppresses an export. Saying so is not enough on its
-own — what actually compiles when a declaration is broken has to be
-settled, or two implementations can legitimately disagree. Two degrees of
-fallback, and only two:
+This separation deliberately avoids a second diagnostics protocol in the core type
+contract. Strict domain validation, quality reports, or richer drift diagnostics can
+be layered on top of raw-versus-typed data later without changing what a declaration
+means.
 
-- **whole-declaration fallback**, when nothing about the file's content can
-  be localized: unreadable file, a statement shape decision 2 rejects, a
-  DuckDB syntax error, or a table name that doesn't match (decision 3).
-  The type compiles **exactly as it would with no declaration at all** —
-  RFC 0005's `VARCHAR` inference in `apply`/`duckdb`, `schema`'s existing
-  inferred/cast output — and one diagnostic names the file and the reason.
-- **data divergence has no schema fallback**. When the declaration is
-  well-formed but one value does not cast (decision 5), only that row's typed
-  projection is `NULL`; its raw carrier remains available, the column stays
-  declared, and the comment still applies;
-- **target capability is local to the target**. A DuckDB physical type that a
-  JSON/Zod exporter cannot standardize remains representable by the DuckDB
-  materializer using its catalog spelling; narrower exporters keep the exact
-  type in metadata rather than inventing a false standard type (decisions 5a
-  and 10).
+### 7a. `apply`: typed columns are generated and read-only
 
-Enumerated, the cases that reach each: whole-declaration fallback takes an
-unreadable file, a script that fails to execute, a post-condition decision
-2 rejects (zero, two, or a differently-named table left behind — decision
-3's identity check), and a derived-path collision (decision 1, both
-types). Failing-cast fallback
-no longer has a failing-cast branch: row-level `TRY_CAST` owns data
-divergence. Target-specific representation limits are handled by each exporter,
-not by degrading the DuckDB materialization. A declared reserved column
-(decision 5b) remains outside the public typed field set. Undeclared observed
-fields and undeclared catalog comments do not degrade any declaration.
+`apply --spec-template` materializes declared fields as a compiler-owned raw carrier
+plus a DuckDB `GENERATED ... VIRTUAL` public projection using `TRY_CAST`. This makes
+real typed predicates available inside the existing RFC 0005 SQL surface while
+leaving authored YAML text as the writeback source of truth.
 
-Every case resolves to "ignore the unusable part, compile the rest exactly
-as declared," never to a hard failure and never to discarding more than
-the one thing that broke.
+DuckDB itself rejects direct `UPDATE` assignment to a generated public field. The
+raw carrier is an ordinary physical column, so `apply` extends its dynamic protected
+column set with every `__okf_raw_<field>` and rejects attempts to mutate or reshape
+those compiler-owned columns.
 
-### 7a. `apply`: typed columns are read-only because they are generated columns
+Schema operations follow the public field contract:
 
-`apply` compiles declarations like every other surface — a declared
-`TIMESTAMPTZ` column is a real `TIMESTAMPTZ` in the ephemeral table, so
-`WHERE registrado_em > NOW() - INTERVAL 30 DAY` finally means what it says.
-That is where most of the value is, and it is available immediately.
+- renaming a declared public field is rejected; changing its name belongs in the
+  declaration;
+- re-adding a name still owned by the declaration is rejected;
+- dropping a declared public field is allowed as a logical field deletion for that
+  invocation. The generated public column disappears, the internal raw carrier
+  remains protected, and writeback removes the authored frontmatter key. The
+  declaration file itself is unchanged, so a later run will still know that field's
+  declared type if it reappears;
+- ordinary RFC 0005 ADD/DROP/RENAME operations on undeclared scalar fields remain
+  available. Verified against DuckDB 1.5.5, `ALTER ... ADD COLUMN` works on a table
+  that also contains virtual generated columns.
 
-Two review rounds tried to enforce "typed columns aren't writable" as a
-guard `apply` runs — first a schema-level check that didn't see a value
-change behind a stable type, then a proposed row-level `before`/`after`
-equality check to replace it. Decision 5 removes the need for either: the
-declared column **is a DuckDB generated column** now, computed from the
-hidden raw column, and DuckDB itself refuses to write to it:
-
-```text
-UPDATE t SET custo = 5
-  -> Binder Error: Can't update column "custo" because it is a generated column!
-```
-
-verified on 1.5.5. `apply`'s trailing `UPDATE` reaches this as an ordinary
-DuckDB error from `extract_statements()`/execution, the same way any other
-malformed `--sql` script fails today — no new check to write, no
-before/after comparison, nothing that could itself have a gap.
-
-That protects the generated column; it says nothing about the raw column
-behind it, which is an ordinary writable column until decision 5's
-protected-column rule is applied — `UPDATE t SET __okf_raw_custo = '5'`
-is not blocked by anything DuckDB does automatically, verified. Decision
-5 covers exactly that gap by extending `apply`'s existing
-`_PROTECTED_COLUMNS` set to include every `__okf_raw_<field>` for the
-run's duration; a script naming one is rejected the same way one naming
-`__okf_path` already is. Read-only, for a declared field, means both
-columns are closed to `--sql`, not only the one DuckDB happens to guard
-by itself.
-
-**`RENAME COLUMN` on a typed column is rejected outright, not because the
-guard above doesn't reach it, but because it targets the wrong column.**
-`ALTER TABLE "Rotina" RENAME COLUMN custo TO valor` would rename the
-generated column, not the raw one behind it — the renamed column stays
-computed from `__okf_raw_custo`, which is now orphaned from the name the
-caller intended to keep. `apply` rejects a `RENAME COLUMN` whose source
-name is a declared column, naming the declaration. A caller who wants the
-rename edits the declaration file and, until RFC 0007 gives that edit a
-writeback path, removes the field from the declaration first (dropping it
-to plain `VARCHAR`, which *is* the raw text and *is* renameable) before
-renaming it through `apply`.
-
-**`DROP COLUMN` on a typed column drops both.** DuckDB's own generated
-column semantics mean dropping `custo` requires dropping
-`__okf_raw_custo` too, or the generated column's source disappears
-underneath it; `apply` drops the pair in one statement and its writeback
-(RFC 0005's existing mechanism) reflects the field as removed, same as
-dropping any other column today.
-
-A declaration makes a column `apply`-readable. Making it also
-`apply`-writable needs a canonical YAML serialization per type, decided
-value by value — whether `12.34` becomes `12.3400` or `12.34`, how a typed
-`NULL` relates to the absence/`null` distinction RFC 0005 maintains, what
-a quoted-by-the-author value does — which is the same problem RFC 0007
-already owns for declaration writeback. Read-only in v1 is not a
-workaround for a missing guard anymore; it is what a generated column
-already is.
+Generated declared values are never serialized back to YAML. Making typed fields
+writable requires canonical per-type serialization and remains RFC 0007 work.
 
 ### 7b. `duckdb`: declared types materialize in a `{schema}_types` schema, under the existing collision policy, never auto-dropped
 
@@ -594,27 +527,22 @@ whose type has since been removed from the bundle" (genuinely stale) from
 "a table a different process or a different tool put in this schema"
 (never this command's to begin with); calling either one "stale" implies
 a provenance claim the no-manifest design deliberately doesn't make. The
-diagnostic name is corrected to match what is actually known: a table
-present in `{schema}_types` whose name is not a currently-declared type is
-reported as **unrecognized**, and `duckdb` does not remove it. Removing
+report uses the only state that is actually known: a table present in
+`{schema}_types` whose name is not a currently-declared type is reported as
+**unrecognized**, and `duckdb` does not remove it. Removing
 one is a separate, explicit operation an operator invokes deliberately,
 naming exactly what it will drop before it drops it; that command is not
 designed here — only that automatic deletion isn't it — and is listed
 under Open questions, not committed to a `--prune-stale-types` name this
 decision doesn't actually specify.
 
-**Raw columns are part of the persisted table, queryable, and not treated
-as a second thing to hide or export.** `{schema}_types` is not designed
-here as a stripped-down public view — it is the same table shape decision
-5 already builds for `apply`'s ephemeral database, persisted. Each
-declared field's hidden `__okf_raw_<field>` column sits beside its
-generated column in the physical table, appears in `SELECT *`, and is
-available for a consumer who wants to audit "what did the compiler
-actually see" against "what the typed projection computed" — the same
-comparison decision 5's design exists to make possible. The `__okf_`
-prefix is the signal that it is compiler-owned and outside the declared
-surface, exactly as it already signals for `__okf_path`/`__okf_body` on
-the four contract tables; nothing new is being asked of that prefix here.
+**Raw columns are part of the persisted table and remain queryable.** In
+`{schema}_types`, each `__okf_raw_<field>` carrier sits beside an ordinary stored
+typed snapshot. This is deliberately not the same physical table shape as
+`apply`: both consumers share the logical raw-plus-typed plan, but persistent
+`duckdb` stores the typed result once while ephemeral `apply` uses a virtual
+generated projection. The `__okf_` prefix marks the raw carrier as compiler-owned
+in both cases.
 Two boundaries keep this from leaking further than intended: `schema --schema-format json|zod` (decision 9) never emits a raw column as a
 property — its export walks the *declared* schema, and raw columns are
 not declared, they are synthesized — and a declaration's `COMMENT ON COLUMN` always names the public column, never the raw one, so comments
@@ -625,39 +553,24 @@ Types with no declaration get no table there. `{schema}_types` is the
 declared surface; RFC 0005's inference is not persisted, and `concepts`
 remains the complete, untyped view of everything.
 
-### 8. `--fail-on-spec-divergence` changes the exit code and nothing else
+### 8. No divergence-specific escalation flag in v1
 
-Advisory by default is right for authoring and wrong for CI, where a
-divergence nobody reads is a divergence that stays. Every command that can
-report these diagnostics — `check`, `apply`, `duckdb`, `schema` — accepts:
+The earlier proposal for `--fail-on-spec-divergence` is rejected from this RFC.
+Malformed declarations already fail explicitly, so an escalation flag adds nothing
+there. Value divergence is represented directly by `raw != NULL` alongside a typed
+`NULL` (or other normalized typed result) and does not change the schema contract.
 
-```text
---fail-on-spec-divergence
-```
-
-It changes **only the process exit code** (non-zero when at least one
-declaration diagnostic was reported). It does not change which diagnostics
-are produced, does not change their text, does not change the artifact, and
-does not change any output stream — `schema --schema-format zod` still
-writes exactly the Zod source to stdout and is still redirectable to a
-`.ts` file. Default: off, exit code unaffected.
-
-One flag across all four surfaces, rather than per-surface escalation: the
-question a CI job asks ("did anything diverge?") is the same question
-regardless of which command it happens to be running. `check`'s existing
-`--normative-spec` is untouched and keeps governing `--require-spec`'s own
-existence rule.
-
-The environment is never sniffed to decide this. A command behaves the same
-in CI as on a laptop unless the flag is passed.
+A future validation/reporting RFC may define domain-specific drift diagnostics or a
+strict quality gate, but RFC 0006 does not invent a second exit-code protocol merely
+to restate information already present in the relational representation.
 
 ### 9. `schema` exports declared intent; observations decide presence, not type
 
 This decision is closed. When `.schema.sql` declares a field, `schema` exports that
 declared logical type even if one or more current documents do not cast to it. A
 malformed row is data drift, not a request to silently widen the producer's
-contract. This matches decision 5's per-value materialization: the future typed
-column remains typed and only that row's `TRY_CAST` result becomes `NULL`.
+contract. This matches decision 5's per-value materialization: the typed column
+remains typed and only that row's `TRY_CAST` result becomes `NULL`.
 
 `--infer-types` is therefore ignored for a declared field. An explicit operator
 `--cast FIELD=TYPE` remains the one intentional override and wins over the
@@ -674,10 +587,9 @@ need all three views at once, but it is no longer required to answer what today'
 `schema --spec-template` means: it is the producer's declared type plus the bundle's
 observed presence/nullability.
 
-Divergence diagnostics remain advisory and do not alter the emitted schema. The
-diagnostics transport described by decision 8 can be implemented independently of
-this contract decision; until then, declaration parsing failures are surfaced
-explicitly and value drift does not change output shape.
+Value divergence does not alter the emitted schema. Declaration discovery or
+execution failure is surfaced explicitly; successfully declared type intent remains
+stable regardless of the current row values.
 
 ### 10. Physical types stay lossless in the IR and map per export target
 
@@ -720,15 +632,13 @@ families to arbitrary-precision `int`.
 An unsupported DuckDB family keeps only `x-okf-duckdb-type` in JSON Schema and maps
 to an unconstrained target rather than being mislabeled as `string`.
 
-### 11. `init` scaffolds the missing specification documents, never a declaration
+### 11. `init` scaffolds specification documents and may propose starter declarations
 
-`--require-spec`/`--spec-template` (decision 1) only ever *reports* a
-missing `docs/types/{slug}.md`; nothing in RFC 0005 or this RFC creates
-one. A bundle adopting either rule for the first time can have dozens of
-types in use and zero specification documents, and hand-creating each one
-at its exact derived path is exactly the kind of bookkeeping this RFC
-already refuses to make an author do by hand elsewhere (decision 1's whole
-premise is that the path is *computable*, not authored).
+`check --require-spec` only reports missing specification documents; `init` is
+the explicit authoring surface that can fill those gaps. A bundle adopting the
+convention for the first time can have dozens of types in use and zero specification
+documents, and hand-creating each one at its exact derived path is exactly the kind
+of bookkeeping decision 1 makes computable instead of authored.
 
 `init <path> --spec-template TEMPLATE` computes `bundle.concept_types`,
 derives each type's path the same way `check --require-spec` already does
@@ -758,8 +668,9 @@ than becoming a second source of truth:
   `init` alone scaffolds only the narrative document; `--infer-schema` also
   writes a starter declaration for whichever types still lack a
   `.schema.sql`, one `CREATE TABLE` per type with every scalar field typed
-  by asking DuckDB's own `TRY_CAST` — the same all-or-nothing test decision
-  5 uses at *check* time, reused at *propose* time (`infer_kinds_via_duckdb`):
+  by asking DuckDB's own `TRY_CAST` through `infer_kinds_via_duckdb`. This
+  is deliberately a conservative *proposal* heuristic, separate from decision
+  5's per-value runtime materialization:
   a column wins the narrowest candidate (`BOOLEAN` → `BIGINT` → `DOUBLE` →
   `DATE` → `TIMESTAMPTZ`) that *every* non-null value casts into without
   losing information, falling back to `VARCHAR` when none do. "Without
@@ -768,19 +679,19 @@ than becoming a second source of truth:
   `TRY_CAST('10.50' AS BIGINT)` rounds to `11`, `TRY_CAST(<timestamp> AS DATE)` drops the time — by requiring the cast result to format back to
   the exact original string before it counts as a match. One `CREATE TABLE` and one bulk insert hold a type's every column at once, and one
   `SELECT` tests every column's every candidate together: a single
-  vectorized DuckDB round trip, not a query per field per candidate.
-  A field observed as a list or map on even one document is dropped
-  entirely, the same shape restriction decision 5a already places on
-  declared columns. Existing `.schema.sql` files are never overwritten,
+  vectorized DuckDB round trip, not a query per field per candidate. This is
+  a starter-schema proposal heuristic, not decision 5's runtime semantics:
+  runtime declarations always use DuckDB `TRY_CAST` per value. A field observed
+  as a list or map on even one document is omitted from this starter inference.
+ Existing `.schema.sql` files are never overwritten,
   same as the narrative document. `--infer-schema` never turns itself on
   implicitly on a bare `init` — a starter type declaration is a bigger
   claim than a stub prose document, and stays opt-in.
 
-### 12. `init` --require-spec derived-path collisions raise before writing anything
+### 12. `init` derived-path collisions raise before writing anything
 
-Decision 1 already diagnoses two types slugging to the same document as an
-advisory violation `check` reports but neither the type keeps its
-declaration. `init` cannot leave that decision to `check`: two types would
+Decision 1 already treats two types slugging to the same declaration path as
+an ambiguity that declaration discovery refuses to compile. `init` cannot leave that decision to `check`: two types would
 race to scaffold the *same* file, and whichever ran last would silently
 overwrite the first type's stub content with its own — invisible under the
 "never overwrites an existing file" guarantee above, since by the time the
@@ -899,7 +810,7 @@ is the one that keeps `type` the single source of identity (decision 1).
 ### Semantic discovery (scanning the bundle for a document declaring the exact type)
 
 Rejected for v1, though it is the honest alternative to decision 1's
-collision diagnostic, since matching an exact `type` value avoids slug
+collision error, since matching an exact `type` value avoids slug
 collapse entirely. It costs a bundle-wide scan on every command, and it
 reintroduces the ownership-conflict and identity-ambiguity cases as things
 to detect and diagnose rather than as one path comparison. If derived-path
@@ -911,8 +822,9 @@ this is the change to make.
 Rejected. A declaration is an expectation the data may not have caught up
 with; making it a hard failure would mean a producer cannot declare an
 intended type until the data is already perfect, which is exactly backwards
-— the declaration is how they find out it isn't. `--fail-on-spec-divergence`
-(decision 8) gives the strict posture to whoever wants it, opt-in.
+— the declaration is how they expose that mismatch. A future validation or
+quality-policy layer may choose to reject such rows, but that is intentionally
+separate from this RFC's type-materialization contract.
 
 ### Restricting `.schema.sql` to a single declarative `CREATE TABLE`, sandboxed by configuration
 
@@ -971,9 +883,6 @@ doesn't target.
 
 ## Open questions
 
-- Exact `OKF0xx` codes for decision 7's cases — the existing numbering runs
-  through `OKF010`, and the assignment should be made against
-  `bundle.py`/`type_specs.py` rather than fixed here in isolation.
 - Whether `{schema}_types` (decision 7b) should hold tables or views. This
   RFC says tables, matching the four contract tables; views would avoid the
   copy but need the source relation to be queryable from the persisted
@@ -989,9 +898,9 @@ doesn't target.
   `duckdb_constraints()` for `NOT NULL`/`CHECK`/`UNIQUE`/`PRIMARY KEY`, and
   what evaluating each against documents means. `DEFAULT` likely never
   belongs, being a write-time concept with no read-time claim.
-- Extending decision 5a's type set — each addition needs both a cast
-  predicate (decision 5) and an export mapping (decision 10), which is the
-  deliberate cost of adding one.
+- Extending decision 5a's target mappings — DuckDB can preserve additional
+  physical types in the IR, but each exporter still needs an explicit truthful
+  representation policy (decision 10).
 - Whether the conformance suite needs shared Python/TypeScript fixtures for
   declaration compilation, once a TypeScript implementation is in scope.
 
