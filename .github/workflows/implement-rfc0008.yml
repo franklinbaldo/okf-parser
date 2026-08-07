@@ -43,6 +43,7 @@ jobs:
           npm install --package-lock-only --ignore-scripts --prefix typescript-duckdb
           uv sync --frozen --all-groups
           uv run ruff format src tests
+          uv run ruff check src tests --fix
           uv run ruff check src tests
           uv run ty check src tests
           uv run pytest --cov --cov-report=term-missing --cov-fail-under=85
