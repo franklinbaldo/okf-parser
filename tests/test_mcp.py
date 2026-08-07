@@ -14,6 +14,24 @@ if TYPE_CHECKING:
     from fastmcp import FastMCP
     from mcp.types import Tool
 
+DEFAULT_TOOLS = {
+    "check",
+    "inventory",
+    "graph",
+    "schema",
+    "format_check",
+    "apply_preview",
+    "init_preview",
+    "import_preview",
+}
+WRITE_TOOLS = {
+    "format_write",
+    "apply_write",
+    "init_write",
+    "import_write",
+    "duckdb_export",
+}
+
 
 async def _list_tools(server: FastMCP) -> list[Tool]:
     async with Client(server) as client:
@@ -22,6 +40,10 @@ async def _list_tools(server: FastMCP) -> list[Tool]:
 
 def _tools(server: FastMCP) -> dict[str, Tool]:
     return {tool.name: tool for tool in asyncio.run(_list_tools(server))}
+
+
+def _tool_names(server: FastMCP) -> set[str]:
+    return set(_tools(server))
 
 
 def _annotation_tuple(tool: Tool) -> tuple[bool | None, bool | None, bool | None, bool | None]:
@@ -36,48 +58,57 @@ def _annotation_tuple(tool: Tool) -> tuple[bool | None, bool | None, bool | None
 
 
 def test_default_mcp_profile_exposes_previews_but_no_commit_tools() -> None:
-    tools = _tools(cli.build_mcp())
-
-    assert set(tools) == {
-        "check",
-        "inventory",
-        "graph",
-        "schema",
-        "format_check",
-        "apply_preview",
-        "init_preview",
-        "import_preview",
-    }
+    assert _tool_names(cli.build_mcp()) == DEFAULT_TOOLS
 
 
-def test_write_mcp_profile_adds_only_explicit_commit_tools() -> None:
-    default = set(_tools(cli.build_mcp()))
-    writable = set(_tools(cli.build_mcp(allow_write=True)))
+def test_mcp_profiles_isolate_authority_when_default_is_built_first() -> None:
+    default_server = cli.build_mcp()
+    default_before = _tool_names(default_server)
 
-    assert writable - default == {
-        "format_write",
-        "apply_write",
-        "init_write",
-        "import_write",
-        "duckdb_export",
-    }
-    assert default == set(_tools(cli.build_mcp()))
+    writable_server = cli.build_mcp(allow_write=True)
+    writable = _tool_names(writable_server)
+    default_after = _tool_names(default_server)
+
+    assert default_before == DEFAULT_TOOLS
+    assert writable == DEFAULT_TOOLS | WRITE_TOOLS
+    assert default_after == DEFAULT_TOOLS
 
 
-def test_mcp_public_schemas_keep_aliases_and_no_dynamic_write_switch() -> None:
+def test_mcp_profiles_isolate_authority_when_writable_is_built_first() -> None:
+    writable_server = cli.build_mcp(allow_write=True)
+    writable_before = _tool_names(writable_server)
+
+    default_server = cli.build_mcp()
+    default = _tool_names(default_server)
+    writable_after = _tool_names(writable_server)
+
+    assert writable_before == DEFAULT_TOOLS | WRITE_TOOLS
+    assert default == DEFAULT_TOOLS
+    assert writable_after == DEFAULT_TOOLS | WRITE_TOOLS
+
+
+def test_mcp_public_schemas_keep_aliases_and_preview_write_pairs_match() -> None:
     tools = _tools(cli.build_mcp(allow_write=True))
 
-    apply_preview = tools["apply_preview"].inputSchema["properties"]
-    apply_write = tools["apply_write"].inputSchema["properties"]
-    assert "from" in apply_preview
-    assert "from_" not in apply_preview
-    assert "spec_template" in apply_preview
-    assert "write" not in apply_preview
-    assert "from" in apply_write
-    assert "write" not in apply_write
+    apply_preview = tools["apply_preview"].inputSchema
+    apply_write = tools["apply_write"].inputSchema
+    assert apply_preview == apply_write
+    apply_properties = apply_preview["properties"]
+    assert "from" in apply_properties
+    assert "from_" not in apply_properties
+    assert "spec_template" in apply_properties
+    assert "write" not in apply_properties
 
-    assert "write" not in tools["init_preview"].inputSchema["properties"]
-    assert "write" not in tools["import_preview"].inputSchema["properties"]
+    init_preview = tools["init_preview"].inputSchema
+    init_write = tools["init_write"].inputSchema
+    assert init_preview == init_write
+    assert "write" not in init_preview["properties"]
+
+    import_preview = tools["import_preview"].inputSchema
+    import_write = tools["import_write"].inputSchema
+    assert import_preview == import_write
+    assert "write" not in import_preview["properties"]
+
     assert "spec_template" in tools["duckdb_export"].inputSchema["properties"]
 
 
@@ -115,6 +146,32 @@ def test_apply_preview_and_write_share_service_with_only_commit_bit_changed(
 
     preview = cli.mcp_apply_preview("bundle", sql="UPDATE x SET y = 1")
     written = cli.mcp_apply_write("bundle", sql="UPDATE x SET y = 1")
+
+    assert preview == {"written": False}
+    assert written == {"written": True}
+    assert calls[0] | {"write": True} == calls[1]
+
+
+def test_init_preview_and_write_share_service_with_only_commit_bit_changed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_init_bundle(path: str, spec_template: str, exclude: object, **kwargs: object) -> dict[str, object]:
+        calls.append(
+            {
+                "path": path,
+                "spec_template": spec_template,
+                "exclude": exclude,
+                **kwargs,
+            }
+        )
+        return {"written": bool(kwargs["write"])}
+
+    monkeypatch.setattr(cli, "init_bundle", fake_init_bundle)
+
+    preview = cli.mcp_init_preview("bundle", "types/{type}.md", infer_schema=True)
+    written = cli.mcp_init_write("bundle", "types/{type}.md", infer_schema=True)
 
     assert preview == {"written": False}
     assert written == {"written": True}
