@@ -77,7 +77,7 @@ def test_dynamic_and_source_models_share_automatic_alias_policy(tmp_path: Path) 
         "private_": "_private",
         "custom_": "__custom__",
         "pydantic_extra_": "__pydantic_extra__",
-        "model_dump_": "model_dump",
+        "field_model_dump": "model_dump",
         "class_": "class",
         "customer_id": "customer-id",
     }
