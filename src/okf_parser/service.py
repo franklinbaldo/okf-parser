@@ -13,8 +13,9 @@ from okf_parser.bundle import load_bundle, validate_path
 from okf_parser.bundle_import import import_bundle as _import_bundle
 from okf_parser.duckdb import attach_okf
 from okf_parser.formatting import FormatReport, format_path
+from okf_parser.schema_export import documents_by_type as _documents_by_type
 from okf_parser.schema_export import export_json_schema, export_zod_schema
-from okf_parser.spec_scaffold import scaffold_missing_specs
+from okf_parser.spec_scaffold import scaffold_missing_declared_schemas, scaffold_missing_specs
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -28,11 +29,22 @@ def init_bundle(
     exclude: Sequence[str] = (),
     *,
     write: bool = False,
+    infer_schema: bool = False,
 ) -> dict[str, object]:
-    """Scaffold a minimal specification document for every type in use that lacks one."""
+    """Scaffold a missing specification document, and optionally a starter `.schema.sql`.
+
+    `infer_schema` runs the same `schema --infer-types` inference used
+    elsewhere to propose a starter declaration for whichever types still
+    lack a `.schema.sql`; it never touches a file that already exists.
+    """
     root = Path(path).resolve()
     bundle = load_bundle(root, exclude)
-    return scaffold_missing_specs(bundle.root, bundle.concept_types, spec_template, write=write)
+    specs = scaffold_missing_specs(bundle.root, bundle.concept_types, spec_template, write=write)
+    if not infer_schema:
+        return {"specs": specs}
+    observed = _documents_by_type(path, exclude)
+    schemas = scaffold_missing_declared_schemas(bundle.root, spec_template, observed, write=write)
+    return {"specs": specs, "schemas": schemas}
 
 
 def import_bundle(  # each argument is an independent public CLI flag.

@@ -954,12 +954,29 @@ than becoming a second source of truth:
   reports which paths it would create (the same shape `check
   --require-spec`'s diagnostics already use) and creates nothing — the
   same write-gate `apply` already uses for the same reason.
-- **Scaffolds the narrative document only, never a `.schema.sql`.** A
-  spec's prose has no wrong answer to infer; a `.schema.sql`'s column types
-  do, and guessing at one from observed data would hand back exactly the
-  kind of tool-invented contract decision 5a's closed type set exists to
-  avoid. Generating a *starter* declaration from `schema --infer-types`'s
-  own inference is a plausible follow-up, deliberately not built here.
+- **`--infer-schema` proposes a starter `.schema.sql`, never invents one.**
+  `init` alone scaffolds only the narrative document; `--infer-schema` also
+  writes a starter declaration for whichever types still lack a
+  `.schema.sql`, one `CREATE TABLE` per type with every scalar field typed
+  by asking DuckDB's own `TRY_CAST` — the same all-or-nothing test decision
+  5 uses at *check* time, reused at *propose* time (`infer_kinds_via_duckdb`):
+  a column wins the narrowest candidate (`BOOLEAN` → `BIGINT` → `DOUBLE` →
+  `DATE` → `TIMESTAMPTZ`) that *every* non-null value casts into without
+  losing information, falling back to `VARCHAR` when none do. "Without
+  losing information" is checked literally for the two candidates where
+  DuckDB's own `TRY_CAST` is lossy rather than failing —
+  `TRY_CAST('10.50' AS BIGINT)` rounds to `11`, `TRY_CAST(<timestamp> AS
+  DATE)` drops the time — by requiring the cast result to format back to
+  the exact original string before it counts as a match. One `CREATE
+  TABLE` and one bulk insert hold a type's every column at once, and one
+  `SELECT` tests every column's every candidate together: a single
+  vectorized DuckDB round trip, not a query per field per candidate.
+  A field observed as a list or map on even one document is dropped
+  entirely, the same shape restriction decision 5a already places on
+  declared columns. Existing `.schema.sql` files are never overwritten,
+  same as the narrative document. `--infer-schema` never turns itself on
+  implicitly on a bare `init` — a starter type declaration is a bigger
+  claim than a stub prose document, and stays opt-in.
 
 ### 12. `init` --require-spec derived-path collisions raise before writing anything
 

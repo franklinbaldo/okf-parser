@@ -167,3 +167,124 @@ def declared_cast_kinds(schema: DeclaredSchema) -> dict[str, CastKind]:
         if kind is not None:
             kinds[name] = kind
     return kinds
+
+
+_DUCKDB_TYPE_FOR_KIND: dict[CastKind, str] = {
+    "string": "VARCHAR",
+    "boolean": "BOOLEAN",
+    "integer": "BIGINT",
+    "number": "DOUBLE",
+    "date": "DATE",
+    "datetime": "TIMESTAMPTZ",
+}
+
+# Narrowest to widest: the first type every observed value TRY_CASTs into
+# cleanly wins. BOOLEAN before the numeric types so "true"/"false" isn't
+# swallowed by some future numeric-ish cast; DATE before TIMESTAMPTZ so a
+# column of pure dates doesn't widen just because DuckDB *can* also read a
+# date as a timestamp.
+#
+# `roundtrip` marks a candidate where DuckDB's own TRY_CAST is lossy rather
+# than rejecting: `TRY_CAST('10.50' AS BIGINT)` rounds to 11 instead of
+# failing, and `TRY_CAST('2026-01-15T09:30:00Z' AS DATE)` silently drops the
+# time - both would otherwise win a column decision 5's "never lossy" rule
+# says they shouldn't. For those, a value only counts as cast-clean when
+# formatting the cast result back to text reproduces the original string
+# exactly; DOUBLE and TIMESTAMPTZ don't lose information relative to the
+# narrower candidates already tried before them, so a plain non-null check
+# is enough.
+_INFERENCE_CANDIDATES: tuple[tuple[str, CastKind, bool], ...] = (
+    ("BOOLEAN", "boolean", False),
+    ("BIGINT", "integer", True),
+    ("DOUBLE", "number", False),
+    ("DATE", "date", True),
+    ("TIMESTAMPTZ", "datetime", False),
+)
+
+
+def _quote(identifier: str) -> str:
+    return '"' + identifier.replace('"', '""') + '"'
+
+
+def infer_kinds_via_duckdb(columns: dict[str, list[str | None]]) -> dict[str, CastKind]:
+    """Infer every column's tightest kind in one vectorized DuckDB pass, via `TRY_CAST`.
+
+    Mirrors decision 5's runtime divergence rule exactly, at inference time:
+    a candidate type wins a column only when *every* non-null value in it
+    TRY_CASTs cleanly - the same all-or-nothing test this RFC already
+    applies when *checking* a declared column, now reused to *propose* one.
+    One `CREATE TABLE` and one bulk insert hold every column at once, and
+    one `SELECT` computes every column's every candidate in a single
+    DuckDB round trip - column-at-a-time aggregates, not a Python loop
+    issuing its own query per column per candidate. A column with at least
+    one non-null value always gets a kind - `"string"` when no narrower
+    candidate fits every value - so it is `"string"`, never `None`, that
+    means "no meaningful narrowing." Only a column with nothing but `None`s
+    (or no rows at all) is omitted entirely; the caller decides what a
+    genuinely empty column means.
+    """
+    if not columns:
+        return {}
+    con = duckdb.connect()
+    try:
+        column_defs = ", ".join(f"{_quote(name)} VARCHAR" for name in columns)
+        con.execute(f"CREATE TABLE t ({column_defs})")
+        # `strict=True` is the row-count check: every column must align to
+        # the same document sequence, or zip raises rather than silently
+        # truncating to the shortest column.
+        rows = list(zip(*columns.values(), strict=True))
+        if rows:
+            placeholders = ", ".join(["?"] * len(columns))
+            con.executemany(f"INSERT INTO t VALUES ({placeholders})", rows)
+
+        def cast_count_expr(column: str, duckdb_type: str, *, roundtrip: bool) -> str:
+            cast_expr = f"TRY_CAST({_quote(column)} AS {duckdb_type})"
+            if not roundtrip:
+                return f"count({cast_expr})"
+            return f"count(*) FILTER (WHERE CAST({cast_expr} AS VARCHAR) = {_quote(column)})"
+
+        select_list = ", ".join(
+            f"count({_quote(name)}) AS {_quote(f'{name}__n')}, "
+            + ", ".join(
+                f"{cast_count_expr(name, duckdb_type, roundtrip=roundtrip)} AS "
+                f"{_quote(f'{name}__{kind}')}"
+                for duckdb_type, kind, roundtrip in _INFERENCE_CANDIDATES
+            )
+            for name in columns
+        )
+        cursor = con.execute(f"SELECT {select_list} FROM t")
+        (values,) = cursor.fetchall()
+        counts = dict(zip((c[0] for c in cursor.description), values, strict=True))
+
+        kinds: dict[str, CastKind] = {}
+        for name in columns:
+            non_null = counts[f"{name}__n"]
+            if not non_null:
+                continue
+            kinds[name] = "string"
+            for _, kind, _roundtrip in _INFERENCE_CANDIDATES:
+                if counts[f"{name}__{kind}"] == non_null:
+                    kinds[name] = kind
+                    break
+        return kinds
+    finally:
+        con.close()
+
+
+def render_starter_schema_sql(concept_type: str, columns: dict[str, CastKind]) -> str | None:
+    """Render a starter `CREATE TABLE` from inferred column kinds, or ``None`` for no columns.
+
+    A one-way trip out of decision 5a's closed type set (`schema
+    --infer-types`'s own vocabulary), never a round trip through DuckDB's
+    catalog the way `parse_declared_schema` is - so column order here is
+    simply the caller's, not read back from a live table.
+    """
+    if not columns:
+        return None
+
+    lines = [
+        f"    {_quote(name)} {_DUCKDB_TYPE_FOR_KIND[kind]}"
+        for name, kind in sorted(columns.items())
+    ]
+    body = ",\n".join(lines)
+    return f"CREATE TABLE {_quote(concept_type)} (\n{body}\n);\n"

@@ -86,6 +86,7 @@ runtime-evaluated-base-classes = ["pydantic.BaseModel"]
 # failure alike, by construction - see `_round_trips_losslessly`.
 "src/okf_parser/apply.py" = ["BLE001", "PLR0913", "S608"]
 "src/okf_parser/bundle_import.py" = ["PLR0913", "S608"]
+"src/okf_parser/declared_schema.py" = ["S608"]
 "src/okf_parser/cli.py" = ["A002", "PLR0913", "T201"]
 "src/okf_parser/schema_export.py" = ["PLR0913"]
 "src/okf_parser/service.py" = ["PLR0913"]

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import dataclass
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
 from cyclopts import App, Parameter
 from fastmcp import FastMCP
@@ -106,10 +106,16 @@ def init(
     spec_template: str,
     exclude: RepeatableStrings = None,
     write: bool = False,
+    infer_schema: bool = False,
 ) -> CliResult[JsonPayload]:
-    """Scaffold a minimal specification document for every type missing one."""
-    payload = init_bundle(path, spec_template, exclude or (), write=write)
-    return CliResult(payload, 1 if payload["collisions"] else 0)
+    """Scaffold a missing specification document, and optionally a starter `.schema.sql`."""
+    payload = init_bundle(
+        path, spec_template, exclude or (), write=write, infer_schema=infer_schema
+    )
+    specs = cast("dict[str, object]", payload["specs"])
+    schemas = cast("dict[str, object]", payload["schemas"]) if infer_schema else None
+    has_collisions = bool(specs["collisions"]) or bool(schemas and schemas["collisions"])
+    return CliResult(payload, 1 if has_collisions else 0)
 
 
 @app.command

@@ -43,12 +43,13 @@ if TYPE_CHECKING:
 type FieldDefinition = tuple[Any, Any]
 
 
-def _documents_by_type(
+def documents_by_type(
     path: str,
     exclude: Sequence[str],
 ) -> dict[str, list[dict[str, object]]]:
+    """Every concept's raw frontmatter, grouped by its authored `type`."""
     bundle = load_bundle(Path(path), exclude)
-    documents_by_type: dict[str, list[dict[str, object]]] = {}
+    by_type: dict[str, list[dict[str, object]]] = {}
     for row in bundle.concepts.execute().to_dict(orient="records"):
         concept_type = str(row.get("concept_type") or "concept")
         frontmatter_raw = row.get("frontmatter_json")
@@ -59,10 +60,8 @@ def _documents_by_type(
         if not isinstance(frontmatter, dict):
             message = f"concept {row.get('path')!r} frontmatter is not an object"
             raise SchemaExportError(message)
-        documents_by_type.setdefault(concept_type, []).append(
-            cast("dict[str, object]", frontmatter)
-        )
-    return documents_by_type
+        by_type.setdefault(concept_type, []).append(cast("dict[str, object]", frontmatter))
+    return by_type
 
 
 def _declared_casts(
@@ -113,13 +112,13 @@ def build_schema_contracts(
     spec_template: str | None = None,
 ) -> tuple[TypeContract, ...]:
     """Compile bundle observations into deterministic language-neutral contracts."""
-    documents_by_type = _documents_by_type(path, exclude)
+    observed = documents_by_type(path, exclude)
     effective_casts = (
         *casts,
-        *_declared_casts(path, documents_by_type, spec_template, casts),
+        *_declared_casts(path, observed, spec_template, casts),
     )
     return compile_contracts(
-        documents_by_type,
+        observed,
         infer_types=infer_types,
         casts=effective_casts,
     )
