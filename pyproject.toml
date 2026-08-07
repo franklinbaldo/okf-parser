@@ -96,3 +96,12 @@ runtime-evaluated-base-classes = ["pydantic.BaseModel"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[[tool.ty.overrides]]
+include = ["tests/fixtures/pydantic_generated.py"]
+
+[tool.ty.overrides.rules]
+# Pydantic intentionally uses a non-None annotation with a None Field default
+# to represent "may be absent, but explicit null is invalid". Runtime tests pin
+# that behavior; ty currently treats Field(default=None) as a plain assignment.
+invalid-assignment = "ignore"
