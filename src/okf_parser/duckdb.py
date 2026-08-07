@@ -87,15 +87,12 @@ def attach_okf(
 
     Materializing twice into the same schema raises :class:`BundleExportError`
     unless ``overwrite`` is set, in which case the four tables are replaced.
+    With ``spec_template``, declared concept types are additionally persisted
+    in ``{schema}_types`` as raw columns plus stable typed snapshot columns.
     """
     _validate_schema_name(schema)
     bundle = load_bundle(Path(path), exclude)
     typed_schema = f"{schema}_types"
-    declarations = discover_declared_schemas(
-        bundle.root,
-        bundle.concept_types,
-        spec_template,
-    )
     relations = {
         "concepts": bundle.concepts,
         "links": bundle.links,
@@ -106,6 +103,12 @@ def attach_okf(
     collisions = _existing_tables(connection, schema, tuple(relations))
     if collisions and not overwrite:
         raise BundleExportError(schema, collisions)
+
+    declarations = discover_declared_schemas(
+        bundle.root,
+        bundle.concept_types,
+        spec_template,
+    )
 
     connection.execute("BEGIN TRANSACTION")
     try:

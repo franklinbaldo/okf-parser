@@ -215,3 +215,33 @@ def test_export_duckdb_reopens_with_typed_tables(tmp_path: Path) -> None:
         ).fetchone() == (1,)
     finally:
         reopened.close()
+
+
+def test_persistent_timestamptz_is_utc_materialized_and_session_stable(tmp_path: Path) -> None:
+    (tmp_path / "a.md").write_text(
+        "---\ntype: Rotina\ninstante: 2026-08-07 10:00:00\n---\nA\n",
+        encoding="utf-8",
+    )
+    types = tmp_path / "docs" / "types"
+    types.mkdir(parents=True)
+    (types / "rotina.schema.sql").write_text(
+        'CREATE TABLE "Rotina" (instante TIMESTAMPTZ);\n',
+        encoding="utf-8",
+    )
+    connection = duckdb.connect()
+    connection.execute("SET TimeZone = 'America/New_York'")
+
+    attach_okf(connection, tmp_path, spec_template="docs/types/{slug}.md")
+
+    assert connection.execute("SELECT current_setting('TimeZone')").fetchone() == (
+        "America/New_York",
+    )
+    expected = connection.execute(
+        "SELECT epoch_us(TIMESTAMPTZ '2026-08-07 10:00:00+00')"
+    ).fetchone()
+    first = connection.execute('SELECT epoch_us(instante) FROM okf_types."Rotina"').fetchone()
+    connection.execute("SET TimeZone = 'Asia/Tokyo'")
+    second = connection.execute('SELECT epoch_us(instante) FROM okf_types."Rotina"').fetchone()
+    assert expected is not None
+    assert first == expected
+    assert second == expected

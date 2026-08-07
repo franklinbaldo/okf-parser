@@ -39,32 +39,28 @@ Nothing here is required. A type with no DDL file compiles exactly as RFC
 0005 already defines — every column `VARCHAR`, no comments — unchanged.
 Declaration is opt-in, per type, and its absence is not a defect.
 
-Declaration buys **validation**, not obedience: a declared type that the
-data doesn't support degrades that one column back to `VARCHAR` and reports
-it. The bundle still opens, the table still builds, the export still
-emits. Divergence is advisory by default and changes only the exit code
-when the caller explicitly asks it to (decision 8).
+Declaration buys **typed intent without sacrificing source fidelity**. A
+declared field stays typed even when individual rows diverge: DuckDB's
+`TRY_CAST` is applied per value, and an incompatible value becomes `NULL`
+only in the typed projection while the raw carrier remains available. One
+bad document never widens the whole column back to `VARCHAR`. Divergence is
+advisory by default (decisions 5 and 8).
 
-Scope is deliberately the *reading* half. v1 reads three things from a
-declaration — column names, column types, comments — over a closed set of
-types (decision 5a). Constraints are not read (decision 5), typed columns
-are readable but not writable in `apply` (decision 7a), and nothing writes
-back into the declaration file (deferred to RFC 0007). Each of those is a
-serialization or evaluation problem that does not have to be solved for a
-declared type to be useful today.
+v1 reads column names, normalized logical types, and comments from the
+declaration catalog. Constraints are not read. `schema` exports the lossless
+type IR; persistent `duckdb` materializes raw plus typed snapshot columns;
+`apply` is the remaining integration step and will use the same projection as
+a generated read-only column (decision 7a). Nothing writes back into the
+declaration file (deferred to RFC 0007).
 
-**A declared column is never the only copy of a document's data.**
-Underneath every declared column sits a hidden, unconditionally lossless
-raw column — `VARCHAR` for a scalar field, `VARCHAR[]` for a declared
-`T[]` field — holding the field exactly as authored; the declared column
-is a DuckDB *generated* column computed from it. Casting a document into a
-physical type can round, truncate, or fail outright — that is inherent to
-what a physical type is — but it never has to be the thing that decides
-whether the original text survives. The raw column is compiler-owned:
-under the `__okf_` prefix `apply` already reserves, protected the same way
-`apply` already protects its other internal columns, never a target an
-`--sql` script can rename or overwrite. Decision 5 is where this is built
-and why two earlier drafts of the cast rule needed it.
+**A declared column is never the only copy of a document's data.** The
+compiler keeps a raw carrier beside the typed projection — `VARCHAR` for a
+scalar field and `VARCHAR[]` for declared `T[]`. `duckdb` stores the typed
+projection as a snapshot value because DuckDB generated columns are currently
+virtual; `apply` uses a generated column because there the database-enforced
+read-only property is useful. Both consumers use the same DuckDB `TRY_CAST`
+semantics. The raw column is compiler-owned under the existing `__okf_`
+boundary.
 
 ## Motivation
 
@@ -316,19 +312,21 @@ compilation (`apply`'s ephemeral database, `duckdb`'s output) then issues
 DDL built from that readout, never from the declaration file's text, which
 is never re-executed anywhere past the one connection it ran on.
 
-### 5. Raw is the truth; typed is a per-value generated projection over it
+### 5. Raw is the truth; typed is a per-value DuckDB projection over it
 
-This decision is closed. A declared field has two physical representations when
-`apply`/`duckdb` materialization lands: a compiler-owned lossless raw column and a
-public typed generated column. The raw column is `VARCHAR` for a scalar and
-`VARCHAR[]` for `T[]`; the typed column is exactly DuckDB's own projection:
+This decision is closed. A declared field has two logical representations: a
+compiler-owned raw carrier and a public typed projection. The raw column is
+`VARCHAR` for a scalar and `VARCHAR[]` for `T[]`; the typed value is always
+DuckDB's own `TRY_CAST` of that carrier.
 
-```sql
-"__okf_raw_custo" VARCHAR,
-"custo" DECIMAL(18,4) GENERATED ALWAYS AS (
-    TRY_CAST(__okf_raw_custo AS DECIMAL(18,4))
-)
-```
+The two relational consumers choose different physical storage for the same
+projection. Persistent `duckdb` stores the typed value as an ordinary column,
+computed once during export with `TimeZone = 'UTC'`, so reopening the database
+under a different session timezone cannot change the snapshot. `apply` uses a
+DuckDB generated column over the same raw carrier, because DuckDB then enforces
+that the typed projection is read-only. Generated columns are virtual in the
+DuckDB version targeted here, so they are deliberately not used as persistent
+snapshot storage.
 
 **There is no whole-column fallback anymore.** One divergent document does not
 turn every other row back into `VARCHAR`. `TRY_CAST` is evaluated per value: a
@@ -448,28 +446,26 @@ fallback, and only two:
   The type compiles **exactly as it would with no declaration at all** —
   RFC 0005's `VARCHAR` inference in `apply`/`duckdb`, `schema`'s existing
   inferred/cast output — and one diagnostic names the file and the reason.
-- **failing-cast fallback**, when the declaration is well-formed and the
-  column's type is supported, but the data does not satisfy it (decision
-  5). That one column materializes as `VARCHAR`; the declared type is
-  **still exported** (decision 9), because it remains an intelligible
-  statement of intent; the comment still applies; every other column is
-  untouched;
-- **unsupported-type fallback**, when the column's declared type is
-  outside the v1 set (decision 5a). That column materializes *and exports*
-  as if undeclared — inference, not declaration — because decision 10's
-  mapping has no form for it. The comment still applies. The declared type
-  survives only in the diagnostic.
+- **data divergence has no schema fallback**. When the declaration is
+  well-formed but one value does not cast (decision 5), only that row's typed
+  projection is `NULL`; its raw carrier remains available, the column stays
+  declared, and the comment still applies;
+- **target capability is local to the target**. A DuckDB physical type that a
+  JSON/Zod exporter cannot standardize remains representable by the DuckDB
+  materializer using its catalog spelling; narrower exporters keep the exact
+  type in metadata rather than inventing a false standard type (decisions 5a
+  and 10).
 
 Enumerated, the cases that reach each: whole-declaration fallback takes an
 unreadable file, a script that fails to execute, a post-condition decision
 2 rejects (zero, two, or a differently-named table left behind — decision
 3's identity check), and a derived-path collision (decision 1, both
 types). Failing-cast fallback
-takes decision 5's predicate returning false for any row. Unsupported-type
-fallback takes decision 5a's set, and a declared reserved column (decision
-5b) behaves the same way. Undeclared observed fields and undeclared
-catalog comments are diagnostics without a fallback — nothing degrades,
-because nothing about them was declared.
+no longer has a failing-cast branch: row-level `TRY_CAST` owns data
+divergence. Target-specific representation limits are handled by each exporter,
+not by degrading the DuckDB materialization. A declared reserved column
+(decision 5b) remains outside the public typed field set. Undeclared observed
+fields and undeclared catalog comments do not degrade any declaration.
 
 Every case resolves to "ignore the unusable part, compile the rest exactly
 as declared," never to a hard failure and never to discarding more than
@@ -571,6 +567,16 @@ A forgeable marker comment, or a manifest that can itself drift from the
 schema it describes, added a second source of truth for something the
 codebase already decides correctly with an existence check plus an
 explicit flag.
+
+**The persistent typed column is a stored snapshot, not a virtual generated
+column.** DuckDB 1.5 supports only virtual generated columns, which are
+recomputed when read. That is ideal for `apply`'s ephemeral read-only
+projection but wrong for an exported database: in particular, converting an
+offset-less string to `TIMESTAMPTZ` depends on the session `TimeZone`. The
+persistent materializer therefore fills ordinary typed columns with the same
+per-value `TRY_CAST` under a temporary `TimeZone = 'UTC'` and restores the
+caller's setting immediately afterward. The exported typed value is stable
+across later sessions; the raw carrier remains beside it for audit.
 
 **A type's table is never dropped automatically when the type disappears
 from the bundle, and the diagnostic that reports it is named

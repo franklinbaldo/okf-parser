@@ -314,10 +314,7 @@ def _ddl(plan: TypedTablePlan, schema: str) -> str:
             message = f"declared field {field.name!r} has an incomplete typed-table plan"
             raise TypedTableError(message)
         columns.append(f"{_quote_ident(raw_name)} {raw_sql_type}")
-        columns.append(
-            f"{_quote_ident(field.name)} {declared_type.sql} GENERATED ALWAYS AS "
-            f"(TRY_CAST({_quote_ident(raw_name)} AS {declared_type.sql}))"
-        )
+        columns.append(f"{_quote_ident(field.name)} {declared_type.sql}")
     body = ",\n    ".join(columns)
     return f"CREATE TABLE {_quote_ident(schema)}.{_quote_ident(plan.concept_type)} (\n    {body}\n)"
 
@@ -371,6 +368,39 @@ def _insert_columns(plan: TypedTablePlan) -> tuple[str, ...]:
     columns = list(_INTERNAL_COLUMNS)
     columns.extend(_insert_name(field) for field in plan.fields)
     return tuple(columns)
+
+
+def _populate_typed_columns(
+    connection: duckdb.DuckDBPyConnection,
+    schema: str,
+    plan: TypedTablePlan,
+) -> None:
+    assignments: list[str] = []
+    for field in plan.fields:
+        declared_type = field.declared_type
+        if declared_type is None:
+            continue
+        raw_name = _insert_name(field)
+        assignments.append(
+            f"{_quote_ident(field.name)} = "
+            f"TRY_CAST({_quote_ident(raw_name)} AS {declared_type.sql})"
+        )
+    if not assignments:
+        return
+
+    timezone_row = connection.execute("SELECT current_setting('TimeZone')").fetchone()
+    if timezone_row is None:
+        message = "DuckDB did not expose the current TimeZone setting"
+        raise TypedTableError(message)
+    previous_timezone = str(timezone_row[0])
+    connection.execute("SET TimeZone = 'UTC'")
+    try:
+        connection.execute(
+            f"UPDATE {_quote_ident(schema)}.{_quote_ident(plan.concept_type)} "
+            f"SET {', '.join(assignments)}"
+        )
+    finally:
+        connection.execute(f"SET TimeZone = {_quote_literal(previous_timezone)}")
 
 
 def _apply_comments(
@@ -452,6 +482,7 @@ def materialize_typed_tables(
                 f"({column_sql}) VALUES ({placeholders})",
                 [_row_values(row, plan) for row in type_rows],
             )
+        _populate_typed_columns(connection, schema, plan)
         _apply_comments(
             connection,
             schema,

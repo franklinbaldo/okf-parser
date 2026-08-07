@@ -179,7 +179,7 @@ Materializes the bundle's concepts and links into a DuckDB database file.
 - `--overwrite` — replace existing tables in that schema instead of failing.
 - `--spec-template TEMPLATE` — execute each present sibling `.schema.sql` and
   materialize declared concept types into a second `{schema}_types` schema.
-  Declared values keep a compiler-owned raw column beside a generated typed
+  Declared values keep a compiler-owned raw column beside a materialized typed
   `TRY_CAST` projection; types without a declaration remain available only in
   the complete untyped `concepts` table.
 
