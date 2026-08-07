@@ -10,6 +10,12 @@ from typing import TYPE_CHECKING, Any, Literal, cast
 from pydantic import BaseModel, create_model
 
 from okf_parser.bundle import load_bundle
+from okf_parser.declared_schema import (
+    DeclaredSchemaError,
+    declared_cast_kinds,
+    declared_schema_relative_path,
+    parse_declared_schema,
+)
 from okf_parser.schema_contract import (
     AnyNode,
     ContractNode,
@@ -27,6 +33,7 @@ from okf_parser.schema_contract import (
     model_name,
     render_zod,
 )
+from okf_parser.schema_lexemes import can_classify_as
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -58,18 +65,63 @@ def _documents_by_type(
     return documents_by_type
 
 
+def _declared_casts(
+    root: str,
+    documents_by_type: dict[str, list[dict[str, object]]],
+    spec_template: str | None,
+    explicit_casts: Sequence[str],
+) -> list[str]:
+    """Compile a `field=kind` cast per declared column that its data actually supports.
+
+    Per RFC 0006, an ill-formed or absent `.schema.sql` is never an error here
+    - a type simply keeps compiling exactly as it did without a declaration -
+    and a declared column whose data doesn't uniformly support the declared
+    kind quietly has no cast added for it, leaving that field to infer_types
+    or the default string, rather than raising the way an explicit `--cast`
+    does. An explicit `--cast` for the same field always wins.
+    """
+    if spec_template is None:
+        return []
+    explicit_fields = {specification.split("=", 1)[0].strip() for specification in explicit_casts}
+    additional: list[str] = []
+    for concept_type, documents in documents_by_type.items():
+        relative = declared_schema_relative_path(spec_template, concept_type)
+        if relative is None:
+            continue
+        schema_path = Path(root) / relative
+        if not schema_path.is_file():
+            continue
+        try:
+            declared = parse_declared_schema(schema_path.read_text(encoding="utf-8"))
+        except DeclaredSchemaError:
+            continue
+        for field, kind in declared_cast_kinds(declared).items():
+            if field in explicit_fields:
+                continue
+            values = [str(doc[field]) for doc in documents if isinstance(doc.get(field), str)]
+            if values and can_classify_as(values, kind):
+                additional.append(f"{field}={kind}")
+    return additional
+
+
 def build_schema_contracts(
     path: str,
     exclude: Sequence[str] = (),
     *,
     infer_types: bool = False,
     casts: Sequence[str] = (),
+    spec_template: str | None = None,
 ) -> tuple[TypeContract, ...]:
     """Compile bundle observations into deterministic language-neutral contracts."""
+    documents_by_type = _documents_by_type(path, exclude)
+    effective_casts = (
+        *casts,
+        *_declared_casts(path, documents_by_type, spec_template, casts),
+    )
     return compile_contracts(
-        _documents_by_type(path, exclude),
+        documents_by_type,
         infer_types=infer_types,
-        casts=casts,
+        casts=effective_casts,
     )
 
 
@@ -137,6 +189,7 @@ def export_json_schema(
     *,
     infer_types: bool = False,
     casts: Sequence[str] = (),
+    spec_template: str | None = None,
 ) -> dict[str, Any]:
     """Export the canonical JSON Schema representation for each concept type."""
     contracts = build_schema_contracts(
@@ -144,6 +197,7 @@ def export_json_schema(
         exclude,
         infer_types=infer_types,
         casts=casts,
+        spec_template=spec_template,
     )
     schemas = {contract.concept_type: contract_json_schema(contract) for contract in contracts}
     return {
@@ -155,13 +209,14 @@ def export_json_schema(
     }
 
 
-def export_zod_schema(
+def export_zod_schema(  # noqa: PLR0913 - each argument is an independent public export flag.
     path: str,
     exclude: Sequence[str] = (),
     *,
     infer_types: bool = False,
     casts: Sequence[str] = (),
     zod_import: ZodImport = "zod",
+    spec_template: str | None = None,
 ) -> str:
     """Generate canonical Zod declarations, using generic Zod by default."""
     contracts = build_schema_contracts(
@@ -169,6 +224,7 @@ def export_zod_schema(
         exclude,
         infer_types=infer_types,
         casts=casts,
+        spec_template=spec_template,
     )
     return render_zod(contracts, zod_import=zod_import)
 

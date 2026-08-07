@@ -81,6 +81,54 @@ def test_explicit_cast_overrides_default_and_is_strict(tmp_path: Path) -> None:
         export_json_schema(str(tmp_path), casts=["count=date"])
 
 
+def test_declared_schema_types_a_column_that_has_no_explicit_cast(tmp_path: Path) -> None:
+    _write_concept(tmp_path / "one.md", "type: rotina\ncusto: '10.50'\n")
+    _write_concept(tmp_path / "two.md", "type: rotina\ncusto: '7'\n")
+    spec = tmp_path / "docs" / "types" / "rotina.schema.sql"
+    spec.parent.mkdir(parents=True)
+    spec.write_text('CREATE TABLE "rotina" (custo DECIMAL(18, 4));', encoding="utf-8")
+
+    report = export_json_schema(str(tmp_path), spec_template="docs/types/{slug}.md")
+
+    assert report["schemas"]["rotina"]["properties"]["custo"]["type"] == "number"
+
+
+def test_declared_schema_column_degrades_to_string_on_divergent_data(tmp_path: Path) -> None:
+    _write_concept(tmp_path / "one.md", "type: rotina\ncusto: '10.50'\n")
+    _write_concept(tmp_path / "two.md", "type: rotina\ncusto: not-a-number\n")
+    spec = tmp_path / "docs" / "types" / "rotina.schema.sql"
+    spec.parent.mkdir(parents=True)
+    spec.write_text('CREATE TABLE "rotina" (custo DECIMAL(18, 4));', encoding="utf-8")
+
+    report = export_json_schema(str(tmp_path), spec_template="docs/types/{slug}.md")
+
+    assert report["schemas"]["rotina"]["properties"]["custo"]["type"] == "string"
+
+
+def test_declared_schema_is_ignored_without_spec_template(tmp_path: Path) -> None:
+    _write_concept(tmp_path / "one.md", "type: rotina\ncusto: '10.50'\n")
+    spec = tmp_path / "docs" / "types" / "rotina.schema.sql"
+    spec.parent.mkdir(parents=True)
+    spec.write_text('CREATE TABLE "rotina" (custo DECIMAL(18, 4));', encoding="utf-8")
+
+    report = export_json_schema(str(tmp_path))
+
+    assert report["schemas"]["rotina"]["properties"]["custo"]["type"] == "string"
+
+
+def test_explicit_cast_wins_over_declared_schema(tmp_path: Path) -> None:
+    _write_concept(tmp_path / "one.md", "type: rotina\ncusto: '10.50'\n")
+    spec = tmp_path / "docs" / "types" / "rotina.schema.sql"
+    spec.parent.mkdir(parents=True)
+    spec.write_text('CREATE TABLE "rotina" (custo DECIMAL(18, 4));', encoding="utf-8")
+
+    report = export_json_schema(
+        str(tmp_path), casts=["custo=string"], spec_template="docs/types/{slug}.md"
+    )
+
+    assert report["schemas"]["rotina"]["properties"]["custo"]["type"] == "string"
+
+
 def test_unknown_or_invalid_cast_is_reported(tmp_path: Path) -> None:
     _write_concept(tmp_path / "sample.md", "type: test_type\ncount: 42\n")
 

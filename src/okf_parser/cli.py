@@ -101,6 +101,7 @@ def schema(  # noqa: PLR0913 - each argument is an independent public CLI flag.
     cast: RepeatableStrings = None,
     exclude: RepeatableStrings = None,
     zod_import: ZodImport = "zod",
+    spec_template: str | None = None,
 ) -> CliResult[JsonPayload | str]:
     """Export canonical JSON Schema or generic/Astro Zod definitions."""
     return CliResult(
@@ -111,6 +112,7 @@ def schema(  # noqa: PLR0913 - each argument is an independent public CLI flag.
             infer_types=infer_types,
             casts=cast or (),
             zod_import=zod_import,
+            spec_template=spec_template,
         )
     )
 
@@ -225,6 +227,7 @@ def mcp_schema(  # noqa: PLR0913 - MCP exposes the same independent schema flags
     cast: RepeatableStrings = None,
     exclude: RepeatableStrings = None,
     zod_import: ZodImport = "zod",
+    spec_template: str | None = None,
 ) -> dict[str, object] | str:
     """Export canonical schemas, optionally inferring or declaring scalar types."""
     return schema_bundle(
@@ -234,6 +237,7 @@ def mcp_schema(  # noqa: PLR0913 - MCP exposes the same independent schema flags
         infer_types=infer_types,
         casts=cast or (),
         zod_import=zod_import,
+        spec_template=spec_template,
     )
 
 

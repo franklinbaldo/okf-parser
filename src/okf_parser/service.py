@@ -74,6 +74,7 @@ def schema_bundle(  # noqa: PLR0913 - service mirrors the independent public sch
     infer_types: bool = False,
     casts: Sequence[str] = (),
     zod_import: ZodImport = "zod",
+    spec_template: str | None = None,
 ) -> dict[str, object] | str:
     """Export canonical JSON Schema or generic/Astro Zod definitions."""
     if fmt == "zod":
@@ -83,12 +84,14 @@ def schema_bundle(  # noqa: PLR0913 - service mirrors the independent public sch
             infer_types=infer_types,
             casts=casts,
             zod_import=zod_import,
+            spec_template=spec_template,
         )
     return export_json_schema(
         path,
         exclude,
         infer_types=infer_types,
         casts=casts,
+        spec_template=spec_template,
     )
 
 
