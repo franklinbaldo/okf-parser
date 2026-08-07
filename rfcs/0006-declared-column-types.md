@@ -136,71 +136,79 @@ or it is an operator error. A command run without a template performs no
 declaration discovery at all — RFC 0005 behaviour throughout, no
 diagnostics, which is what makes this opt-in at the invocation level too.
 
-### 2. The contract is DuckDB's own DDL, parsed by DuckDB
+### 2. The contract is DuckDB's own SQL, executed whole and checked by post-condition
 
-The file's grammar is exactly one **declarative** `CREATE TABLE` — a plain
-or `OR REPLACE` `CREATE TABLE name (column type, ...)`, with authored
-generated columns permitted inside it — followed by zero or more `COMMENT
-ON TABLE`/`COMMENT ON COLUMN` statements. No `INSERT`, no `ATTACH`, no
-second table, no pragma, and specifically **no `CREATE TABLE ... AS
-SELECT`**, no `CREATE TABLE ... AS` of any other shape. This corrects an
-earlier draft, which additionally listed `CREATE OR REPLACE` and generated
-columns as rejected forms — decision 4 already established that neither
-is dangerous (the connection is fresh and disposable, and a generated
-column's expression is never evaluated against zero rows), so forbidding
-them contradicted the decision that actually governs what's safe. Naming
-them accepted here removes that contradiction rather than leaving the
-prohibition unenforced.
+This decision superseded an earlier draft, which spent most of its length
+(and most of decision 4) trying to make `.schema.sql` a **restricted,
+inert data format** rather than the trusted SQL it obviously is once the
+format is DuckDB DDL at all — a shape-validate-before-execute pipeline
+built specifically to distinguish `CREATE TABLE` from `CREATE TABLE ... AS SELECT` by query-plan root, deny filesystem/network access on the
+compiling connection, and treat `EXPLAIN`'s plan type as a security
+boundary. That design was internally coherent but pointed at the wrong
+goal: a file format that lets an author write arbitrary column types and
+generated-column expressions, but not a join or a `read_csv`, is not safer
+in any threat model worth naming — it is just less useful, for a
+prohibition that inevitably chases the next construct the shape-checker
+didn't anticipate. The choice this RFC actually needs is not "how do we
+make `.schema.sql` safe to run" but "do we run it at all," and the answer
+has to be yes: DuckDB was chosen precisely so a physical type is DuckDB's
+own type, not a grammar this project re-derives. A grammar that only
+accepts one `CREATE TABLE` and zero or more `COMMENT ON` statements is
+already most of the way to reinventing JSON Schema with semicolons — the
+exact complexity moving off JSON Schema was meant to shed.
 
-**An author's own generated column and the compiler's synthesized ones
-(decision 5) are unrelated.** A declaration is free to write its own
-`GENERATED ALWAYS AS` expression on a column — DuckDB accepts it as part
-of the same declarative `CREATE TABLE` form, and it is preserved through
-the catalog read like any other column property that isn't a name or a
-type. But that expression **does not cross into materialization**: the
-compiler reads only the column's *name* and its *type* (`duckdb_columns()`
-reports a generated column's type like any other) from the declaration's
-catalog, and decision 5 builds its own raw-plus-generated pair from that
-name and type — an authored generation expression is simply not one of
-the three things v1 reads from a declaration (decision 5's "names, types,
-comments"). This is not a gap; it is the same rule applied consistently:
-an authored constraint is preserved-but-unread today (decision 5), and an
-authored generated-column expression is preserved-but-unread by the same
-logic.
+**`.schema.sql` is trusted DuckDB SQL, full stop.** The whole file is
+handed to one dedicated in-memory connection in a single `execute()` call
+— CTAS, joins against other tables the script creates, `read_csv`/
+`read_json`, macros, temp tables, an author's own `GENERATED ALWAYS AS`
+column, anything DuckDB's parser, binder, and planner accept. Nothing in
+this project inspects the script's shape, statement types, or query plan;
+DuckDB already decided what the script means and in what order its
+statements run. `okf-parser` checks exactly one thing afterward, against
+the connection's own catalog: **the post-condition**.
 
-CTAS deserves being named rather than left to "no `SELECT`", because it is
-the one form that looks exactly like what this decision wants and is not:
-
-```sql
-CREATE TABLE "Rotina" AS FROM read_csv('/etc/passwd');
+```text
+After the script runs:
+  - exactly one non-temporary table exists whose name is the concept type
+    (decision 3: table name is the type's identity);
+  - every other table the script created (a staging table, a join source,
+    an intermediate CTAS) is not part of the contract and is not looked
+    at further.
 ```
 
-`extract_statements()` reports that as `StatementType.CREATE` (verified),
-it produces a table with the expected name, and a catalog readout after it
-would return plausible columns. Neither the statement type nor anything
-about the resulting table distinguishes it. Decision 4 states how it is
-rejected — **before execution**, which is the only point at which
-rejecting it is worth anything.
+A script that fails to execute, or whose catalog afterward holds zero,
+two, or a differently-named table for the type, is a **malformed
+declaration**: advisory diagnostic, and that type compiles exactly as if
+no declaration existed (decision 7). Everything else about *how* the
+table came to exist — one `CREATE TABLE`, a CTAS over a `read_csv`, a
+chain of temp tables joined together — is invisible past that check.
 
-`okf-parser` does not parse SQL. It hands the file to DuckDB's
-`extract_statements()` (already used by `apply` for `--sql`) to split it,
-validates the *shape* of the resulting statement list, and executes it
-against a throwaway in-memory database that has no attached files and no
-data. The compiled result is read back from `duckdb_columns()` and
-`duckdb_tables()` — DuckDB's own catalog is the parsed representation.
-Both catalog views carry a `comment` column, so a declaration's comments
-survive the round trip through the catalog exactly like its types do; no
-side table is needed to hold them.
+```sql
+-- All three are equally valid declarations for `Rotina`.
 
-One implementation constraint, verified against DuckDB 1.5.5 rather than
-assumed: `extract_statements()` reports `COMMENT ON` with
-`StatementType.ALTER`, the same value it reports for `ALTER TABLE`. Shape
-validation therefore cannot rest on the statement type alone — it must
-confirm the first statement is `StatementType.CREATE` and that every
-subsequent statement, after execution, produced only comment changes and
-no schema change (comparable by reading `duckdb_columns()` before and
-after). Stating it here so an implementation does not discover it as a
-hole in the shape check.
+CREATE TABLE "Rotina" (
+    id VARCHAR,
+    custo DECIMAL(18, 4)
+);
+
+CREATE TABLE "Rotina" AS
+SELECT id, TRY_CAST(custo AS DECIMAL(18, 4)) AS custo
+FROM read_csv('rotinas.csv');
+
+CREATE TEMP TABLE staging AS SELECT * FROM read_json_auto('rotinas/*.json');
+CREATE TABLE "Rotina" AS SELECT id, valor AS custo FROM staging;
+```
+
+**An author's own generated column is preserved but unread, the same as
+an authored constraint.** The compiler (decision 5) reads only a
+declared column's *name* and its *type* — `duckdb_columns()` reports a
+generated column's type like any other — and builds its own
+raw-plus-generated pair from that. An authored `GENERATED ALWAYS AS`
+expression, like an authored `CHECK` or `NOT NULL`, is simply not one of
+the things v1 reads from the declaration's catalog; it is not evaluated
+as part of compiling the concept table (decision 5's split, not the
+declaration script's own generated-column semantics, governs what
+materializes downstream).
 
 Consequences worth stating, because they are the reason for this choice:
 
@@ -214,25 +222,24 @@ Consequences worth stating, because they are the reason for this choice:
   is needed to read a declaration. (The JSON Schema alternative required
   adopting a Draft 2020-12 meta-schema validator.)
 - **DuckDB's own normalized catalog is the one intermediate representation,
-  not the declaration's source text.** An earlier draft claimed "the
-  declaration is the DDL that gets run, so there is no translation step" —
-  that stopped being true once decision 5 introduced the raw/generated
-  split: what materializes on `apply`'s ephemeral table and `duckdb`'s
-  persistent one is never the declaration file's `CREATE TABLE` re-run
-  verbatim, it is a *different* `CREATE TABLE` the compiler synthesizes —
-  one raw `VARCHAR`/`VARCHAR[]` column and one generated column, per
-  declared field, built from the name and type this decision's parse
-  reads out of the declaration's own catalog. The declaration is
-  authoritative for *name* and *type*; the physical table shape is the
-  compiler's, always. This is a translation with exactly one
-  well-specified input (a `(name, type)` pair per column) and one
-  well-specified output (decision 5's pair) — narrow enough that "cannot
-  drift" still holds, just not by being literally the same DDL.
-
-A file that fails this shape validation — a second statement type, a
-missing `CREATE TABLE`, a syntax error DuckDB rejects — is a **malformed
-declaration**: advisory diagnostic, and that type compiles exactly as if
-no declaration existed (decision 7).
+  not the declaration's source text.** What materializes on `apply`'s
+  ephemeral table and `duckdb`'s persistent one is never the declaration
+  script's `CREATE TABLE` re-run verbatim — it is a *different*
+  `CREATE TABLE` the compiler synthesizes, one raw `VARCHAR`/`VARCHAR[]`
+  column and one generated column per declared field, built from the name
+  and type this decision's post-condition read out of the resulting
+  table's catalog entry. The declaration is authoritative for *name* and
+  *type*; the physical table shape is the compiler's, always. This is a
+  translation with exactly one well-specified input (a `(name, type)` pair
+  per column) and one well-specified output (decision 5's pair) — narrow
+  enough that "cannot drift" still holds, regardless of how elaborate the
+  script that produced the input was.
+- **The answer to "why SQL instead of JSON Schema" gets stronger, not
+  weaker.** It stops being only "DuckDB validates the type names" and
+  becomes "the declaration can be a complete, executable, introspectable
+  relational transformation from whatever the source data actually looks
+  like to the table this type's compilation needs" — the exact thing a
+  static schema format cannot express at all.
 
 ### 3. The table name is the type's identity
 
@@ -245,89 +252,69 @@ are named for the exact authored `type` value.
 A declaration whose table name doesn't match is a malformed declaration
 under decision 7 — not a rename, not a redirection.
 
-### 4. Execution is isolated, and isolation is configured rather than assumed
+### 4. Trust model: `.schema.sql` is executable code, not a sandboxed data format
 
-A declaration file is **bundle data, not operator input**. Unlike `--sql`,
-which the caller typed, a `.schema.sql` can come from anyone with write
-access to the bundle — a pull request, a generator, a vendored bundle. An
-in-memory database is *not* by itself a sandbox: `:memory:` still reaches
-the filesystem, the network, and the extension loader, because
-`enable_external_access` defaults to true. Isolation has to be configured,
-and this decision configures it.
+A declaration file is **bundle data, not operator input** in the sense
+that it usually was not typed by the person running the command — it can
+come from anyone with write access to the bundle: a pull request, a
+generator, a vendored bundle. Decision 2 is explicit that it is also,
+simultaneously, arbitrary DuckDB SQL: joins, `read_csv`/`read_json`,
+macros, whatever the connection's session accepts. Those two facts
+together mean there is no honest way to also claim `.schema.sql` is safe
+to run against data you don't trust. An earlier draft tried anyway —
+disabling `enable_external_access`, locking configuration, distinguishing
+`CREATE_TABLE` from `CREATE_TABLE_AS` by query plan before execution — and
+in doing so re-imposed exactly the restricted-DDL-only shape decision 2
+now rejects, for a guarantee ("this file cannot do anything but declare
+columns") that was never true of a file whose whole reason for existing is
+that DuckDB executes it.
 
-The connection a declaration is compiled on is created for that purpose
-alone, discarded once the catalog has been read, and set up as:
+**So this RFC states the trust model instead of simulating a sandbox for
+it:**
 
-```sql
-SET enable_external_access = false;
-SET lock_configuration = true;
-```
+> Running a bundle's `.schema.sql` grants it the same privileges as the
+> `okf-parser` process itself — filesystem, network, extensions, whatever
+> the DuckDB connection in that process can reach. Do not run
+> `.schema.sql` from a bundle you would not otherwise trust to execute
+> arbitrary code, for the same reason you would not run its Makefile,
+> its migration scripts, or a notebook it ships. A bundle inside a
+> repository you already build and test carries no new risk merely because
+> one more of its files is `.sql`; a bundle from an untrusted upload,
+> a public submission queue, or a merely-contemplative preview path (a
+> site indexer, a PR diff renderer) should either not execute
+> `.schema.sql` at all, or do so in whatever sandbox that caller already
+> uses for untrusted code generally — that boundary belongs to the caller,
+> not to this file format.
 
-`enable_external_access=false` denies file, HTTP, and attach access;
-`lock_configuration=true` makes the setting unresettable, so a `SET` inside
-the declaration cannot undo it. Verified: with it, `CREATE TABLE r AS FROM
-read_csv('/etc/hostname')` fails with `Permission Error: ... file system
-operations are disabled by configuration`.
+This changes which commands touch a declaration at all, and that line is
+now the actual security boundary: `apply` and `duckdb` execute
+`.schema.sql` (they materialize the concept table, decision 5), because a
+caller running either already intends to execute code against this
+bundle. `check` and `schema` also execute it today, for the same reason
+`apply`/`duckdb` do — there is currently no lighter-weight way to read a
+declaration's shape than running it — which is itself a reason a
+merely-contemplative tool (one that only wants to *display* a bundle, not
+build with it) should think about whether it wants `--spec-template` on
+by default at all; that is a caller-side decision this RFC does not make
+for it.
 
-That is the second barrier. The first is decision 2's shape rule, enforced
-in three steps:
+**What the compiling connection still does, and why — determinism, not
+sandboxing:**
 
-- statements are split with `extract_statements()` **before** anything
-  runs, so a separator smuggled into an identifier or a type expression
-  cannot extend the script;
-- the first statement must be `StatementType.CREATE`, **and its query plan
-  root must be `CREATE_TABLE`, not `CREATE_TABLE_AS`.** DuckDB's own
-  planner makes the distinction the statement type does not, and `EXPLAIN`
-  exposes it without executing anything (verified on 1.5.5):
+- A fresh, dedicated in-memory connection per declaration, discarded once
+  the catalog has been read. This keeps one type's declaration from ever
+  seeing another type's tables or a prior compilation's leftover state —
+  an isolation property for *correctness* (decision 3's per-type scoping),
+  not for safety.
+- `SET TimeZone = 'UTC'`. Decision 5's cast rule compares timestamp
+  values, and leaving the session timezone ambient would make whether a
+  column types depend on the machine running the command.
 
-  ```text
-  EXPLAIN CREATE TABLE t(a INT, b VARCHAR)         -> CREATE_TABLE
-  EXPLAIN CREATE TABLE t AS FROM src WITH NO DATA  -> CREATE_TABLE_AS
-  EXPLAIN CREATE TABLE t AS FROM src LIMIT 0       -> CREATE_TABLE_AS
-  ```
-
-  This is the check an earlier draft got wrong. It proposed counting rows
-  after execution instead, on the claim that "every CTAS produces rows or
-  fails" — false: `WITH NO DATA` and `LIMIT 0` are CTAS forms whose entire
-  purpose is producing an empty table, and both passed that check
-  (verified). Planning rather than counting also means the CTAS never runs
-  at all, which is what closes the resource-exhaustion shape
-  (`CREATE TABLE t AS FROM range(1e12) WHERE ...`) properly: a rejected
-  plan does no work, whereas a row count is taken after the work is done;
-- every subsequent statement must, after execution, have changed only
-  comments and not the column set (comparable by reading
-  `duckdb_columns()` before and after), which is what closes the
-  `COMMENT ON`-reports-as-`StatementType.ALTER` hole named in decision 2.
-
-A zero-rows assertion on the created table is kept as defence in depth —
-it costs nothing and would catch a future `CREATE_TABLE`-planned form that
-somehow carries data — but it is explicitly **not** the proof of shape.
-
-**Two forms this RFC no longer claims to reject**, because claiming it
-without a mechanism was the same error in miniature:
-
-- `CREATE OR REPLACE TABLE` plans as `CREATE_TABLE` and is not
-  distinguishable there. It is also harmless: the connection is fresh and
-  empty, so there is nothing for it to replace. It is accepted, and
-  compiles identically to `CREATE TABLE`.
-- A **generated column** (`b INT GENERATED ALWAYS AS (a*2)`) also plans as
-  `CREATE_TABLE`, and — verified — leaves `information_schema.columns`'s
-  `is_generated`/`generation_expression` empty, so the catalog does not
-  reveal it either. It is accepted: the table has no rows, so the
-  expression is never evaluated, and the column's declared type is in the
-  catalog like any other. A declaration using one is compiled from its
-  catalog type, and the generation expression is simply not carried
-  anywhere.
-
-Only the catalog readout — column names, types in DuckDB's normalized
-spelling, comments — crosses back out. The real compilation (`apply`'s
-ephemeral database, `duckdb`'s output) then issues DDL built from that
-readout, never from the file's text, which is never re-executed anywhere.
-
-The compiling connection also pins `SET TimeZone = 'UTC'`. Decision 5's
-cast rule compares timestamp values, and leaving the session timezone
-ambient would make whether a column types depend on the machine running the
-command.
+Only the catalog readout — the post-condition table's column names, types
+in DuckDB's normalized spelling, and comments — crosses back out. The real
+compilation (`apply`'s ephemeral database, `duckdb`'s output) then issues
+DDL built from that readout, never from the declaration file's text, which
+is never re-executed anywhere past the one connection it ran on.
 
 ### 5. Raw is the truth; typed is a generated projection over it
 
@@ -411,8 +398,7 @@ This buys three things at once, verified rather than assumed:
 
 - **The write guard is DuckDB's, not ours.** `UPDATE t SET custo = 5`
   against a generated column fails at bind time —
-  `Binder Error: Can't update column "custo" because it is a generated
-  column!` (verified) — which replaces the row-level Python guard the
+  `Binder Error: Can't update column "custo" because it is a generated column!` (verified) — which replaces the row-level Python guard the
   previous draft needed with a property the database enforces before
   `apply` ever runs its own checks. Decision 7a is now this fact, not a
   bespoke comparison.
@@ -454,15 +440,15 @@ profile per family, with no numeric-width limit to run out of.** Verified
 against DuckDB 1.5.5's `regexp_matches`, operating on the original text,
 never on a cast result:
 
-| Declared family | Exactness predicate on trimmed `v` |
-| --- | --- |
-| integer (`BIGINT`) | `regexp_matches(v, '^[+-]?[0-9]+(\.0+)?$')` |
-| fixed-point (`DECIMAL(p,s)`) | `regexp_matches(v, '^[+-]?[0-9]+(\.[0-9]{0,s}0*)?$')` (`s` from the declared scale) |
-| `TIMESTAMP` (naive) | `regexp_matches(v, '^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,6})?)?$')` |
-| `TIMESTAMPTZ` | `regexp_matches(v, '^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,6})?)?(Z\|[+-][0-9]{2}(:?[0-9]{2})?)$')` |
-| `DATE` | a bare `YYYY-MM-DD`, or `TIMESTAMP`'s pattern above at `00:00[:00[.0+]]` with **no** offset, or `TIMESTAMPTZ`'s pattern above at `00:00[:00[.0+]]` with offset restricted to `Z`/`+00`/`+00:00` — see below for why a non-`+00` offset is excluded even at midnight |
-| `T[]` | `T`'s predicate applied to every element (below) |
-| `VARCHAR`, `BOOLEAN`, `UUID`, `DOUBLE` | `TRY_CAST` succeeding is itself exact — no lossy path from text exists for these |
+| Declared family                        | Exactness predicate on trimmed `v`                                                                                                                                                                                                                                  |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| integer (`BIGINT`)                     | `regexp_matches(v, '^[+-]?[0-9]+(\.0+)?$')`                                                                                                                                                                                                                         |
+| fixed-point (`DECIMAL(p,s)`)           | `regexp_matches(v, '^[+-]?[0-9]+(\.[0-9]{0,s}0*)?$')` (`s` from the declared scale)                                                                                                                                                                                 |
+| `TIMESTAMP` (naive)                    | `regexp_matches(v, '^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,6})?)?$')`                                                                                                                                                                 |
+| `TIMESTAMPTZ`                          | `regexp_matches(v, '^[0-9]{4}-[0-9]{2}-[0-9]{2}[ T][0-9]{2}:[0-9]{2}(:[0-9]{2}(\.[0-9]{1,6})?)?(Z\|[+-][0-9]{2}(:?[0-9]{2})?)$')`                                                                                                                                   |
+| `DATE`                                 | a bare `YYYY-MM-DD`, or `TIMESTAMP`'s pattern above at `00:00[:00[.0+]]` with **no** offset, or `TIMESTAMPTZ`'s pattern above at `00:00[:00[.0+]]` with offset restricted to `Z`/`+00`/`+00:00` — see below for why a non-`+00` offset is excluded even at midnight |
+| `T[]`                                  | `T`'s predicate applied to every element (below)                                                                                                                                                                                                                    |
+| `VARCHAR`, `BOOLEAN`, `UUID`, `DOUBLE` | `TRY_CAST` succeeding is itself exact — no lossy path from text exists for these                                                                                                                                                                                    |
 
 Each predicate is combined with `TRY_CAST(v AS T) IS NOT NULL` — a value
 can satisfy the text shape and still be out of range (`DECIMAL(3,0)` given
@@ -477,11 +463,9 @@ checks answer different questions and neither substitutes for the other.
 found by testing the cast DuckDB actually performs, not by reasoning about
 what "midnight" should mean.** `TRY_CAST(v AS DATE)` does not convert
 through the offset first — it is a **textual truncation** of the
-date-literal component, verified: `TRY_CAST('2024-05-09T23:00:00-03' AS
-DATE)` returns `2024-05-09`, the literal date substring, even though that
+date-literal component, verified: `TRY_CAST('2024-05-09T23:00:00-03' AS DATE)` returns `2024-05-09`, the literal date substring, even though that
 instant is `2024-05-10 02:00:00+00` — a different UTC calendar day.
-Casting the same text to `TIMESTAMPTZ` confirms it: `2024-05-10
-02:00:00+00`. A naive "midnight in its own offset is safe for `DATE`"
+Casting the same text to `TIMESTAMPTZ` confirms it: `2024-05-10 02:00:00+00`. A naive "midnight in its own offset is safe for `DATE`"
 rule would have accepted `'2024-05-09T23:00:00-03'` as an exact `DATE`
 and silently materialized the wrong day. Restricting the offset-bearing
 form to `Z`/`+00`/`+00:00` closes this — at UTC, DuckDB's textual
@@ -509,8 +493,7 @@ two counterexamples the carrier-based rule missed:
 ```
 
 **Arrays: element-wise, via `list_filter`/`list_count`, not
-`list_reduce`.** DuckDB casts list children individually — `TRY_CAST(v AS
-BIGINT[])` inherits the same per-element rounding `TRY_CAST(v AS BIGINT)`
+`list_reduce`.** DuckDB casts list children individually — `TRY_CAST(v AS BIGINT[])` inherits the same per-element rounding `TRY_CAST(v AS BIGINT)`
 has — so `T[]`'s predicate is `T`'s predicate checked on every element,
 counting violations rather than multiplying booleans:
 
@@ -519,8 +502,7 @@ list_count(list_filter(v, x -> x IS NOT NULL AND NOT (<predicate for T> on x))) 
 ```
 
 An earlier draft used `list_reduce` with no initial value, which throws
-outright on an empty list (verified: `Cannot perform list_reduce on an
-empty input list`) — a declared array field with a document holding `[]`
+outright on an empty list (verified: `Cannot perform list_reduce on an empty input list`) — a declared array field with a document holding `[]`
 would have raised where it should simply pass. `list_filter`/`list_count`
 was verified against the empty list (`0 = 0`, accepted) and a list holding
 `NULL` (`NULL` values are skipped by the predicate, not treated as
@@ -657,9 +639,10 @@ fallback, and only two:
   survives only in the diagnostic.
 
 Enumerated, the cases that reach each: whole-declaration fallback takes an
-unreadable file, a shape decision 2/4 rejects (a `CREATE_TABLE_AS` plan
-included), a DuckDB syntax error, a table name mismatch (decision 3), and
-a derived-path collision (decision 1, both types). Failing-cast fallback
+unreadable file, a script that fails to execute, a post-condition decision
+2 rejects (zero, two, or a differently-named table left behind — decision
+3's identity check), and a derived-path collision (decision 1, both
+types). Failing-cast fallback
 takes decision 5's predicate returning false for any row. Unsupported-type
 fallback takes decision 5a's set, and a declared reserved column (decision
 5b) behaves the same way. Undeclared observed fields and undeclared
@@ -804,11 +787,9 @@ comparison decision 5's design exists to make possible. The `__okf_`
 prefix is the signal that it is compiler-owned and outside the declared
 surface, exactly as it already signals for `__okf_path`/`__okf_body` on
 the four contract tables; nothing new is being asked of that prefix here.
-Two boundaries keep this from leaking further than intended: `schema
---schema-format json|zod` (decision 9) never emits a raw column as a
+Two boundaries keep this from leaking further than intended: `schema --schema-format json|zod` (decision 9) never emits a raw column as a
 property — its export walks the *declared* schema, and raw columns are
-not declared, they are synthesized — and a declaration's `COMMENT ON
-COLUMN` always names the public column, never the raw one, so comments
+not declared, they are synthesized — and a declaration's `COMMENT ON COLUMN` always names the public column, never the raw one, so comments
 read exactly as authored regardless of this. In `apply`, raw columns
 carry the write protection decision 5 now specifies explicitly.
 
@@ -898,18 +879,18 @@ where it lives.
 The export mapping is stated exhaustively, because decision 5a's closed
 type set exists precisely so that it can be:
 
-| DuckDB | JSON Schema | Zod |
-| --- | --- | --- |
-| `VARCHAR` | `string` | `z.string()` |
-| `BIGINT` | `integer` | `z.number().int()` |
-| `DOUBLE` | `number` | `z.number()` |
-| `DECIMAL(p,s)` | `string`, `pattern` for the scale | `z.string()` |
-| `BOOLEAN` | `boolean` | `z.boolean()` |
-| `DATE` | `string` + `format: date` | `z.string()` |
-| `TIMESTAMP` | `string` + `format: date-time` | `z.string()` |
-| `TIMESTAMPTZ` | `string` + `format: date-time` | `z.string()` |
-| `UUID` | `string` + `format: uuid` | `z.string().uuid()` |
-| `T[]` | `array` of `T`'s row above | `z.array(...)` |
+| DuckDB         | JSON Schema                       | Zod                 |
+| -------------- | --------------------------------- | ------------------- |
+| `VARCHAR`      | `string`                          | `z.string()`        |
+| `BIGINT`       | `integer`                         | `z.number().int()`  |
+| `DOUBLE`       | `number`                          | `z.number()`        |
+| `DECIMAL(p,s)` | `string`, `pattern` for the scale | `z.string()`        |
+| `BOOLEAN`      | `boolean`                         | `z.boolean()`       |
+| `DATE`         | `string` + `format: date`         | `z.string()`        |
+| `TIMESTAMP`    | `string` + `format: date-time`    | `z.string()`        |
+| `TIMESTAMPTZ`  | `string` + `format: date-time`    | `z.string()`        |
+| `UUID`         | `string` + `format: uuid`         | `z.string().uuid()` |
+| `T[]`          | `array` of `T`'s row above        | `z.array(...)`      |
 
 `DECIMAL` maps to `string`, not `number`: JSON's number is a double, so
 exporting a fixed-point column as `number` would hand a consumer the exact
@@ -951,8 +932,7 @@ than becoming a second source of truth:
   is left untouched, unconditionally — `init` only fills gaps, the same
   posture `check --require-spec` already takes toward existing documents.
 - **Dry-run by default, `--write` to create.** Without `--write`, `init`
-  reports which paths it would create (the same shape `check
-  --require-spec`'s diagnostics already use) and creates nothing — the
+  reports which paths it would create (the same shape `check --require-spec`'s diagnostics already use) and creates nothing — the
   same write-gate `apply` already uses for the same reason.
 - **`--infer-schema` proposes a starter `.schema.sql`, never invents one.**
   `init` alone scaffolds only the narrative document; `--infer-schema` also
@@ -965,10 +945,8 @@ than becoming a second source of truth:
   losing information, falling back to `VARCHAR` when none do. "Without
   losing information" is checked literally for the two candidates where
   DuckDB's own `TRY_CAST` is lossy rather than failing —
-  `TRY_CAST('10.50' AS BIGINT)` rounds to `11`, `TRY_CAST(<timestamp> AS
-  DATE)` drops the time — by requiring the cast result to format back to
-  the exact original string before it counts as a match. One `CREATE
-  TABLE` and one bulk insert hold a type's every column at once, and one
+  `TRY_CAST('10.50' AS BIGINT)` rounds to `11`, `TRY_CAST(<timestamp> AS DATE)` drops the time — by requiring the cast result to format back to
+  the exact original string before it counts as a match. One `CREATE TABLE` and one bulk insert hold a type's every column at once, and one
   `SELECT` tests every column's every candidate together: a single
   vectorized DuckDB round trip, not a query per field per candidate.
   A field observed as a list or map on even one document is dropped
@@ -1074,8 +1052,7 @@ matters:
   DDL, `DESCRIBE` reports types), and the community `json_schema` extension
   validates JSON *documents*, never table shapes.
 
-JSON Schema remains a first-class **output** — `schema --schema-format
-json` is unchanged and now reflects declarations (decision 9). Using it as
+JSON Schema remains a first-class **output** — `schema --schema-format json` is unchanged and now reflects declarations (decision 9). Using it as
 the input as well conflated a serialization format with a type system.
 
 ### A bundle-invented `fields: {name: {type, description}}` frontmatter shape
@@ -1116,6 +1093,34 @@ with; making it a hard failure would mean a producer cannot declare an
 intended type until the data is already perfect, which is exactly backwards
 — the declaration is how they find out it isn't. `--fail-on-spec-divergence`
 (decision 8) gives the strict posture to whoever wants it, opt-in.
+
+### Restricting `.schema.sql` to a single declarative `CREATE TABLE`, sandboxed by configuration
+
+An earlier draft of decisions 2 and 4 rejected `CREATE TABLE ... AS SELECT` and every other multi-statement shape, distinguishing it from
+plain `CREATE TABLE` by `EXPLAIN`'s query-plan root (`CREATE_TABLE` vs.
+`CREATE_TABLE_AS`), and ran the surviving single statement on a connection
+with `enable_external_access=false` and `lock_configuration=true` — an
+attempt to make `.schema.sql` a restricted, safe-by-construction data
+format despite being literal DuckDB SQL.
+
+Rejected in favor of decision 2/4's trust-model statement, for two
+reasons. First, it does not actually deliver a security property: nothing
+stops the *next* accepted construct (a scalar subquery, a table function,
+a future DuckDB feature) from doing exactly what CTAS was singled out for,
+so the shape-checker's job is never finished, only extended reactively.
+Second, and more importantly, it works directly against this RFC's own
+stated reason for choosing DuckDB DDL over JSON Schema in the first place
+— "DuckDB parses the file; its catalog is the parsed representation" only
+buys freedom from maintaining a grammar if the grammar stays DuckDB's
+whole grammar. A declaration format that accepts column types but not a
+join is a bespoke, JSON-Schema-shaped subset of SQL wearing a `.sql`
+extension, carrying the exact maintenance burden ("what constructs do we
+accept, and how do we detect the ones we don't") the migration away from
+JSON Schema was meant to shed. The post-condition model (decision 2) gets
+the real benefit — an author can express any relational transformation
+DuckDB supports — for less implementation surface, not more, because it
+checks one fact about the result instead of policing every way of
+reaching it.
 
 ### `duckdb` as an atomically-published build artifact, not a schema written into a caller's connection
 

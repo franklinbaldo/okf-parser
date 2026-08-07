@@ -1,15 +1,21 @@
-"""Read a type's optional declared DuckDB DDL, per RFC 0006.
+"""Read a type's optional declared DuckDB SQL, per RFC 0006's trust model.
 
 An optional ``.schema.sql`` file may sit beside a type's specification
 document, at a path *derived* the same way `type_specs.py` derives the spec
 document's own path - no `schema:` frontmatter field, for the same reason: a
 declared path would be a second fact free to disagree with the first.
 
-The file must contain exactly one ``CREATE TABLE`` statement, optionally
-followed by ``COMMENT ON`` statements. It is never hand-parsed: DuckDB's own
-`extract_statements()` validates its shape and an in-memory connection's
-catalog (`duckdb_columns()`, `duckdb_tables()`) is the parsed representation,
-so whatever DuckDB 1.5.5 accepts as valid DDL is accepted here too.
+``.schema.sql`` is trusted DuckDB SQL, not a restricted data format: CTAS,
+joins, `read_csv`/`read_json`, macros, temp tables, generated columns -
+anything a dedicated DuckDB connection accepts is accepted here too, run
+whole. Nothing in this module inspects statement shape or type; only the
+*post-condition* is checked afterward, against the connection's own
+catalog: exactly one non-temporary table named for the concept type must
+exist, with a queryable schema. Auxiliary tables the script created along
+the way are not part of the contract and are ignored. Never run this
+against a `.schema.sql` from a bundle you would not otherwise trust to
+execute arbitrary code - it carries the same power as a Makefile or a
+migration script, not the safety of a JSON Schema document.
 """
 
 from __future__ import annotations
@@ -48,7 +54,7 @@ _DUCKDB_TYPE_KINDS: dict[str, CastKind] = {
 
 
 class DeclaredSchemaError(ValueError):
-    """Raised when a `.schema.sql` file does not have the RFC 0006 shape."""
+    """Raised when a `.schema.sql` script fails, or its post-condition doesn't hold."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,59 +88,38 @@ def _duckdb_type_kind(duckdb_type: str) -> CastKind | None:
     return _DUCKDB_TYPE_KINDS.get(normalized)
 
 
-def parse_declared_schema(sql_text: str) -> DeclaredSchema:
-    """Decode one `.schema.sql` file's single `CREATE TABLE` and its comments.
+def parse_declared_schema(sql_text: str, concept_type: str) -> DeclaredSchema:
+    """Run a `.schema.sql` script whole, then check only its post-condition.
 
-    Executed against a throwaway in-memory connection so DuckDB's own parser,
-    binder, and catalog do the work; nothing here re-derives what the DDL
-    means. Exactly one `CREATE TABLE` is allowed (no CTAS), with zero or more
-    `COMMENT ON` statements naming that same table or one of its columns.
+    The whole file is handed to one dedicated in-memory connection in a
+    single `execute()` call - DuckDB's own parser, binder, and planner
+    decide what it means and in what order its statements run; nothing here
+    re-derives or restricts that. Afterward, the connection's own catalog
+    (`duckdb_tables()`, `duckdb_columns()`) must show exactly one
+    non-temporary table named for `concept_type` - table name is the type's
+    identity (decision 3), so a script that produced zero, two, or a
+    differently-named table has not declared this type, regardless of how
+    it tried. Any other table the script created (a staging table, a join
+    source) is simply not looked at.
     """
     con = duckdb.connect()
     try:
         try:
-            statements = con.extract_statements(sql_text)
+            con.execute(sql_text)
         except duckdb.Error as exc:
-            message = f"declared schema could not be parsed: {exc}"
+            message = f"declared schema script failed: {exc}"
             raise DeclaredSchemaError(message) from exc
-        create_statements = [
-            s
-            for s in statements
-            if str(s.type).endswith("CREATE") and s.query.strip().upper().startswith("CREATE TABLE")
-        ]
-        if len(create_statements) != 1:
-            message = (
-                "declared schema must contain exactly one CREATE TABLE statement, "
-                f"found {len(create_statements)}"
-            )
-            raise DeclaredSchemaError(message)
-        for statement in statements:
-            query = statement.query.strip().rstrip(";")
-            is_create = statement in create_statements
-            is_comment = str(statement.type).endswith("ALTER") and query.upper().startswith(
-                "COMMENT ON"
-            )
-            if not (is_create or is_comment):
-                message = (
-                    "declared schema may only contain one CREATE TABLE and "
-                    f"COMMENT ON statements, found: {query}"
-                )
-                raise DeclaredSchemaError(message)
-            try:
-                con.execute(query)
-            except duckdb.Error as exc:
-                message = f"declared schema statement failed: {query}: {exc}"
-                raise DeclaredSchemaError(message) from exc
 
-        # The table's name is read back from the catalog, never re-derived from
-        # the CREATE TABLE text: a quoted identifier can itself contain
-        # whitespace (`"Blog Post"`), which a naive token split on the query
-        # text would cut in the wrong place. DuckDB's own parser already
-        # resolved the real name once, at CREATE time.
-        tables = con.execute("SELECT table_name, comment FROM duckdb_tables()").fetchall()
-        if len(tables) != 1:
-            names = ", ".join(repr(row[0]) for row in tables)
-            message = f"declared schema must create exactly one table, found: {names}"
+        tables = con.execute(
+            "SELECT table_name, comment FROM duckdb_tables() "
+            "WHERE table_name = ? AND NOT temporary",
+            [concept_type],
+        ).fetchall()
+        if not tables:
+            message = f"declared schema script did not leave behind a table named {concept_type!r}"
+            raise DeclaredSchemaError(message)
+        if len(tables) > 1:
+            message = f"declared schema script left more than one table named {concept_type!r}"
             raise DeclaredSchemaError(message)
         table_name, table_comment = tables[0]
 

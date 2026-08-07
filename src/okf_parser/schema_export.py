@@ -91,7 +91,7 @@ def _declared_casts(
         if not schema_path.is_file():
             continue
         try:
-            declared = parse_declared_schema(schema_path.read_text(encoding="utf-8"))
+            declared = parse_declared_schema(schema_path.read_text(encoding="utf-8"), concept_type)
         except DeclaredSchemaError:
             continue
         for field, kind in declared_cast_kinds(declared).items():
