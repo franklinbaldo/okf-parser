@@ -1,0 +1,91 @@
+name: Prepare RFC 0001 release metadata
+
+on:
+  push:
+    branches:
+      - rfc/0001-shared-contract-pydantic
+
+concurrency:
+  group: prepare-rfc0001-release
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: rfc/0001-shared-contract-pydantic
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+      - name: Synchronize 0.19.1 metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              "pyproject.toml": [('version = "0.19.0"', 'version = "0.19.1"')],
+              "typescript/package.json": [('"version": "0.19.0"', '"version": "0.19.1"')],
+              "typescript-duckdb/package.json": [
+                  ('"version": "0.19.0"', '"version": "0.19.1"'),
+                  ('"okf-parser": "^0.19.0"', '"okf-parser": "^0.19.1"'),
+              ],
+              "typescript/src/version.ts": [
+                  ('PROTOCOL_VERSION = "0.19.0"', 'PROTOCOL_VERSION = "0.19.1"')
+              ],
+          }
+          for filename, pairs in replacements.items():
+              path = Path(filename)
+              text = path.read_text(encoding="utf-8")
+              for old, new in pairs:
+                  if old not in text:
+                      raise SystemExit(f"expected {old!r} in {filename}")
+                  text = text.replace(old, new, 1)
+              path.write_text(text, encoding="utf-8")
+
+          Path("changelog/0.19.1.md").write_text(
+              """---
+          type: Release
+          title: okf-parser 0.19.1
+          description: simplify RFC 0001 around the shared schema contract before implementing Pydantic source generation
+          ---
+
+          # okf-parser 0.19.1
+
+          ## RFC 0001 reconciliation
+
+          RFC 0001 is rewritten around the architecture that now exists after RFC 0006.
+
+          - `TypeContract` remains the single language-neutral schema IR;
+          - the first code-generation target becomes `schema --format pydantic`;
+          - JSON Schema, Zod, dynamic Pydantic and generated Pydantic source are required to share the same contract;
+          - no second `ContractGraph`, `codegen` command hierarchy or `OKFProfile.fields` format is introduced;
+          - Python-to-OKF generation is deferred to a separate RFC because declaration authority now needs to account for `.schema.sql` and exact DuckDB types;
+          - the first implementation is intentionally stdout-only and deterministic rather than adding another filesystem ownership/check subsystem.
+          """,
+              encoding="utf-8",
+          )
+          PY
+
+          uv lock
+          npm install --prefix typescript --package-lock-only --ignore-scripts
+          npm install --prefix typescript-duckdb --package-lock-only --ignore-scripts
+
+          git rm -f .github/workflows/prepare-rfc0001-release.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: synchronize 0.19.1 release metadata"
+          git push origin HEAD:rfc/0001-shared-contract-pydantic
