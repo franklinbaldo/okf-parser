@@ -190,6 +190,33 @@ def apply(  # each argument is an independent public CLI flag.
     return CliResult(payload, 0 if payload["succeeded"] else 1)
 
 
+def _duckdb_export_payload(
+    path: str,
+    database: str,
+    schema: str,
+    *,
+    overwrite: bool,
+    exclude: RepeatableStrings,
+    spec_template: str | None,
+) -> JsonPayload:
+    """Return the shared DuckDB export payload, including known collision errors."""
+    try:
+        return export_duckdb(
+            path,
+            database,
+            schema,
+            overwrite=overwrite,
+            exclude=exclude or (),
+            spec_template=spec_template,
+        )
+    except BundleExportError as exc:
+        return {
+            "error": str(exc),
+            "schema": exc.schema_name,
+            "existing_tables": list(exc.tables),
+        }
+
+
 @app.command(name="duckdb")
 def duckdb_command(
     path: str,
@@ -201,26 +228,15 @@ def duckdb_command(
     spec_template: str | None = None,
 ) -> CliResult[JsonPayload]:
     """Materialize an OKF bundle into a DuckDB database file."""
-    try:
-        return CliResult(
-            export_duckdb(
-                path,
-                database,
-                schema,
-                overwrite=overwrite,
-                exclude=exclude or (),
-                spec_template=spec_template,
-            )
-        )
-    except BundleExportError as exc:
-        return CliResult(
-            {
-                "error": str(exc),
-                "schema": exc.schema_name,
-                "existing_tables": list(exc.tables),
-            },
-            exit_code=1,
-        )
+    payload = _duckdb_export_payload(
+        path,
+        database,
+        schema,
+        overwrite=overwrite,
+        exclude=exclude,
+        spec_template=spec_template,
+    )
+    return CliResult(payload, exit_code=1 if "error" in payload else 0)
 
 
 @app.command
@@ -424,12 +440,12 @@ def mcp_duckdb_export(
     spec_template: str | None = None,
 ) -> dict[str, object]:
     """Materialize the bundle into a persistent DuckDB database."""
-    return export_duckdb(
+    return _duckdb_export_payload(
         path,
         database,
         schema,
         overwrite=overwrite,
-        exclude=exclude or (),
+        exclude=exclude,
         spec_template=spec_template,
     )
 

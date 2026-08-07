@@ -192,6 +192,7 @@ Materializes the bundle's concepts and links into a DuckDB database file.
 
 On a name collision without `--overwrite`, exits `1` with
 `{"error", "schema", "existing_tables"}` in the payload instead of raising.
+The MCP `duckdb_export` tool preserves that same structured collision payload.
 
 MCP tool: `duckdb_export` with `--allow-write`; it also accepts `spec_template`.
 

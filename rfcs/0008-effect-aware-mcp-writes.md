@@ -255,21 +255,21 @@ The initial matrix is:
 
 | Tool | `readOnlyHint` | `destructiveHint` | `idempotentHint` | `openWorldHint` |
 | --- | --- | --- | --- | --- |
-| `check` | `true` | n/a | n/a | `false` |
-| `inventory` | `true` | n/a | n/a | `false` |
-| `graph` | `true` | n/a | n/a | `false` |
+| `check` | `true` | `false` | `true` | `false` |
+| `inventory` | `true` | `false` | `true` | `false` |
+| `graph` | `true` | `false` | `true` | `false` |
 | `schema` | `false` | `true` | `false` | `true` |
-| `format_check` | `true` | n/a | n/a | `false` |
+| `format_check` | `true` | `false` | `true` | `false` |
 | `apply_preview` | `false` | `true` | `false` | `true` |
-| `init_preview` | `true` | n/a | n/a | `false` |
-| `import_preview` | `true` | n/a | n/a | `true` |
+| `init_preview` | `true` | `false` | `true` | `false` |
+| `import_preview` | `true` | `false` | `true` | `true` |
 | `format_write` | `false` | `true` | `true` | `false` |
 | `apply_write` | `false` | `true` | `false` | `true` |
 | `init_write` | `false` | `false` | `true` | `false` |
 | `import_write` | `false` | `true` | `false` | `true` |
 | `duckdb_export` | `false` | `true` | `false` | `true` |
 
-`destructiveHint` is omitted/irrelevant for tools annotated read-only.
+For read-only tools, `destructiveHint=false` and `idempotentHint=true` are emitted explicitly even though MCP only gives those hints behavioral meaning for mutating tools. Explicit values keep `tools/list` deterministic and reviewable.
 
 The less obvious rows are deliberate:
 
@@ -552,7 +552,7 @@ isolated FastMCP server and conditionally registers commit tools. This avoids a
 process-global visibility switch entirely, so constructing a write-capable profile
 cannot leak authority into the default profile.
 
-The observable contract remains mechanism-independent. It mandates the observable contract:
+The mechanism is an implementation detail; the observable contract remains:
 
 - both profiles can be constructed independently in one test process;
 - default profile has no explicit commit tools;

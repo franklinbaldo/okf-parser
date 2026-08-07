@@ -64,6 +64,23 @@ def test_write_mcp_profile_adds_only_explicit_commit_tools() -> None:
     assert default == set(_tools(cli.build_mcp()))
 
 
+def test_mcp_public_schemas_keep_aliases_and_no_dynamic_write_switch() -> None:
+    tools = _tools(cli.build_mcp(allow_write=True))
+
+    apply_preview = tools["apply_preview"].inputSchema["properties"]
+    apply_write = tools["apply_write"].inputSchema["properties"]
+    assert "from" in apply_preview
+    assert "from_" not in apply_preview
+    assert "spec_template" in apply_preview
+    assert "write" not in apply_preview
+    assert "from" in apply_write
+    assert "write" not in apply_write
+
+    assert "write" not in tools["init_preview"].inputSchema["properties"]
+    assert "write" not in tools["import_preview"].inputSchema["properties"]
+    assert "spec_template" in tools["duckdb_export"].inputSchema["properties"]
+
+
 def test_mcp_effect_annotations_describe_maximum_possible_effect() -> None:
     tools = _tools(cli.build_mcp(allow_write=True))
     expected = {
@@ -126,3 +143,17 @@ def test_import_preview_and_write_share_service_with_only_commit_bit_changed(
     assert preview == {"written": False}
     assert written == {"written": True}
     assert calls[0] | {"write": True} == calls[1]
+
+
+def test_duckdb_export_preserves_cli_collision_payload(monkeypatch: pytest.MonkeyPatch) -> None:
+    def collide(*_args: object, **_kwargs: object) -> dict[str, object]:
+        schema_name = "okf"
+        raise cli.BundleExportError(schema_name, ("concepts", "links"))
+
+    monkeypatch.setattr(cli, "export_duckdb", collide)
+
+    payload = cli.mcp_duckdb_export("bundle")
+
+    assert payload["schema"] == "okf"
+    assert payload["existing_tables"] == ["concepts", "links"]
+    assert "pass overwrite=True" in str(payload["error"])
