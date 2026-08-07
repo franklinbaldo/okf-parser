@@ -96,7 +96,7 @@ class _ConceptRow:
     frontmatter: dict[str, YamlValue]
 
 
-def _identifier_key(identifier: str) -> str:
+def duckdb_identifier_key(identifier: str) -> str:
     """Fold ASCII letters the same way DuckDB resolves quoted identifiers."""
     return "".join(chr(ord(char) + 32) if "A" <= char <= "Z" else char for char in identifier)
 
@@ -174,10 +174,10 @@ def _rows_by_type(bundle: Bundle) -> dict[str, list[_ConceptRow]]:
 def _declared_aliases(
     frontmatter: Mapping[str, YamlValue], declared: Mapping[str, DuckDBLogicalType]
 ) -> dict[str, str]:
-    declared_by_key = {_identifier_key(name): name for name in declared}
+    declared_by_key = {duckdb_identifier_key(name): name for name in declared}
     aliases: dict[str, str] = {}
     for authored in frontmatter:
-        canonical = declared_by_key.get(_identifier_key(authored))
+        canonical = declared_by_key.get(duckdb_identifier_key(authored))
         if canonical is None:
             continue
         previous = aliases.get(canonical)
@@ -198,14 +198,14 @@ def compile_typed_table_plan(
 ) -> TypedTablePlan:
     """Compile declared fields plus observed undeclared scalar fields into one plan."""
     declared = {name: kind for name, kind in declaration.columns.items() if not _is_reserved(name)}
-    declared_keys = {_identifier_key(name) for name in declared}
+    declared_keys = {duckdb_identifier_key(name) for name in declared}
 
     undeclared_spellings: dict[str, set[str]] = {}
     undeclared_structured: set[str] = set()
     for frontmatter in frontmatters:
         _declared_aliases(frontmatter, declared)
         for name, value in frontmatter.items():
-            key = _identifier_key(name)
+            key = duckdb_identifier_key(name)
             if key in declared_keys or _is_reserved(name):
                 continue
             undeclared_spellings.setdefault(key, set()).add(name)
@@ -269,8 +269,8 @@ def _table_names(connection: duckdb.DuckDBPyConnection, schema: str) -> tuple[st
 
 
 def _matching_existing_table(existing: Sequence[str], name: str) -> str | None:
-    wanted = _identifier_key(name)
-    matches = [item for item in existing if _identifier_key(item) == wanted]
+    wanted = duckdb_identifier_key(name)
+    matches = [item for item in existing if duckdb_identifier_key(item) == wanted]
     if not matches:
         return None
     if len(matches) > 1:
@@ -319,7 +319,8 @@ def _ddl(plan: TypedTablePlan, schema: str) -> str:
     return f"CREATE TABLE {_quote_ident(schema)}.{_quote_ident(plan.concept_type)} (\n    {body}\n)"
 
 
-def _raw_value(value: YamlValue, logical_type: DuckDBLogicalType) -> object:
+def declared_raw_value(value: YamlValue, logical_type: DuckDBLogicalType) -> object:
+    """Project one authored value into the lossless raw carrier for a declared type."""
     if value is None:
         return None
     if logical_type.family == "list":
@@ -327,6 +328,17 @@ def _raw_value(value: YamlValue, logical_type: DuckDBLogicalType) -> object:
             return value
         return None
     return value if isinstance(value, str) else None
+
+
+def field_input_value(frontmatter: Mapping[str, YamlValue], field: TypedFieldPlan) -> object:
+    """Return the insertable source value for one planned public field."""
+    if field.declared_type is None:
+        value = frontmatter.get(field.name)
+        return value if isinstance(value, str) or value is None else None
+    aliases = _declared_aliases(frontmatter, {field.name: field.declared_type})
+    authored = aliases.get(field.name)
+    value = frontmatter.get(authored) if authored is not None else None
+    return declared_raw_value(value, field.declared_type)
 
 
 def _row_values(row: _ConceptRow, plan: TypedTablePlan) -> tuple[object, ...]:
@@ -349,7 +361,7 @@ def _row_values(row: _ConceptRow, plan: TypedTablePlan) -> tuple[object, ...]:
         if field.declared_type is not None:
             authored = aliases.get(field.name)
             value = row.frontmatter.get(authored) if authored is not None else None
-            values.append(_raw_value(value, field.declared_type))
+            values.append(declared_raw_value(value, field.declared_type))
         else:
             values.append(row.frontmatter.get(field.name))
     return tuple(values)
@@ -441,7 +453,7 @@ def materialize_typed_tables(
     existing = _table_names(connection, schema)
     planned_keys: dict[str, str] = {}
     for plan in plans:
-        key = _identifier_key(plan.concept_type)
+        key = duckdb_identifier_key(plan.concept_type)
         previous = planned_keys.get(key)
         if previous is not None and previous != plan.concept_type:
             message = (
@@ -459,7 +471,9 @@ def materialize_typed_tables(
     if collisions and not overwrite:
         raise TypedTableCollisionError(schema, tuple(sorted(collisions)))
 
-    unrecognized = tuple(name for name in existing if _identifier_key(name) not in planned_keys)
+    unrecognized = tuple(
+        name for name in existing if duckdb_identifier_key(name) not in planned_keys
+    )
     rows = _rows_by_type(bundle)
     connection.execute(f"CREATE SCHEMA IF NOT EXISTS {_quote_ident(schema)}")
     for plan in plans:

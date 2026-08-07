@@ -179,6 +179,7 @@ def apply(  # each argument is an independent public CLI flag.
     to: str | None = None,
     write: bool = False,
     exclude: RepeatableStrings = None,
+    spec_template: str | None = None,
 ) -> CliResult[JsonPayload]:
     """Mutate frontmatter fields via a bounded ALTER TABLE + UPDATE SQL script."""
     payload = apply_bundle(
@@ -190,6 +191,7 @@ def apply(  # each argument is an independent public CLI flag.
         to_value=to,
         write=write,
         exclude=exclude or (),
+        spec_template=spec_template,
     )
     return CliResult(payload, 0 if payload["succeeded"] else 1)
 

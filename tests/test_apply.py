@@ -871,3 +871,202 @@ def test_structured_field_collision_check_is_case_insensitive(tmp_path: Path) ->
     assert result["succeeded"] is False
     assert "structured" in _error(result)
     assert "- a" in _read(tmp_path / "r2.md")
+
+
+def _typed_spec(tmp_path: Path, ddl: str) -> str:
+    spec = tmp_path / "docs" / "types"
+    spec.mkdir(parents=True, exist_ok=True)
+    _write(spec / "rotina.schema.sql", ddl)
+    return "docs/types/{slug}.md"
+
+
+def test_typed_apply_queries_decimal_without_rewriting_declared_value(tmp_path: Path) -> None:
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\ncusto: 10.50\nstatus: low\n---\n")
+    _write(tmp_path / "r2.md", "---\ntype: Rotina\ncusto: 20.75\nstatus: low\n---\n")
+    template = _typed_spec(
+        tmp_path,
+        'CREATE TABLE "Rotina" (custo DECIMAL(18,2));\n',
+    )
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql="UPDATE \"Rotina\" SET status = 'high' WHERE custo > 15",
+        write=True,
+        spec_template=template,
+    )
+
+    assert result["succeeded"] is True, result
+    assert _changed_paths(result) == ["r2.md"]
+    assert "custo: 10.50" in _read(tmp_path / "r1.md")
+    assert "custo: 20.75" in _read(tmp_path / "r2.md")
+    assert "status: high" in _read(tmp_path / "r2.md")
+
+
+def test_typed_apply_divergent_value_is_null_and_still_queryable(tmp_path: Path) -> None:
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\ncusto: n/a\nstatus: low\n---\n")
+    template = _typed_spec(
+        tmp_path,
+        'CREATE TABLE "Rotina" (custo DECIMAL(18,2));\n',
+    )
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql="UPDATE \"Rotina\" SET status = 'bad' WHERE custo IS NULL",
+        write=True,
+        spec_template=template,
+    )
+
+    assert result["succeeded"] is True, result
+    text = _read(tmp_path / "r1.md")
+    assert "custo: n/a" in text
+    assert "status: bad" in text
+
+
+def test_typed_apply_rejects_direct_write_to_generated_declared_field(tmp_path: Path) -> None:
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\ncusto: 10.50\n---\n")
+    template = _typed_spec(tmp_path, 'CREATE TABLE "Rotina" (custo DECIMAL(18,2));\n')
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql='UPDATE "Rotina" SET custo = 12.50 WHERE TRUE',
+        spec_template=template,
+    )
+
+    assert result["succeeded"] is False
+    assert "generated" in _error(result).lower()
+
+
+def test_typed_apply_rejects_raw_carrier_tamper(tmp_path: Path) -> None:
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\ncusto: 10.50\nstatus: low\n---\n")
+    template = _typed_spec(tmp_path, 'CREATE TABLE "Rotina" (custo DECIMAL(18,2));\n')
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql="UPDATE \"Rotina\" SET __okf_raw_custo = '99.00' WHERE TRUE",
+        spec_template=template,
+    )
+
+    assert result["succeeded"] is False
+    assert "protected" in _error(result).lower()
+
+
+def test_typed_apply_drop_declared_field_removes_frontmatter(tmp_path: Path) -> None:
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\ncusto: 10.50\nstatus: low\n---\n")
+    template = _typed_spec(tmp_path, 'CREATE TABLE "Rotina" (custo DECIMAL(18,2));\n')
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql=(
+            'ALTER TABLE "Rotina" DROP COLUMN custo; '
+            'UPDATE "Rotina" SET status = status WHERE FALSE'
+        ),
+        write=True,
+        spec_template=template,
+    )
+
+    assert result["succeeded"] is True, result
+    assert "custo:" not in _read(tmp_path / "r1.md")
+
+
+def test_typed_apply_rejects_rename_of_declared_field(tmp_path: Path) -> None:
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\ncusto: 10.50\nstatus: low\n---\n")
+    template = _typed_spec(tmp_path, 'CREATE TABLE "Rotina" (custo DECIMAL(18,2));\n')
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql=(
+            'ALTER TABLE "Rotina" RENAME COLUMN custo TO valor; '
+            'UPDATE "Rotina" SET status = status WHERE FALSE'
+        ),
+        spec_template=template,
+    )
+
+    assert result["succeeded"] is False
+    assert "declared field" in _error(result).lower()
+
+
+def test_typed_apply_rejects_readding_dropped_declared_name(tmp_path: Path) -> None:
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\ncusto: 10.50\nstatus: low\n---\n")
+    template = _typed_spec(tmp_path, 'CREATE TABLE "Rotina" (custo DECIMAL(18,2));\n')
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql=(
+            'ALTER TABLE "Rotina" DROP COLUMN custo; '
+            'ALTER TABLE "Rotina" ADD COLUMN custo VARCHAR; '
+            'UPDATE "Rotina" SET status = status WHERE FALSE'
+        ),
+        spec_template=template,
+    )
+
+    assert result["succeeded"] is False
+    assert "owned by the declaration" in _error(result).lower()
+
+
+def test_typed_apply_queries_declared_list_without_serializing_it(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "r1.md",
+        "---\ntype: Rotina\ntags:\n- 1\n- 2\nstatus: low\n---\n",
+    )
+    template = _typed_spec(tmp_path, 'CREATE TABLE "Rotina" (tags BIGINT[]);\n')
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql="UPDATE \"Rotina\" SET status = 'hit' WHERE list_contains(tags, 2)",
+        write=True,
+        spec_template=template,
+    )
+
+    assert result["succeeded"] is True, result
+    text = _read(tmp_path / "r1.md")
+    assert "status: hit" in text
+    assert "- 1" in text
+    assert "- 2" in text
+
+
+def test_typed_apply_declared_unobserved_field_exists_as_null(tmp_path: Path) -> None:
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\nstatus: low\n---\n")
+    template = _typed_spec(tmp_path, 'CREATE TABLE "Rotina" (futuro BIGINT);\n')
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql="UPDATE \"Rotina\" SET status = 'missing' WHERE futuro IS NULL",
+        write=True,
+        spec_template=template,
+    )
+
+    assert result["succeeded"] is True, result
+    assert "status: missing" in _read(tmp_path / "r1.md")
+    assert "futuro:" not in _read(tmp_path / "r1.md")
+
+
+def test_typed_apply_invalid_declaration_is_explicit_error(tmp_path: Path) -> None:
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\nstatus: low\n---\n")
+    template = _typed_spec(tmp_path, "CREATE TABLE broken")
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql="UPDATE \"Rotina\" SET status = 'x' WHERE TRUE",
+        spec_template=template,
+    )
+
+    assert result["succeeded"] is False
+    assert "declared schema" in _error(result).lower()
+
+
+def test_typed_apply_keeps_undeclared_alter_add_semantics(tmp_path: Path) -> None:
+    _write(tmp_path / "r1.md", "---\ntype: Rotina\ncusto: 10.50\n---\n")
+    template = _typed_spec(tmp_path, 'CREATE TABLE "Rotina" (custo DECIMAL(18,2));\n')
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql=(
+            'ALTER TABLE "Rotina" ADD COLUMN status VARCHAR; '
+            "UPDATE \"Rotina\" SET status = 'ok' WHERE custo > 5"
+        ),
+        write=True,
+        spec_template=template,
+    )
+
+    assert result["succeeded"] is True, result
+    assert "status: ok" in _read(tmp_path / "r1.md")

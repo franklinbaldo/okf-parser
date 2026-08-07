@@ -143,7 +143,7 @@ MCP tool: `format_check`; no write-format MCP tool is exposed today.
 ## `apply`
 
 ```bash
-uv run okf-parser apply path/to/bundle --sql SQL [--write] [--exclude PATTERN]...
+uv run okf-parser apply path/to/bundle --sql SQL [--write] [--spec-template TEMPLATE] [--exclude PATTERN]...
 ```
 
 or, for the simple replace-one-field case:
@@ -159,6 +159,11 @@ final relational state is compiled back into the affected documents.
 
 The `--type/--field/--from/--to` form is convenience syntax for a simple value
 replacement without hand-writing SQL.
+
+`--spec-template TEMPLATE` opts declared fields into RFC 0006's typed query
+surface. Each declared value keeps a compiler-owned raw carrier and appears to SQL
+as a DuckDB virtual generated `TRY_CAST` column. Declared columns are queryable but
+not directly writable; undeclared scalar fields retain RFC 0005 write semantics.
 
 `--write` is required to touch the bundle. Without it the command computes and
 reports the candidate changes. Exits `1` when `payload["succeeded"]` is false,
