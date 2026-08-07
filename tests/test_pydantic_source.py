@@ -23,7 +23,8 @@ def _write_concept(path: Path, frontmatter: str) -> None:
 
 def _source_model(source: str, name: str) -> type[BaseModel]:
     namespace: dict[str, Any] = {}
-    exec(compile(source, "<generated-okf-models>", "exec"), namespace)  # noqa: S102
+    code = compile(source, "<generated-okf-models>", "exec", dont_inherit=True)
+    exec(code, namespace)  # noqa: S102
     return cast("type[BaseModel]", namespace[name])
 
 
