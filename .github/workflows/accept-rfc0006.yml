@@ -36,6 +36,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          python scripts/_pre_accept_rfc0006.py
           python scripts/_accept_rfc0006.py
           uv lock
           npm install --package-lock-only --ignore-scripts --prefix typescript
@@ -46,7 +47,7 @@ jobs:
           uv run ty check src tests
           uv run pytest --cov --cov-report=term-missing --cov-fail-under=85
           uv run python scripts/release_contract.py verify-source
-          git rm -f .github/workflows/accept-rfc0006.yml scripts/_accept_rfc0006.py
+          git rm -f .github/workflows/accept-rfc0006.yml scripts/_pre_accept_rfc0006.py scripts/_accept_rfc0006.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
