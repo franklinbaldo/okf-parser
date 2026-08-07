@@ -369,7 +369,9 @@ def _render_imports(imports: _SourceImports, *, has_models: bool) -> list[str]:
     if imports.uuid:
         standard.append("from uuid import UUID")
 
-    lines = list(standard)
+    lines = ['"""Generated Pydantic models from OKF schema contracts."""']
+    if standard:
+        lines.extend(["", *standard])
     if has_models:
         pydantic_names = ["BaseModel", "ConfigDict"]
         if imports.field:
@@ -408,12 +410,16 @@ def render_pydantic_source(contracts: tuple[TypeContract, ...]) -> str:
     lines = _render_imports(context.imports, has_models=bool(context.models))
     for model in context.models:
         lines.extend(["", "", f"class {model.name}(BaseModel):"])
-        lines.append('    model_config = ConfigDict(extra="allow")')
+        lines.extend(
+            [
+                '    """Generated Pydantic model for one OKF contract object."""',
+                "",
+                '    model_config = ConfigDict(extra="allow")',
+            ]
+        )
         if model.fields:
             lines.append("")
             lines.extend(_render_field(item) for item in model.fields)
-        else:
-            lines.append("    pass")
     return "\n".join(lines).rstrip() + "\n"
 
 
