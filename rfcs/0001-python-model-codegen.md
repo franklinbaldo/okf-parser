@@ -257,6 +257,8 @@ hold:
 
 - it is a valid Python identifier;
 - it is not a Python keyword;
+- it does not begin with `_`; Pydantic v2 treats leading-underscore names as
+  private attributes rather than model fields;
 - it does not collide with configuration or protected names used by
   `BaseModel`, such as `model_config` or `model_dump`;
 - it does not collide with another generated attribute in the same model.
@@ -268,6 +270,9 @@ the authored key with `Field(alias=...)`:
 customer-id: abc
 class: retail
 model_dump: custom
+_private: secret
+__custom__: value
+__pydantic_extra__: authored
 ```
 
 may become:
@@ -276,11 +281,18 @@ may become:
 customer_id: str = Field(alias="customer-id")
 class_: str = Field(alias="class")
 model_dump_: str = Field(alias="model_dump")
+private_: str = Field(alias="_private")
+custom_: str = Field(alias="__custom__")
+pydantic_extra_: str = Field(alias="__pydantic_extra__")
 ```
 
 The same mapping helper must also be used by `build_pydantic_models()`. Dynamic
 Pydantic models can otherwise fail or warn for authored keys that happen to
 shadow `BaseModel` members even though those keys are legal OKF frontmatter.
+Leading-underscore keys are included in this rule even when Python itself accepts
+them as identifiers: `_private`, `__custom__` and `__pydantic_extra__` must remain
+real validated fields through aliases, never disappear into Pydantic private
+attributes or unvalidated extras.
 
 Rules for safe identifiers must be deterministic and collision checked within a
 model. Two distinct authored keys must never silently map to the same Python
@@ -331,13 +343,27 @@ scalar family.
 
 ### Nested objects
 
-`ObjectNode` produces a named nested Pydantic model. Nested names derive from
-the owning model and field name using the existing deterministic naming
-convention or a narrowly extended shared helper.
+`ObjectNode` produces a named nested Pydantic model. Nested names may continue to
+derive from the owning model and field path using the existing deterministic
+naming convention, but normalization alone is not an identity guarantee. Distinct
+structural paths can collapse to the same class name.
+
+Every Pydantic projection therefore maintains one registry for all emitted model
+names in a compilation. Each entry records the generated class name and its full
+structural path, represented as the top-level concept type plus authored field
+segments. Registering the same generated name for a different structural path is
+a hard `SchemaNameCollisionError` that reports both paths.
+
+For example, paths equivalent to `a.structure_b` and `a_structure.b` must never
+be allowed to produce two source classes with the same Python name and then rely
+on postponed annotations to resolve whichever definition happens to come last.
+The source renderer and `build_pydantic_models()` use the same registry even when
+the dynamic model implementation could technically keep separate class objects;
+this keeps both Pydantic projections on one observable collision contract.
 
 Definitions are emitted before the models that reference them, or forward
 references are used deterministically. The implementation should prefer the
-simpler strategy supported by the actual contract graph produced today rather
+simpler strategy supported by the actual contract tree produced today rather
 than introducing a general dependency graph preemptively.
 
 ### Literals
@@ -408,8 +434,10 @@ Examples of equivalence include:
 - list element types and nullability;
 - literal `type` discrimination;
 - acceptance of unknown producer fields;
-- safe handling of authored keys that shadow Python keywords or `BaseModel`
-  members.
+- safe handling of authored keys that start with `_` or shadow Python keywords
+  or `BaseModel` members;
+- identical hard failures for nested generated-model name collisions, including
+  both structural paths in the error.
 
 The source generator must not call `model_json_schema()` on the dynamic models
 and then reverse-engineer Python from JSON Schema. Both paths should consume the
@@ -482,14 +510,17 @@ reintroduce a second contract model.
 
 The first implementation reuses existing schema compilation failures:
 
-- name collisions remain `SchemaNameCollisionError`;
+- top-level and nested generated-model name collisions remain
+  `SchemaNameCollisionError`, with both owning structural paths reported;
 - invalid explicit casts remain `SchemaCastError`;
 - invalid declared schemas remain `SchemaExportError`;
 - unsupported declared types render as `Any` rather than inventing a fake type.
 
 Source-specific failures should be added only for conditions the renderer
 cannot represent honestly, such as two authored keys colliding after safe
-Pydantic/Python attribute generation.
+Pydantic/Python attribute generation. Nested class-name collisions are not
+source-only: the shared Pydantic naming registry makes them the same hard failure
+for dynamic and source-generated models.
 
 A separate family of `GEN00x` diagnostics is not introduced until there are
 multiple generation operations that need aggregate diagnostics.
@@ -497,18 +528,23 @@ multiple generation operations that need aggregate diagnostics.
 ## Implementation plan
 
 1. Add a deterministic Pydantic field-name/alias helper with collisions,
-   keywords and `BaseModel` protected-name tests.
-2. Refactor `build_pydantic_models()` to use the same field mapping and
-   `extra="allow"` policy.
-3. Add a pure `render_pydantic_source(contracts)` renderer beside `render_zod`.
-4. Add `export_pydantic_source()` beside the existing schema exporters.
-5. Add `pydantic` to the schema format accepted by service, CLI and MCP.
-6. Pin semantic equivalence against `build_pydantic_models()` for representative
+   leading-underscore keys, keywords and `BaseModel` protected-name tests.
+2. Add a compilation-wide Pydantic model-name registry keyed by generated class
+   name and carrying full structural-path provenance; fail on any distinct path
+   collision.
+3. Refactor `build_pydantic_models()` to use the same field mapping, model-name
+   registry and `extra="allow"` policy.
+4. Add a pure `render_pydantic_source(contracts)` renderer beside `render_zod`.
+5. Add `export_pydantic_source()` beside the existing schema exporters.
+6. Add `pydantic` to the schema format accepted by service, CLI and MCP.
+7. Pin semantic equivalence against `build_pydantic_models()` for representative
    contracts, including optional-non-nullable fields.
-7. Add declared-type regressions for `DECIMAL`, `UUID`, timestamp families and
+8. Add declared-type regressions for `DECIMAL`, `UUID`, timestamp families and
    arrays.
-8. Add identifier/keyword/Unicode/`BaseModel` alias regressions.
-9. Document stdout/file-redirection and CI drift-check examples.
+9. Add regressions for `_private`, `__custom__`, `__pydantic_extra__`, keywords,
+   Unicode, `BaseModel` members and distinct nested paths that normalize to the
+   same generated class name.
+10. Document stdout/file-redirection and CI drift-check examples.
 
 ## Acceptance criteria
 
@@ -519,6 +555,12 @@ multiple generation operations that need aggregate diagnostics.
 - authored field names survive through aliases where Python/Pydantic attribute
   names differ;
 - alias normalization collisions fail loudly;
+- authored keys beginning with `_`, including `_private`, `__custom__` and
+  `__pydantic_extra__`, remain validated fields via aliases in both dynamic and
+  source-generated models;
+- every emitted Pydantic class name is unique across the compilation, and a
+  collision between distinct structural paths fails loudly while reporting both
+  paths;
 - optional non-nullable fields accept omission but reject explicit `null`;
 - JSON Schema, Zod, dynamic Pydantic and Pydantic source all compile from the
   same `TypeContract` objects;
