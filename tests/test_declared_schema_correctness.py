@@ -41,9 +41,7 @@ def test_declared_but_unobserved_column_is_exported_as_optional(tmp_path: Path) 
     _write_concept(tmp_path / "one.md", "type: Rotina\nnome: exemplo\n")
     declared = tmp_path / "docs" / "types" / "rotina.schema.sql"
     declared.parent.mkdir(parents=True)
-    declared.write_text(
-        'CREATE TABLE "Rotina" (nome VARCHAR, futuro BIGINT);', encoding="utf-8"
-    )
+    declared.write_text('CREATE TABLE "Rotina" (nome VARCHAR, futuro BIGINT);', encoding="utf-8")
 
     schema = export_json_schema(str(tmp_path), spec_template=TEMPLATE)["schemas"]["Rotina"]
 
