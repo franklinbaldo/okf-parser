@@ -17,18 +17,12 @@ text = text.replace("duckdbduckdb_identifier_key", "duckdb_identifier_key")
 text = text.replace("declareddeclared_raw_value", "declared_raw_value")
 path.write_text(text, encoding="utf-8")
 
-# `cast()` is runtime code. Keep its type objects importable instead of hiding
-# them in TYPE_CHECKING, and avoid pulling the recursive YamlValue alias into
-# this consumer solely for narrowing.
-replace(
-    "src/okf_parser/apply.py",
-    "from dataclasses import dataclass\n",
-    "from collections.abc import Mapping\nfrom dataclasses import dataclass\n",
-)
+# `cast()` is runtime code; Mapping/Any are needed only by postponed/string
+# annotations and therefore stay inside TYPE_CHECKING.
 replace(
     "src/okf_parser/apply.py",
     "from typing import TYPE_CHECKING\n",
-    "from typing import TYPE_CHECKING, Any, cast\n",
+    "from typing import TYPE_CHECKING, cast\n",
 )
 replace(
     "src/okf_parser/apply.py",
@@ -38,7 +32,8 @@ replace(
 
     from okf_parser.models import YamlValue
 ''',
-    '''    from collections.abc import Sequence
+    '''    from collections.abc import Mapping, Sequence
+    from typing import Any
 
     import ibis.backends.duckdb as ibis_duckdb
 ''',
