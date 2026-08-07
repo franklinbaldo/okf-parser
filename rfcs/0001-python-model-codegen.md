@@ -1,325 +1,627 @@
 ---
 type: RFC
-title: Bidirectional code generation between OKF bundles and Python models
-description: Generate Pydantic models from OKF profiles and OKF profiles from Pydantic models or dataclasses
+title: Pydantic source generation from shared OKF schema contracts
+description: Add deterministic Pydantic source as another schema target, reusing TypeContract and RFC 0006 declared DuckDB types instead of introducing a second contract graph
 status: proposed
 ---
 
-# RFC 0001: Python model code generation
+# RFC 0001: Pydantic source generation
 
 ## Summary
 
-Add bidirectional code generation between Open Knowledge Format bundles and
-typed Python models:
+Add deterministic Pydantic v2 source generation as another output of the
+existing schema pipeline:
 
-1. inspect an OKF bundle and generate Pydantic model source code;
-2. inspect Pydantic models or dataclasses and generate an OKF profile bundle
-   that documents their frontmatter contract.
+```text
+OKF documents ─────────────┐
+                          ├─> TypeContract ─┬─> JSON Schema
+.schema.sql declarations ─┘                 ├─> Zod
+                                            ├─> dynamic Pydantic models
+                                            └─> Pydantic source
+```
 
-The generated profile is an extension layered on OKF v0.2. It is not a
-replacement for the normative OKF specification. OKF intentionally allows
-producer-defined concept types and frontmatter fields, so every inferred type
-must remain explicit, reviewable, and reproducible.
+The first implementation adds:
 
-## Motivation
+```bash
+okf-parser schema ./knowledge --format pydantic
+```
 
-OKF bundles are easy to author and exchange, while Pydantic models and
-dataclasses are convenient application boundaries. Today, a team must maintain
-the same contract twice: once in Markdown conventions and again in Python.
+The command prints importable Python source to stdout. It uses the same
+`TypeContract` objects, declared DuckDB logical types, naming rules,
+requiredness, nullability, list structure and explicit casts already used by
+the JSON Schema, Zod and dynamic-Pydantic exporters.
 
-Bidirectional generation can provide:
+This RFC deliberately no longer proposes a second `ContractGraph`, a new
+`codegen` command family, a machine-readable `OKFProfile.fields` extension, or
+bidirectional Python-to-OKF generation in the first delivery.
 
-- typed ingestion of authored bundles;
-- human-readable documentation generated from application models;
-- contract drift detection in CI;
-- a common representation for validators, agents, MCP tools, and DuckDB;
-- incremental adoption without restricting ordinary OKF consumers.
+Python-to-OKF generation remains interesting, but RFC 0006 changed the design
+question materially: a Python-first exporter now has to decide whether its
+canonical output is `.schema.sql`, JSON Schema, both, or another declaration
+surface. That deserves a separate RFC rather than being coupled to Python
+source generation.
 
-## Terminology
+## Context
 
-- **concept document**: an ordinary OKF Markdown file with frontmatter and body;
-- **concept type**: the producer-defined value of the required `type` field;
-- **profile**: a machine-readable, OKF-compatible description of the fields
-  expected for one or more concept types;
-- **model target**: generated Pydantic source code;
-- **profile target**: generated OKF Markdown concepts describing Python models.
+The original RFC predates several pieces that now exist in `main`:
+
+- `schema_contract.TypeContract` is already the language-neutral contract IR;
+- `ScalarNode`, `ListNode`, `ObjectNode`, `LiteralNode` and `AnyNode` already
+  describe the target-independent shape;
+- RFC 0006 preserves exact declared DuckDB logical types in that contract;
+- JSON Schema and Zod already compile from the same contract;
+- `build_pydantic_models()` already creates runtime Pydantic models from the
+  same contract;
+- deterministic model naming and collision detection already exist;
+- the CLI and MCP already expose `schema` as the schema-export surface.
+
+Recreating those concepts as a separate contract graph would add a second type
+system and a second source of truth precisely after the repository converged on
+one shared schema pipeline.
 
 ## Goals
 
-- deterministic output from identical inputs and options;
-- support Pydantic v2 `BaseModel` classes and standard-library dataclasses;
-- preserve unknown frontmatter fields by default;
-- expose inference conflicts instead of silently selecting a lossy type;
-- produce readable Python and Markdown suitable for version control;
-- support check-only generation for CI;
-- make generated artifacts traceable to their source and generator version;
-- allow a useful round-trip for the supported type subset.
+- expose deterministic, importable Pydantic v2 source for every compiled
+  `TypeContract`;
+- keep JSON Schema, Zod, dynamic Pydantic and generated Pydantic source on one
+  semantic contract;
+- preserve RFC 0006 target-specific mappings such as `Decimal`, `UUID`, lists,
+  `TIMESTAMP` and `TIMESTAMPTZ` without reducing them back to a coarse cast
+  family;
+- preserve authored YAML field names even when they are not safe Pydantic/Python
+  attribute names;
+- keep producer extensions accepted by default;
+- make output byte-for-byte deterministic for identical input and options;
+- make the target available through the existing CLI/service/MCP `schema`
+  surface without adding a second command hierarchy.
+
+## Usability contract
+
+The common path must stay boring:
+
+```bash
+okf-parser schema . --format pydantic
+```
+
+That command must produce useful importable source without requiring the caller
+to understand `TypeContract`, configure aliases, choose a naming policy, create a
+profile file, or learn a second command family. Safe Pydantic names, aliases for
+authored keys, protected-name handling, leading-underscore handling and nested
+model-name registration are compiler responsibilities.
+
+Advanced controls remain opt-in progressive disclosure. `--spec-template`,
+`--cast` and `--infer-types` keep their existing meanings for callers who need
+more authority, but none is required merely to get a useful Pydantic model from
+an ordinary OKF bundle.
+
+When automatic naming cannot be made unambiguous, fail loudly instead of asking
+the user to preconfigure a mapping. The error should name the authored keys or
+structural paths that conflict and, where possible, the generated identifier
+that caused the collision. A future explicit mapping option is justified only by
+real cases that cannot be handled deterministically.
+
+This is also a broader CLI constraint: adding a new internal abstraction is not
+a reason to add a new public command, mandatory config file or extra setup step.
+The public surface should expose concepts users need, not the implementation
+graph underneath them.
 
 ## Non-goals
 
-- redefining the normative OKF v0.2 specification;
-- inferring business semantics from field names with an LLM;
-- serializing Python methods, validators, computed fields, or arbitrary code;
-- executing untrusted Python merely to inspect its types;
-- guaranteeing a lossless round-trip for every Python annotation or YAML value;
-- requiring generated profiles for an otherwise conformant OKF bundle.
+- generating OKF declarations from Python models in this RFC;
+- importing or executing Python source;
+- parsing Python ASTs or Pydantic runtime metadata;
+- introducing a second contract graph or separate type lattice;
+- adding Ibis tables or NetworkX graphs for schema contracts;
+- creating an `OKFProfile` concept type or a `fields` frontmatter extension;
+- serializing validators, methods, computed fields or arbitrary Python code;
+- guaranteeing a reversible mapping for every DuckDB logical type;
+- writing generated files, managing generation markers, or implementing a
+  dedicated `--check` mode in the first delivery.
 
-## Proposed interface
-
-### OKF bundle to Pydantic
-
-```bash
-okf-parser codegen pydantic ./knowledge \
-  --output ./generated_models.py
-
-okf-parser codegen pydantic ./knowledge \
-  --output ./generated_models.py \
-  --check
-```
-
-The command groups concepts by their `type`, infers a model for each group, and
-generates a shared base model plus a type-to-model registry.
-
-### Python model to OKF profile
+The last item is intentional. A stdout-only deterministic exporter composes
+with ordinary shell and CI tools:
 
 ```bash
-okf-parser codegen profile ./src/domain.py \
-  --symbol Customer \
-  --output ./knowledge/profiles
-
-okf-parser codegen profile ./src/domain.py \
-  --all-models \
-  --output ./knowledge/profiles \
-  --check
+okf-parser schema knowledge --format pydantic > generated_models.py
 ```
 
-Static source inspection is the default. A future explicit `--import` mode may
-load a module when runtime Pydantic metadata is required. The importing mode
-must be documented as trusted-code execution and must never be the default.
+and drift checks can compare that output without teaching `okf-parser` a second
+file-writing subsystem.
+
+## Source of truth and precedence
+
+Pydantic generation consumes `build_schema_contracts()` exactly as the current
+schema targets do.
+
+The existing precedence remains unchanged:
+
+1. an explicit CLI `--cast` for a field wins;
+2. otherwise a matching RFC 0006 `.schema.sql` declaration supplies the
+   declared logical type;
+3. otherwise observed values use the existing string-first behavior, or the
+   existing `--infer-types` behavior when explicitly enabled.
+
+The Pydantic target must not independently inspect YAML values after the
+contract has been compiled.
+
+That boundary is important. If JSON Schema, Zod and Pydantic ever disagree,
+the disagreement must be a target projection policy, not a hidden second
+inference engine.
+
+## Interface
+
+### CLI
+
+Extend the existing schema format enum:
+
+```bash
+okf-parser schema ./knowledge --format pydantic
+
+okf-parser schema ./knowledge \
+  --format pydantic \
+  --spec-template 'docs/types/{slug}.md'
+
+okf-parser schema ./knowledge \
+  --format pydantic \
+  --infer-types
+```
+
+All existing schema flags keep their meaning.
+
+The result is plain Python source, just as the Zod target returns plain source.
+No JSON envelope is added around generated code.
 
 ### Python API
 
+Add one renderer/exporter beside the existing schema exporters:
+
 ```python
-from pathlib import Path
+from okf_parser.schema_export import export_pydantic_source
 
-from okf_parser.codegen import (
-    generate_profile_bundle,
-    generate_pydantic_models,
-)
-
-generate_pydantic_models(
-    bundle=Path("knowledge"),
-    output=Path("generated_models.py"),
-)
-generate_profile_bundle(
-    source=Path("src/domain.py"),
-    output=Path("knowledge/profiles"),
+source = export_pydantic_source(
+    "knowledge",
+    spec_template="docs/types/{slug}.md",
 )
 ```
 
-## Intermediate representation
+The existing `build_pydantic_models()` remains useful for runtime validation and
+must continue to compile from the same contracts.
 
-Both directions must compile through a language-neutral contract graph rather
-than translating directly from Markdown to Python:
+### MCP
 
-```text
-OKF bundle ────────┐
-                   ├─> ContractGraph ─> Pydantic source
-Python annotations ┘                 └─> OKF profile bundle
+The existing `schema` MCP tool gains `pydantic` as another legal format through
+the same public argument. No new MCP tool is required.
+
+RFC 0008 annotations do not change merely because another pure renderer is
+added. The tool's maximum effects are still governed by whether a legal
+`spec_template` invocation can execute trusted declaration SQL.
+
+## Generated module contract
+
+The generated module is ordinary Pydantic v2 source and should require only
+Python standard-library imports plus Pydantic.
+
+A representative module is:
+
+```python
+from __future__ import annotations
+
+from decimal import Decimal
+from typing import Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict
+
+
+class RegistroConcept(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["Registro"]
+    valor: Decimal
+    id_externo: UUID
 ```
 
-The contract graph contains:
+### Extra fields
 
-- concept type and deterministic Python class name;
-- field name, requiredness, nullability, and default;
-- scalar, collection, mapping, union, literal, enum, and nested-model types;
-- title, description, examples, and deprecation metadata;
-- source locations and inference diagnostics;
-- references between models;
-- extension metadata that cannot be represented directly in OKF v0.2.
+Generated top-level concept models use:
 
-Ibis tables should represent contracts and fields for relational checks.
-NetworkX should represent model references and detect cycles before source
-generation.
-
-## Bundle-to-model inference
-
-### Grouping and naming
-
-Concepts are grouped by the exact frontmatter `type` value. Class names are
-derived deterministically using Unicode normalization and PascalCase. Naming
-collisions are errors unless an explicit mapping resolves them.
-
-The normative `type` field becomes a discriminator using `Literal` where
-possible. Common fields may be placed on a generated `OKFConcept` base class.
-
-### Requiredness
-
-A field present in every successfully parsed concept of a type is required.
-A field absent from at least one concept is optional. YAML `null` affects
-nullability independently from requiredness.
-
-An empty or single-document group cannot establish a reliable closed schema.
-The generator emits an advisory diagnostic and defaults to an open model.
-
-### Type lattice
-
-Observed YAML values are joined using a deterministic widening lattice:
-
-```text
-bool → int → float
-scalar conflicts → explicit union
-homogeneous sequence → list[item]
-heterogeneous sequence → list[union]
-mapping → generated nested model or dict[str, value]
-irreconcilable values → Any plus an error in strict mode
+```python
+ConfigDict(extra="allow")
 ```
 
-Strings remain strings unless an explicit profile or option enables format
-inference for dates, datetimes, UUIDs, paths, or URLs. Field-name heuristics are
-not used.
+OKF v0.2 permits producer-defined frontmatter extensions. Generated models are
+therefore application adapters, not a mechanism for narrowing normative OKF
+conformance.
 
-### Unknown fields
+Nested object models may use the same policy initially. A later RFC may add a
+stricter target option if a consumer explicitly wants closed application
+models.
 
-Generated Pydantic models default to `extra="allow"` because OKF consumers must
-tolerate producer extensions. `--forbid-extra` is a profile policy and must not
-be presented as normative OKF conformance.
+The implementation should align `build_pydantic_models()` with the same
+configuration so runtime-generated and source-generated models do not disagree
+about producer extensions.
 
-### Bodies and identities
+### Requiredness and nullability
 
-The Markdown body and bundle-derived concept ID are modeled separately from
-frontmatter. They must not be inserted into authored frontmatter during a
-round-trip.
+The renderer preserves the existing independent contract dimensions:
 
-## Model-to-profile generation
+- required, non-nullable: `field: T`;
+- required, nullable: `field: T | None`;
+- optional, non-nullable: `field: T = Field(default=None)`;
+- optional, nullable: `field: T | None = None`.
 
-Each selected class produces an OKF concept under a deterministic path such as:
+The apparently unusual third form is deliberate. Pydantic v2 accepts omission
+because the field has a default, while an explicitly supplied `None` is still
+rejected because the annotation remains `T`. Widening that annotation to
+`T | None` would collapse the contract's distinction between absence and an
+authored null.
 
-```text
-profiles/customer.md
-profiles/order.md
+The current dynamic adapter already represents optional non-nullable fields as
+annotation `T` with default `None`. The source renderer must stay semantically
+aligned with that behavior rather than making its Python spelling superficially
+more conventional but less precise.
+
+A future contract representation may model the default value itself as a
+separate dimension. That change belongs in the shared contract, not only in the
+Pydantic renderer.
+
+### Concept type discriminator
+
+The authored `type` field remains a literal discriminator:
+
+```python
+type: Literal["Customer"]
 ```
 
-The profile concept itself has valid OKF frontmatter:
+The literal value is the exact authored concept type, independent of the
+normalized Python class name.
+
+## Field names and aliases
+
+YAML keys are not constrained to safe Pydantic/Python attribute names. A source
+generator must therefore separate the authored key from the Python attribute
+name.
+
+A field can use its authored spelling directly only when all of the following
+hold:
+
+- it is a valid Python identifier;
+- it is not a Python keyword;
+- it does not begin with `_`; Pydantic v2 treats leading-underscore names as
+  private attributes rather than model fields;
+- it does not collide with configuration or protected names used by
+  `BaseModel`, such as `model_config` or `model_dump`;
+- it does not collide with another generated attribute in the same model.
+
+Otherwise the renderer generates a deterministic safe identifier and preserves
+the authored key with `Field(alias=...)`:
 
 ```yaml
----
-type: OKFProfile
-title: Customer
-python_qualname: domain.Customer
-concept_type: Customer
----
+customer-id: abc
+class: retail
+model_dump: custom
+_private: secret
+__custom__: value
+__pydantic_extra__: authored
 ```
 
-Its Markdown body documents fields, requiredness, defaults, descriptions, and
-references. A machine-readable `fields` extension in frontmatter stores the
-contract without changing the normative OKF specification.
+may become:
 
-Pydantic metadata is read from annotations, `Field` declarations, aliases,
-descriptions, defaults, `Annotated`, unions, literals, enums, and nested models.
-Dataclass metadata uses the same normalized contract representation.
+```python
+customer_id: str = Field(alias="customer-id")
+class_: str = Field(alias="class")
+model_dump_: str = Field(alias="model_dump")
+private_: str = Field(alias="_private")
+custom_: str = Field(alias="__custom__")
+pydantic_extra_: str = Field(alias="__pydantic_extra__")
+```
 
-Private attributes, `ClassVar`, computed fields, methods, and runtime validators
-are excluded. Unsupported constraints generate diagnostics and are preserved as
-opaque extension metadata when possible.
+The same mapping helper must also be used by `build_pydantic_models()`. Dynamic
+Pydantic models can otherwise fail or warn for authored keys that happen to
+shadow `BaseModel` members even though those keys are legal OKF frontmatter.
+Leading-underscore keys are included in this rule even when Python itself accepts
+them as identifiers: `_private`, `__custom__` and `__pydantic_extra__` must remain
+real validated fields through aliases, never disappear into Pydantic private
+attributes or unvalidated extras.
 
-## Round-trip guarantees
+Rules for safe identifiers must be deterministic and collision checked within a
+model. Two distinct authored keys must never silently map to the same Python
+attribute.
 
-The supported subset should satisfy semantic, not textual, round-trip:
+When aliases are present, generated models must validate authored keys through
+the alias. The exact Pydantic configuration should be the smallest
+configuration required for that behavior and must be pinned by tests.
+
+## Target type projection
+
+The renderer consumes the existing node tree and exact RFC 0006 declared types.
+It does not create a new lattice.
+
+### Scalars
+
+The initial target mapping is:
+
+| Contract / declared family | Python annotation |
+| --- | --- |
+| string | `str` |
+| boolean | `bool` |
+| integer | `int` |
+| float | `float` |
+| decimal | `Decimal` |
+| date | `date` |
+| timestamp | `datetime` |
+| timestamptz | `datetime` |
+| uuid | `UUID` |
+| unsupported | `Any` |
+
+The distinction between `TIMESTAMP` and `TIMESTAMPTZ` remains available in the
+shared contract even though both project to `datetime` in this target. The
+renderer must not erase that distinction from the IR itself.
+
+### Lists
+
+`ListNode` projects recursively:
+
+```python
+list[int]
+list[UUID]
+list[T | None]
+```
+
+A declared DuckDB array therefore follows the same element mapping as its
+scalar family.
+
+### Nested objects
+
+`ObjectNode` produces a named nested Pydantic model. Nested names may continue to
+derive from the owning model and field path using the existing deterministic
+naming convention, but normalization alone is not an identity guarantee. Distinct
+structural paths can collapse to the same class name.
+
+Every Pydantic projection therefore maintains one registry for all emitted model
+names in a compilation. Each entry records the generated class name and its full
+structural path, represented as the top-level concept type plus authored field
+segments. Registering the same generated name for a different structural path is
+a hard `SchemaNameCollisionError` that reports both paths.
+
+For example, paths equivalent to `a.structure_b` and `a_structure.b` must never
+be allowed to produce two source classes with the same Python name and then rely
+on postponed annotations to resolve whichever definition happens to come last.
+The source renderer and `build_pydantic_models()` use the same registry even when
+the dynamic model implementation could technically keep separate class objects;
+this keeps both Pydantic projections on one observable collision contract.
+
+Definitions are emitted before the models that reference them, or forward
+references are used deterministically. The implementation should prefer the
+simpler strategy supported by the actual contract tree produced today rather
+than introducing a general dependency graph preemptively.
+
+### Literals
+
+`LiteralNode` projects to `Literal[value]`.
+
+### Unknown/unsupported values
+
+`AnyNode` and declared families that have no honest Pydantic representation
+project to `Any`.
+
+This is a target limitation, not a loss of declaration identity: JSON Schema,
+DuckDB materialization or another future target may still retain richer
+information from the same `TypeContract`.
+
+## Imports
+
+Imports are derived from the annotations and field definitions actually emitted
+and sorted canonically.
+
+Potential imports include:
+
+```python
+from datetime import date, datetime
+from decimal import Decimal
+from typing import Any, Literal
+from uuid import UUID
+
+from pydantic import BaseModel, ConfigDict, Field
+```
+
+Unused imports must not be emitted. Generated modules must pass the repository's
+Ruff rules without requiring `noqa` or formatting after generation.
+
+## Determinism
+
+For identical bundle contents and options, output must be byte-for-byte stable.
+At minimum, determinism covers:
+
+- concept model order;
+- nested model order;
+- field order inherited from `TypeContract`;
+- import order;
+- generated attribute names and aliases;
+- blank lines and final newline;
+- string quoting;
+- union spelling.
+
+The renderer itself owns canonical formatting. It should not invoke Ruff as a
+subprocess merely to stabilize output.
+
+## Relationship to dynamic Pydantic models
+
+`build_pydantic_models()` and generated source are two projections of the same
+contract and should be tested for semantic equivalence across the supported
+subset.
+
+The implementation may refactor the dynamic adapter to share Pydantic-specific
+field-name mapping and configuration helpers with the source renderer. Those
+helpers are target projection policy; they do not belong in `TypeContract`
+unless another target later demonstrates the same requirement.
+
+Examples of equivalence include:
+
+- the same authored field names/aliases;
+- the same requiredness and explicit-null behavior;
+- `Decimal` and `UUID` runtime annotations;
+- list element types and nullability;
+- literal `type` discrimination;
+- acceptance of unknown producer fields;
+- safe handling of authored keys that start with `_` or shadow Python keywords
+  or `BaseModel` members;
+- identical hard failures for nested generated-model name collisions, including
+  both structural paths in the error.
+
+The source generator must not call `model_json_schema()` on the dynamic models
+and then reverse-engineer Python from JSON Schema. Both paths should consume the
+shared contract directly.
+
+## Why not a new ContractGraph
+
+The original proposal described an immutable graph with fields, references,
+diagnostics and target metadata. The repository now has the useful subset in
+`TypeContract` and its node classes.
+
+Adding another IR would create questions with no product benefit:
+
+- which IR owns declared DuckDB precision and array element types;
+- which IR owns requiredness/nullability;
+- whether JSON Schema/Zod consume the old or new graph;
+- how two inference implementations stay synchronized;
+- whether Ibis/NetworkX representations are authoritative or derived.
+
+The answer in this RFC is simpler: extend the shared contract only when a real
+cross-target requirement appears.
+
+## Why not `codegen pydantic`
+
+`schema` already means "compile the frontmatter contract into another schema or
+validation language" and already returns source for Zod.
+
+Pydantic source is the same kind of operation. A new top-level `codegen`
+hierarchy would duplicate:
+
+- input discovery;
+- `--exclude`;
+- `--infer-types`;
+- `--cast`;
+- `--spec-template`;
+- service wiring;
+- MCP wiring;
+- documentation.
+
+If a later feature needs project-aware multi-file generation, import management
+or filesystem ownership, it may justify a separate codegen surface. A single
+stdout module does not.
+
+## Why Python-to-OKF is deferred
+
+The original RFC coupled source generation with the reverse direction:
 
 ```text
-Python model → profile → generated model
+Python annotations -> OKF profile bundle
 ```
 
-must preserve field names or aliases, supported types, requiredness,
-nullability, defaults, descriptions, and references.
+RFC 0006 changed what an explicit OKF-side declaration means. `.schema.sql` can
+now carry exact DuckDB types, comments and executable trusted SQL, while JSON
+Schema is a target representation rather than the canonical declaration input.
 
-```text
-OKF bundle → model → profile
-```
+A reverse generator therefore needs separate decisions about:
 
-must preserve the inferred contract and diagnostics, but cannot reconstruct
-which values were merely coincidental observations. Generated artifacts include
-their source digest, generator version, and options so CI can detect drift.
+- whether Python annotations map to `.schema.sql`, JSON Schema or both;
+- how `Decimal` precision/scale is obtained when Python's annotation omits it;
+- whether `datetime` means DuckDB `TIMESTAMP` or `TIMESTAMPTZ`;
+- how Pydantic constraints map to DuckDB versus JSON Schema;
+- whether runtime Pydantic metadata may be imported or only AST-inspected;
+- what authority generated files have relative to handwritten declarations.
 
-## File safety
+Those are not required to generate Pydantic source from an existing
+`TypeContract`. Coupling them would delay the smaller useful feature and
+reintroduce a second contract model.
 
-- `--check` performs no writes and fails when generated output differs.
-- Writes use temporary files followed by atomic replacement.
-- Existing handwritten files are never overwritten unless they contain a
-  recognized generation marker or `--force` is explicit.
-- Output paths are resolved and checked against the requested output root.
-- Generated Python is formatted with Ruff before comparison or writing.
-- Generated Markdown is formatted with mdformat before comparison or writing.
+## Diagnostics and errors
 
-## Diagnostics
+The first implementation reuses existing schema compilation failures:
 
-Code generation uses the existing aggregate diagnostic model. Proposed codes:
+- top-level and nested generated-model name collisions remain
+  `SchemaNameCollisionError`, with both owning structural paths reported;
+- invalid explicit casts remain `SchemaCastError`;
+- invalid declared schemas remain `SchemaExportError`;
+- unsupported declared types render as `Any` rather than inventing a fake type.
 
-- `GEN001`: concept type cannot map to a unique class name;
-- `GEN002`: observed values require an unsupported or ambiguous type;
-- `GEN003`: insufficient observations for a closed inferred schema;
-- `GEN004`: Python annotation is unsupported;
-- `GEN005`: model reference cannot be resolved;
-- `GEN006`: generated output is stale in check mode;
-- `GEN007`: output would overwrite a handwritten file;
-- `GEN008`: importing Python was requested for an untrusted source.
+Source-specific failures should be added only for conditions the renderer
+cannot represent honestly, such as two authored keys colliding after safe
+Pydantic/Python attribute generation. Nested class-name collisions are not
+source-only: the shared Pydantic naming registry makes them the same hard failure
+for dynamic and source-generated models.
 
-Inference warnings do not make the source OKF bundle non-conformant. Strict
-code-generation mode may still return a non-zero exit code for them.
-
-## CI integration
-
-Consumers can commit generated artifacts and verify them without rewriting:
-
-```yaml
-- run: uvx --from okf-parser okf-parser check knowledge
-- run: >-
-    uvx --from okf-parser okf-parser codegen pydantic knowledge
-    --output generated_models.py
-    --check
-```
-
-Model-first projects can similarly check that their profile bundle is current.
-The composite GitHub Action may expose code-generation checks after the CLI
-contract is stable.
+A separate family of `GEN00x` diagnostics is not introduced until there are
+multiple generation operations that need aggregate diagnostics.
 
 ## Implementation plan
 
-1. Define immutable contract graph records and Ibis schemas.
-2. Implement YAML-value type joining with property-based tests.
-3. Generate deterministic Pydantic v2 source from explicit profiles.
-4. Add observed-bundle inference and strict diagnostics.
-5. Parse dataclasses and common Pydantic declarations with the Python AST.
-6. Generate OKF profile concepts and machine-readable field extensions.
-7. Add check-only mode, safe writes, formatting, and source digests.
-8. Expose CLI, Python API, MCP read operations, and CI examples.
-9. Test supported semantic round-trips and unsupported-type diagnostics.
+1. Add a deterministic Pydantic field-name/alias helper with collisions,
+   leading-underscore keys, keywords and `BaseModel` protected-name tests.
+2. Add a compilation-wide Pydantic model-name registry keyed by generated class
+   name and carrying full structural-path provenance; fail on any distinct path
+   collision.
+3. Refactor `build_pydantic_models()` to use the same field mapping, model-name
+   registry and `extra="allow"` policy.
+4. Add a pure `render_pydantic_source(contracts)` renderer beside `render_zod`.
+5. Add `export_pydantic_source()` beside the existing schema exporters.
+6. Add `pydantic` to the schema format accepted by service, CLI and MCP.
+7. Pin semantic equivalence against `build_pydantic_models()` for representative
+   contracts, including optional-non-nullable fields.
+8. Add declared-type regressions for `DECIMAL`, `UUID`, timestamp families and
+   arrays.
+9. Add regressions for `_private`, `__custom__`, `__pydantic_extra__`, keywords,
+   Unicode, `BaseModel` members and distinct nested paths that normalize to the
+   same generated class name.
+10. Document stdout/file-redirection and CI drift-check examples.
 
 ## Acceptance criteria
 
+- `okf-parser schema . --format pydantic` works without naming configuration,
+  profile scaffolding or another command family for an ordinary conformant bundle;
 - repeated generation is byte-for-byte deterministic;
-- generated Python passes Ruff format, Ruff check, and ty;
-- generated profiles pass `okf-parser check`;
-- check mode detects drift and does not change the filesystem;
-- arbitrary source modules are not imported by default;
-- name collisions and type conflicts are reported with source locations;
-- the supported type subset passes semantic round-trip tests;
-- unknown OKF frontmatter remains accepted by generated models by default.
+- generated source imports successfully on supported Python versions;
+- generated source passes Ruff format/check without post-processing;
+- top-level generated models accept and preserve unknown frontmatter fields;
+- authored field names survive through aliases where Python/Pydantic attribute
+  names differ;
+- alias normalization collisions fail loudly;
+- authored keys beginning with `_`, including `_private`, `__custom__` and
+  `__pydantic_extra__`, remain validated fields via aliases in both dynamic and
+  source-generated models;
+- every emitted Pydantic class name is unique across the compilation, and a
+  collision between distinct structural paths fails loudly while reporting both
+  paths;
+- optional non-nullable fields accept omission but reject explicit `null`;
+- JSON Schema, Zod, dynamic Pydantic and Pydantic source all compile from the
+  same `TypeContract` objects;
+- dynamic and source Pydantic projections agree on field aliases, nullability,
+  producer extensions and protected-name handling;
+- declared `DECIMAL`, UUID, timestamp and array families use the expected
+  target-specific Python annotations;
+- unsupported declared families become `Any` without discarding their identity
+  from the shared contract;
+- `schema --format pydantic` is available through CLI and the existing MCP
+  `schema` tool;
+- no new contract graph, profile format, Python import mode or filesystem writer
+  is introduced.
 
-## Open questions
+## Follow-up work
 
-1. Should the machine-readable profile extension use JSON Schema as its
-   serialized form while retaining the contract graph internally?
-2. Should explicit profiles always win over observed-value inference?
-3. How should aliases map to authored YAML keys during round-trip?
-4. Should nested mappings become named models automatically or remain mappings
-   until an explicit profile names them?
-5. Should generated models include Markdown bodies and concept IDs in a wrapper
-   model or as excluded Pydantic fields?
+A separate RFC may address Python-to-OKF declaration generation. It should begin
+from the post-RFC-0006 question of declaration authority and target format, not
+from the old assumption that an `OKFProfile.fields` frontmatter extension is the
+canonical interchange.
+
+A later codegen/project RFC may also add owned output files, multi-module
+splitting and check/write modes if real consumers need more than deterministic
+stdout.
 
 ## Decision
 
-Proposed. Implementation should begin with the contract graph and explicit
-profiles. Statistical inference from arbitrary bundles follows only after the
-deterministic, reviewable path is stable.
+Proposed.
+
+The implementation should begin with the Pydantic-specific field mapping and
+source renderer over the existing `TypeContract`. No new intermediate
+representation is required.
