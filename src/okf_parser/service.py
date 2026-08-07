@@ -10,6 +10,7 @@ import networkx as nx
 
 from okf_parser.apply import apply_bundle as _apply_bundle
 from okf_parser.bundle import load_bundle, validate_path
+from okf_parser.bundle_import import import_bundle as _import_bundle
 from okf_parser.duckdb import attach_okf
 from okf_parser.formatting import FormatReport, format_path
 from okf_parser.schema_export import export_json_schema, export_zod_schema
@@ -32,6 +33,21 @@ def init_bundle(
     root = Path(path).resolve()
     bundle = load_bundle(root, exclude)
     return scaffold_missing_specs(bundle.root, bundle.concept_types, spec_template, write=write)
+
+
+def import_bundle(  # noqa: PLR0913 - each argument is an independent public CLI flag.
+    source: str,
+    path: str,
+    concept_type: str,
+    *,
+    id_column: str | None = None,
+    write: bool = False,
+    overwrite: bool = False,
+) -> dict[str, object]:
+    """Materialize every row of a DuckDB-readable source as one concept document."""
+    return _import_bundle(
+        source, path, concept_type, id_column=id_column, write=write, overwrite=overwrite
+    )
 
 
 def check_bundle(

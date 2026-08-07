@@ -18,6 +18,7 @@ from okf_parser.service import (
     check_format,
     export_duckdb,
     graph_bundle,
+    import_bundle,
     init_bundle,
     inventory_bundle,
     schema_bundle,
@@ -79,6 +80,23 @@ def check(
     """Validate every Markdown file recursively as OKF v0.2."""
     payload = check_bundle(path, exclude or (), require_spec, normative_spec=normative_spec)
     return CliResult(payload, 0 if payload["conformant"] else 1)
+
+
+@app.command(name="import")
+def import_command(  # noqa: PLR0913 - each argument is an independent public CLI flag.
+    source: str,
+    path: str,
+    *,
+    type: str,  # noqa: A002 - the domain name for this flag is `type`.
+    id_column: str | None = None,
+    write: bool = False,
+    overwrite: bool = False,
+) -> CliResult[JsonPayload]:
+    """Materialize every row of a DuckDB-readable source (CSV, Parquet, JSON) as a concept."""
+    payload = import_bundle(
+        source, path, type, id_column=id_column, write=write, overwrite=overwrite
+    )
+    return CliResult(payload, 1 if payload["duplicate_ids"] else 0)
 
 
 @app.command

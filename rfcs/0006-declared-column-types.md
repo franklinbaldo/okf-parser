@@ -977,6 +977,21 @@ the invocation names disjoint paths, exactly the fail-closed posture
 `apply --write` already takes toward a script that touched more than one
 type.
 
+### A related but out-of-scope command: `import`
+
+This RFC's repository also ships `import SOURCE PATH --type NAME`, which
+materializes every row of any DuckDB-readable source (CSV, Parquet,
+(ND)JSON, via DuckDB's own replacement scan) as one concept document. It is
+**not** part of this RFC and not RFC 0007's writeback: RFC 0007 is
+specifically the DuckDB-catalog-back-to-frontmatter problem for a bundle
+that already exists; `import` runs in the opposite direction and produces
+a brand-new bundle from an external source, symmetric with the existing
+`duckdb` command's bundle-to-DuckDB-tables direction. It is documented here
+only because it was implemented in the same change as decisions 11-12, not
+because it depends on declared column types. It follows the same dry-run/
+`--write`, never-overwrite-without-`--overwrite`, fail-closed-on-duplicate-
+id posture as `init` and `apply`.
+
 ## Deferred to RFC 0007: writeback
 
 Two distinct writeback problems are deferred, and an earlier draft of this
