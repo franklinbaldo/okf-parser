@@ -129,7 +129,7 @@ replace(
     '''def test_check_cli_can_explain_bundle_classification(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    (tmp_path / "concept.md").write_text("---\ntype: Note\n---\n", encoding="utf-8")
+    (tmp_path / "concept.md").write_text("---\\ntype: Note\\n---\\n", encoding="utf-8")
 
     app(["check", str(tmp_path), "--classify"])
 
