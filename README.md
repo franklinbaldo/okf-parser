@@ -208,7 +208,7 @@ Add the repository as a CI check:
 ```yaml
 steps:
   - uses: actions/checkout@v7
-  - uses: franklinbaldo/okf-parser@v0.20.1
+  - uses: franklinbaldo/okf-parser@v0.21.0
     with:
       path: knowledge
 ```
@@ -282,6 +282,17 @@ report = validate_path(Path("knowledge"))
 assert report.markdown_count == report.concept_count + report.reserved_count
 assert report.is_conformant
 ```
+
+Declared RFC 0006 types can be queried directly as Ibis relations without a CLI or database-file round trip:
+
+```python
+bundle = load_bundle(Path("knowledge"))
+with bundle.compile_types("docs/types/{slug}.md") as typed:
+    routines = typed["Rotina"]
+    print(routines.filter(routines.custo.notnull()).execute())
+```
+
+`TypedRelations` owns an ephemeral DuckDB/Ibis backend; use it as a context manager or call `close()` explicitly. With no matching declarations, `tables` is empty rather than silently inventing an inferred physical schema.
 
 `load_bundle`, `validate_path` and `format_path` read the bundle's `.okfignore`
 on their own, and take an `exclude` sequence for patterns supplied per call:

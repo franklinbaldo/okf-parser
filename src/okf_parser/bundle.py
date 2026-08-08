@@ -32,6 +32,7 @@ from okf_parser.parser import (
     split_optional_frontmatter,
 )
 from okf_parser.type_specs import missing_type_specs
+from okf_parser.typed_relations import TypedRelations, compile_bundle_types
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -114,6 +115,10 @@ class Bundle:
         """Every producer-defined type observed in the bundle."""
         column = self.concepts.select("concept_type").execute()["concept_type"]
         return {value for value in column if isinstance(value, str)}
+
+    def compile_types(self, spec_template: str | None = None) -> TypedRelations:
+        """Compile declared concept types into live in-process Ibis relations."""
+        return compile_bundle_types(self, spec_template)
 
     @property
     def is_conformant(self) -> bool:
