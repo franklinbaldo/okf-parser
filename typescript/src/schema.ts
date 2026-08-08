@@ -35,23 +35,23 @@ export interface SchemaReport {
 
 export type JsonSchema = Readonly<Record<string, unknown>>;
 
-type ScalarKind = CastKind;
+export type ScalarKind = CastKind;
 
-type ContractNode =
+export type ContractNode =
   | { readonly kind: "scalar"; readonly scalar: ScalarKind }
   | { readonly kind: "literal"; readonly value: string }
   | { readonly kind: "object"; readonly fields: readonly FieldContract[] }
   | { readonly kind: "list"; readonly item: ContractNode; readonly itemNullable: boolean }
   | { readonly kind: "any" };
 
-interface FieldContract {
+export interface FieldContract {
   readonly name: string;
   readonly required: boolean;
   readonly nullable: boolean;
   readonly value: ContractNode;
 }
 
-interface TypeContract {
+export interface TypeContract {
   readonly conceptType: string;
   readonly modelName: string;
   readonly root: Extract<ContractNode, { readonly kind: "object" }>;
@@ -118,6 +118,19 @@ function parseCasts(specifications: readonly string[]): Map<string, CastKind> {
 
 function isRecord(value: FrontmatterValue): value is Readonly<Record<string, FrontmatterValue>> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function freezeContractNode<T extends ContractNode>(node: T): T {
+  if (node.kind === "object") {
+    for (const field of node.fields) {
+      freezeContractNode(field.value);
+      Object.freeze(field);
+    }
+    Object.freeze(node.fields);
+  } else if (node.kind === "list") {
+    freezeContractNode(node.item);
+  }
+  return Object.freeze(node);
 }
 
 function scalarContract(values: readonly string[], fieldPath: string, options: CompileOptions): ContractNode {
@@ -238,7 +251,7 @@ function parseFrontmatterJson(value: string): Readonly<Record<string, Frontmatte
   return parsed as Readonly<Record<string, FrontmatterValue>>;
 }
 
-function compileContracts(bundle: Bundle, schemaOptions: SchemaOptions): readonly TypeContract[] {
+export function compileBundleTypeContracts(bundle: Bundle, schemaOptions: SchemaOptions = {}): readonly TypeContract[] {
   const specifications = schemaOptions.casts ?? [];
   const options: CompileOptions = {
     inferTypes: schemaOptions.inferTypes ?? false,
@@ -258,7 +271,7 @@ function compileContracts(bundle: Bundle, schemaOptions: SchemaOptions): readonl
       Object.freeze({
         conceptType,
         modelName: names.get(conceptType) ?? identifierName(conceptType, "Concept"),
-        root: compileObject(documents, "", options, conceptType),
+        root: freezeContractNode(compileObject(documents, "", options, conceptType)),
       }),
     );
   const unused = [...options.casts.keys()].filter((field) => !options.usedCasts.has(field));
@@ -268,6 +281,14 @@ function compileContracts(bundle: Bundle, schemaOptions: SchemaOptions): readonl
     );
   }
   return Object.freeze(contracts);
+}
+
+export async function compileTypeContracts(
+  root: string | URL,
+  options: SchemaOptions = {},
+): Promise<readonly TypeContract[]> {
+  const bundle = await loadBundle(root, options);
+  return compileBundleTypeContracts(bundle, options);
 }
 
 function titleFor(name: string): string {
@@ -310,12 +331,11 @@ function nodeSchema(node: ContractNode): JsonSchema {
   };
 }
 
-export async function exportJsonSchema(
-  root: string | URL,
+export function exportBundleJsonSchema(
+  bundle: Bundle,
   options: SchemaOptions = {},
-): Promise<SchemaReport> {
-  const bundle = await loadBundle(root, options);
-  const contracts = compileContracts(bundle, options);
+): SchemaReport {
+  const contracts = compileBundleTypeContracts(bundle, options);
   const schemas = Object.fromEntries(
     contracts.map((contract) => [
       contract.conceptType,
@@ -329,6 +349,14 @@ export async function exportJsonSchema(
     casts: Object.freeze([...(options.casts ?? [])]),
     schemas: Object.freeze(schemas),
   });
+}
+
+export async function exportJsonSchema(
+  root: string | URL,
+  options: SchemaOptions = {},
+): Promise<SchemaReport> {
+  const bundle = await loadBundle(root, options);
+  return exportBundleJsonSchema(bundle, options);
 }
 
 function scalarZod(kind: ScalarKind): string {
@@ -363,7 +391,7 @@ export async function exportZod(
   options: ZodOptions = {},
 ): Promise<string> {
   const bundle = await loadBundle(root, options);
-  const contracts = compileContracts(bundle, options);
+  const contracts = compileBundleTypeContracts(bundle, options);
   const variableNames = uniqueNames(
     contracts.map((contract) => contract.conceptType),
     "Schema",

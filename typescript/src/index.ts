@@ -60,14 +60,21 @@ export {
   SchemaCastError,
   SchemaExportError,
   SchemaNameCollisionError,
+  compileBundleTypeContracts,
+  compileTypeContracts,
+  exportBundleJsonSchema,
   exportJsonSchema,
   exportZod,
 } from "./schema.js";
 export type {
   CastKind,
+  ContractNode,
+  FieldContract,
   JsonSchema,
+  ScalarKind,
   SchemaOptions,
   SchemaReport,
+  TypeContract,
   ZodImport,
   ZodOptions,
 } from "./schema.js";
