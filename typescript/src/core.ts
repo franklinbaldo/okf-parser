@@ -365,31 +365,47 @@ export function conceptId(bundleRoot: string, filePath: string): string {
   return relative.slice(0, relative.length - path.extname(relative).length);
 }
 
-export function iterMarkdownLinks(body: string): readonly string[] {
+interface MarkdownFacts {
+  readonly links: readonly string[];
+  readonly headings: readonly (readonly [number, string])[];
+}
+
+function markdownFacts(body: string): MarkdownFacts {
   const links: string[] = [];
-  const pending = [...markdown.parse(body, {})].reverse();
-  while (pending.length > 0) {
-    const token = pending.pop();
+  const headings: Array<readonly [number, string]> = [];
+  const tokens = markdown.parse(body, {});
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
     if (token === undefined) continue;
-    if (token.children !== null) pending.push(...[...token.children].reverse());
-    if (token.type !== "link_open") continue;
-    const destination = token.attrGet("href");
-    if (destination !== null) links.push(destination);
+    if (token.type === "heading_open") {
+      const inline = tokens[index + 1];
+      headings.push([Number(token.tag.slice(1)), inline?.type === "inline" ? inline.content : ""]);
+    }
+
+    const pending = [token];
+    while (pending.length > 0) {
+      const current = pending.pop();
+      if (current === undefined) continue;
+      if (current.children !== null) pending.push(...[...current.children].reverse());
+      if (current.type !== "link_open") continue;
+      const destination = current.attrGet("href");
+      if (destination !== null) links.push(destination);
+    }
   }
-  return links;
+
+  return Object.freeze({
+    links: Object.freeze(links),
+    headings: Object.freeze(headings),
+  });
+}
+
+export function iterMarkdownLinks(body: string): readonly string[] {
+  return markdownFacts(body).links;
 }
 
 export function iterHeadings(body: string): readonly (readonly [number, string])[] {
-  const tokens = markdown.parse(body, {});
-  const headings: Array<readonly [number, string]> = [];
-  for (let index = 0; index < tokens.length; index += 1) {
-    const token = tokens[index];
-    if (token?.type !== "heading_open") continue;
-    const inline = tokens[index + 1];
-    const level = Number(token.tag.slice(1));
-    headings.push([level, inline?.type === "inline" ? inline.content : ""]);
-  }
-  return headings;
+  return markdownFacts(body).headings;
 }
 
 function localTargetPath(rawTarget: string): string | null {
@@ -654,8 +670,8 @@ function diagnostic(
   return Object.freeze({ code, severity, path: diagnosticPath, message });
 }
 
-function hasTitle(body: string): boolean {
-  return iterHeadings(body).some(([level, text]) => level === 1 && text.trim() !== "");
+function hasTitle(facts: MarkdownFacts): boolean {
+  return facts.headings.some(([level, text]) => level === 1 && text.trim() !== "");
 }
 
 function isRealIsoDate(value: string): boolean {
@@ -689,7 +705,8 @@ function validateIndex(root: string, filePath: string, text: string): readonly [
       );
     }
   }
-  if (!hasTitle(body)) {
+  const facts = markdownFacts(body);
+  if (!hasTitle(facts)) {
     diagnostics.push(
       diagnostic("OKF005", "error", relative, "index.md must contain at least one level-one section"),
     );
@@ -710,11 +727,12 @@ function validateLog(root: string, filePath: string, text: string): readonly [st
   if (frontmatter !== null) {
     diagnostics.push(diagnostic("OKF006", "error", relative, "log.md must not contain frontmatter"));
   }
-  if (!hasTitle(body)) {
+  const facts = markdownFacts(body);
+  if (!hasTitle(facts)) {
     diagnostics.push(diagnostic("OKF007", "error", relative, "log.md must contain a level-one title"));
   }
   const parsedDates: string[] = [];
-  for (const [level, heading] of iterHeadings(body)) {
+  for (const [level, heading] of facts.headings) {
     if (level !== 2) continue;
     if (!/^\d{4}-\d{2}-\d{2}$/u.test(heading)) {
       diagnostics.push(
@@ -788,10 +806,9 @@ export async function loadBundle(
       );
     }
     const sourceId = conceptId(root, filePath);
-    const rawLinks: Array<readonly [string, string]> = iterMarkdownLinks(parsed.body).map((target) => [
-      target,
-      "body",
-    ]);
+    const rawLinks: Array<readonly [string, string]> = markdownFacts(parsed.body).links.map(
+      (target) => [target, "body"],
+    );
     for (const [rawTarget, origin] of rawLinks) {
       const resolved = resolveLocalTarget(root, filePath, rawTarget);
       if (resolved === null || !hasMarkdownSuffix(rawTarget)) continue;
