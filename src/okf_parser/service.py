@@ -86,7 +86,9 @@ def check_bundle(
     return payload
 
 
-def inventory_bundle(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
+def inventory_bundle(
+    path: str, exclude: Sequence[str] = (), *, revisions: bool = False
+) -> dict[str, object]:
     """Count concepts by their producer-defined type."""
     bundle = load_bundle(Path(path), exclude)
     rows = (
@@ -96,7 +98,15 @@ def inventory_bundle(path: str, exclude: Sequence[str] = ()) -> dict[str, object
         .execute()
         .to_dict(orient="records")
     )
-    return {"root": str(bundle.root), "types": rows}
+    payload: dict[str, object] = {"root": str(bundle.root), "types": rows}
+    if revisions:
+        payload["revisions"] = (
+            bundle.concepts.select("concept_id", "path", "source_digest", "revision_digest")
+            .order_by("path")
+            .execute()
+            .to_dict(orient="records")
+        )
+    return payload
 
 
 def graph_bundle(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:

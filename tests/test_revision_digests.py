@@ -8,6 +8,7 @@ from typing import cast
 
 from okf_parser import load_bundle
 from okf_parser.parser import parse_document_text
+from okf_parser.service import inventory_bundle
 
 
 def _vectors() -> list[dict[str, str]]:
@@ -36,6 +37,18 @@ def test_semantic_change_changes_revision() -> None:
     assert canonical["revision_digest"] != semantic["revision_digest"]
 
 
+def test_inventory_can_expose_serialized_revision_identity(tmp_path: Path) -> None:
+    (tmp_path / "note.md").write_text("---\ntype: Note\n---\nBody\n", encoding="utf-8")
+
+    payload = inventory_bundle(str(tmp_path), revisions=True)
+
+    [revision] = cast("list[dict[str, str]]", payload["revisions"])
+    assert revision["concept_id"] == "note"
+    assert revision["path"] == "note.md"
+    assert revision["source_digest"].startswith("sha256:")
+    assert revision["revision_digest"].startswith("okf-revision-v1-sha256:")
+
+
 def test_bundle_relations_expose_self_describing_digests(tmp_path: Path) -> None:
     (tmp_path / "note.md").write_text(
         "---\ntype: Note\ntitle: Olá\n---\nBody\n",
@@ -43,8 +56,10 @@ def test_bundle_relations_expose_self_describing_digests(tmp_path: Path) -> None
     )
 
     bundle = load_bundle(tmp_path)
-    [row] = bundle.concepts.select("source_digest", "revision_digest").execute().to_dict(
-        orient="records"
+    [row] = (
+        bundle.concepts.select("source_digest", "revision_digest")
+        .execute()
+        .to_dict(orient="records")
     )
 
     assert row["source_digest"].startswith("sha256:")

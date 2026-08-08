@@ -10,6 +10,15 @@ import yaml
 from markdown_it import MarkdownIt
 from pydantic import ValidationError
 
+from okf_parser.digests import (
+    normalize_newlines,
+)
+from okf_parser.digests import (
+    revision_digest as _revision_digest,
+)
+from okf_parser.digests import (
+    source_digest as _source_digest,
+)
 from okf_parser.discovery import is_markdown_filename
 from okf_parser.models import FRONTMATTER_ADAPTER, ParsedDocument, YamlValue
 
@@ -98,9 +107,9 @@ def _load_frontmatter(block: str) -> dict[str, YamlValue] | None:
 
 
 def parse_document(path: Path) -> ParsedDocument:
-    """Parse YAML frontmatter and preserve the Markdown body."""
+    """Parse YAML frontmatter while preserving exact UTF-8 source identity."""
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_bytes().decode("utf-8")
     except UnicodeDecodeError as exc:
         msg = "document must be valid UTF-8"
         raise DocumentParseError(msg) from exc
@@ -114,15 +123,21 @@ def parse_document_text(path: Path, text: str) -> ParsedDocument:
     (hashing, a freshness check) should read once and call this directly,
     rather than `parse_document`, which reads the file itself.
     """
-    match = _FRONTMATTER_RE.match(text.removeprefix("\ufeff"))
+    source_identity = _source_digest(text)
+    normalized = normalize_newlines(text)
+    match = _FRONTMATTER_RE.match(normalized.removeprefix("\ufeff"))
     if match is None:
         msg = "concept must start with YAML frontmatter delimited by ---"
         raise DocumentParseError(msg)
 
+    frontmatter = _load_frontmatter(match.group(1)) or {}
+    body = match.group(2) or ""
     return ParsedDocument(
         path=path,
-        frontmatter=_load_frontmatter(match.group(1)) or {},
-        body=match.group(2) or "",
+        frontmatter=frontmatter,
+        body=body,
+        source_digest=source_identity,
+        revision_digest=_revision_digest(frontmatter, body),
     )
 
 
