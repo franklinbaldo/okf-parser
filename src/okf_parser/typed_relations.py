@@ -8,13 +8,14 @@ from typing import TYPE_CHECKING
 
 import duckdb
 import ibis
-from ibis.backends.duckdb import Backend
 
 from okf_parser.typed_tables import discover_declared_schemas, materialize_typed_tables
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from typing import Self
 
+    from ibis.backends.duckdb import Backend
     from ibis.expr.types import Table
 
     from okf_parser.bundle import Bundle
@@ -66,7 +67,7 @@ class TypedRelations:
         self._backend.disconnect()
         self._closed = True
 
-    def __enter__(self) -> TypedRelations:
+    def __enter__(self) -> Self:
         """Return this live relation set for context-manager use."""
         return self
 
