@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack, closing
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -83,8 +84,8 @@ def compile_bundle_types(bundle: Bundle, spec_template: str | None = None) -> Ty
     independently inferred schema.
     """
     declarations = discover_declared_schemas(bundle.root, bundle.concept_types, spec_template)
-    connection = duckdb.connect()
-    try:
+    with ExitStack() as stack:
+        connection = stack.enter_context(closing(duckdb.connect()))
         materialized = materialize_typed_tables(
             connection,
             bundle,
@@ -93,9 +94,7 @@ def compile_bundle_types(bundle: Bundle, spec_template: str | None = None) -> Ty
             overwrite=False,
         )
         backend = ibis.duckdb.from_connection(connection)
-    except Exception:
-        connection.close()
-        raise
+        stack.pop_all()
     return TypedRelations(
         _backend=backend,
         schema=materialized.schema,
