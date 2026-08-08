@@ -12,6 +12,7 @@ from okf_parser.parser import (
     iter_headings,
     iter_markdown_links,
     looks_like_frontmatter_link,
+    markdown_facts,
     parse_document,
     resolve_local_target,
 )
@@ -89,6 +90,14 @@ def test_link_extraction_uses_commonmark_tokens() -> None:
         "path%20with%20spaces.md",
         "guide_(v2).md",
     ]
+
+
+def test_markdown_facts_collect_links_and_headings_together() -> None:
+    body = "# Title\n\n[ordinary](ordinary.md)\n\n## Detail\n"
+    facts = markdown_facts(body)
+
+    assert facts.links == ("ordinary.md",)
+    assert facts.headings == ((1, "Title"), (2, "Detail"))
 
 
 def test_ordinary_yaml_scalars_preserve_their_authored_spelling(tmp_path: Path) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 from urllib.parse import SplitResult, unquote, urlsplit
 
@@ -50,6 +51,14 @@ def is_reserved_document(path: Path) -> bool:
 
 class DocumentParseError(ValueError):
     """Raised when one concept document cannot be structurally parsed."""
+
+
+@dataclass(frozen=True, slots=True)
+class MarkdownFacts:
+    """CommonMark facts collected from one parser pass."""
+
+    links: tuple[str, ...]
+    headings: tuple[tuple[int, str], ...]
 
 
 def _is_frontmatter_delimiter(line: str) -> bool:
@@ -170,37 +179,40 @@ def concept_id(bundle_root: Path, path: Path) -> str:
     return path.relative_to(bundle_root).with_suffix("").as_posix()
 
 
+def markdown_facts(body: str) -> MarkdownFacts:
+    """Collect links and headings from one CommonMark tokenization."""
+    links: list[str] = []
+    headings: list[tuple[int, str]] = []
+    tokens = _MARKDOWN.parse(body)
+
+    for index, token in enumerate(tokens):
+        if token.type == "heading_open":
+            inline = tokens[index + 1] if index + 1 < len(tokens) else None
+            content = inline.content if inline is not None and inline.type == "inline" else ""
+            headings.append((int(token.tag.removeprefix("h")), content))
+
+        pending = [token]
+        while pending:
+            current = pending.pop()
+            if current.children:
+                pending.extend(reversed(current.children))
+            if current.type != "link_open":
+                continue
+            destination = current.attrGet("href")
+            if isinstance(destination, str):
+                links.append(destination)
+
+    return MarkdownFacts(links=tuple(links), headings=tuple(headings))
+
+
 def iter_markdown_links(body: str) -> list[str]:
     """Return non-image Markdown link targets in source order."""
-    links: list[str] = []
-    pending = list(reversed(_MARKDOWN.parse(body)))
-    while pending:
-        token = pending.pop()
-        if token.children:
-            pending.extend(reversed(token.children))
-        if token.type != "link_open":
-            continue
-        destination = token.attrGet("href")
-        if isinstance(destination, str):
-            links.append(destination)
-    return links
+    return list(markdown_facts(body).links)
 
 
 def iter_headings(body: str) -> list[tuple[int, str]]:
-    """Return ``(level, text)`` for every heading, in source order.
-
-    Uses CommonMark tokens rather than line regexes so that ``#`` characters
-    inside fenced code blocks are not mistaken for headings.
-    """
-    headings: list[tuple[int, str]] = []
-    tokens = _MARKDOWN.parse(body)
-    for index, token in enumerate(tokens):
-        if token.type != "heading_open":
-            continue
-        inline = tokens[index + 1] if index + 1 < len(tokens) else None
-        content = inline.content if inline is not None and inline.type == "inline" else ""
-        headings.append((int(token.tag.removeprefix("h")), content))
-    return headings
+    """Return ``(level, text)`` for every heading, in source order."""
+    return list(markdown_facts(body).headings)
 
 
 def split_link_target(raw_target: str) -> SplitResult | None:
