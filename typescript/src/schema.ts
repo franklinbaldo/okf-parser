@@ -16,9 +16,23 @@ import {
 export type CastKind = LexemeKind;
 export type ZodImport = "zod" | "astro";
 
+export interface DeclaredLogicalType {
+  readonly sql: string;
+  readonly family: "string" | "boolean" | "integer" | "float" | "decimal" | "date" | "timestamp" | "timestamptz" | "uuid" | "list" | "other";
+  readonly element?: DeclaredLogicalType;
+  readonly precision?: number;
+  readonly scale?: number;
+  readonly isJsSafeInteger?: boolean;
+}
+
+export type DeclaredTypesByType = Readonly<
+  Record<string, Readonly<Record<string, DeclaredLogicalType>>>
+>;
+
 export interface SchemaOptions extends LoadOptions {
   readonly inferTypes?: boolean;
   readonly casts?: readonly string[];
+  readonly declaredTypesByType?: DeclaredTypesByType;
 }
 
 export interface ZodOptions extends SchemaOptions {
@@ -38,10 +52,10 @@ export type JsonSchema = Readonly<Record<string, unknown>>;
 export type ScalarKind = CastKind;
 
 export type ContractNode =
-  | { readonly kind: "scalar"; readonly scalar: ScalarKind }
+  | { readonly kind: "scalar"; readonly scalar: ScalarKind; readonly declaredType?: DeclaredLogicalType }
   | { readonly kind: "literal"; readonly value: string }
   | { readonly kind: "object"; readonly fields: readonly FieldContract[] }
-  | { readonly kind: "list"; readonly item: ContractNode; readonly itemNullable: boolean }
+  | { readonly kind: "list"; readonly item: ContractNode; readonly itemNullable: boolean; readonly declaredType?: DeclaredLogicalType }
   | { readonly kind: "any" };
 
 export interface FieldContract {
@@ -60,6 +74,7 @@ export interface TypeContract {
 interface CompileOptions {
   readonly inferTypes: boolean;
   readonly casts: ReadonlyMap<string, CastKind>;
+  readonly declaredTypesByType: DeclaredTypesByType;
   readonly usedCasts: Set<string>;
 }
 
@@ -120,7 +135,20 @@ function isRecord(value: FrontmatterValue): value is Readonly<Record<string, Fro
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function scalarContract(values: readonly string[], fieldPath: string, options: CompileOptions): ContractNode {
+function declaredNode(declaredType: DeclaredLogicalType): ContractNode {
+  if (declaredType.family === "list" && declaredType.element !== undefined) {
+    return { kind: "list", item: declaredNode(declaredType.element), itemNullable: false, declaredType };
+  }
+  const scalar: ScalarKind =
+    declaredType.family === "boolean" ? "boolean" :
+    declaredType.family === "integer" ? "integer" :
+    declaredType.family === "float" || declaredType.family === "decimal" ? "number" :
+    declaredType.family === "date" ? "date" :
+    declaredType.family === "timestamptz" ? "datetime" : "string";
+  return { kind: "scalar", scalar, declaredType };
+}
+
+function scalarContract(values: readonly string[], fieldPath: string, options: CompileOptions, conceptType?: string): ContractNode {
   const explicit = options.casts.get(fieldPath);
   if (explicit !== undefined) {
     options.usedCasts.add(fieldPath);
@@ -132,6 +160,8 @@ function scalarContract(values: readonly string[], fieldPath: string, options: C
     }
     return { kind: "scalar", scalar: explicit };
   }
+  const declared = conceptType === undefined ? undefined : options.declaredTypesByType[conceptType]?.[fieldPath];
+  if (declared !== undefined) return declaredNode(declared);
   return { kind: "scalar", scalar: options.inferTypes ? classifyLexemes(values) : "string" };
 }
 
@@ -139,15 +169,27 @@ function compileValue(
   values: readonly FrontmatterValue[],
   fieldPath: string,
   options: CompileOptions,
+  conceptType?: string,
 ): ContractNode {
+  const declared = conceptType === undefined || options.casts.has(fieldPath)
+    ? undefined
+    : options.declaredTypesByType[conceptType]?.[fieldPath];
+  if (declared !== undefined) {
+    const node = declaredNode(declared);
+    if (node.kind === "list") {
+      const items = values.filter(Array.isArray).flatMap((value) => value);
+      return { ...node, itemNullable: items.some((item) => item === null) };
+    }
+    return node;
+  }
   const nonNull = values.filter((value): value is Exclude<FrontmatterValue, null> => value !== null);
-  if (nonNull.length === 0) return scalarContract([], fieldPath, options);
+  if (nonNull.length === 0) return scalarContract([], fieldPath, options, conceptType);
 
   if (nonNull.every(isRecord)) {
     if (options.casts.has(fieldPath)) {
       throw new SchemaCastError(`cannot cast ${JSON.stringify(fieldPath)}: the field contains objects`);
     }
-    return compileObject(nonNull, fieldPath, options);
+    return compileObject(nonNull, fieldPath, options, conceptType);
   }
 
   if (nonNull.every(Array.isArray)) {
@@ -166,7 +208,7 @@ function compileValue(
     return { kind: "any" };
   }
 
-  return scalarContract(nonNull.map(String), fieldPath, options);
+  return scalarContract(nonNull.map(String), fieldPath, options, conceptType);
 }
 
 function compileObject(
@@ -180,6 +222,7 @@ function compileObject(
     keys.add("type");
     keys.add("title");
     keys.add("description");
+    for (const declaredField of Object.keys(options.declaredTypesByType[conceptType] ?? {})) keys.add(declaredField);
   }
   const fields: FieldContract[] = [];
   for (const name of [...keys].sort((left, right) => left.localeCompare(right, "en"))) {
@@ -190,7 +233,7 @@ function compileObject(
     const value =
       name === "type" && conceptType !== undefined
         ? ({ kind: "literal", value: conceptType } as const)
-        : compileValue(present.filter((item): item is FrontmatterValue => item !== undefined), fieldPath, options);
+        : compileValue(present.filter((item): item is FrontmatterValue => item !== undefined), fieldPath, options, conceptType);
     fields.push(Object.freeze({ name, required, nullable, value }));
   }
   return { kind: "object", fields: Object.freeze(fields) };
@@ -243,6 +286,7 @@ export function compileBundleTypeContracts(bundle: Bundle, schemaOptions: Schema
   const options: CompileOptions = {
     inferTypes: schemaOptions.inferTypes ?? false,
     casts: parseCasts(specifications),
+    declaredTypesByType: schemaOptions.declaredTypesByType ?? {},
     usedCasts: new Set(),
   };
   const byType = new Map<string, Array<Readonly<Record<string, FrontmatterValue>>>>();
@@ -282,6 +326,21 @@ function titleFor(name: string): string {
   return name.length === 0 ? name : `${name[0]?.toUpperCase() ?? ""}${name.slice(1)}`;
 }
 
+function declaredScalarSchema(declaredType: DeclaredLogicalType): JsonSchema {
+  const schema: Record<string, unknown> = { "x-okf-duckdb-type": declaredType.sql };
+  if (declaredType.family === "string") schema.type = "string";
+  else if (declaredType.family === "boolean") schema.type = "boolean";
+  else if (declaredType.family === "integer") schema.type = "integer";
+  else if (declaredType.family === "float" || declaredType.family === "decimal") {
+    schema.type = "number";
+    if (declaredType.family === "decimal" && declaredType.scale !== undefined && declaredType.scale > 0) schema.multipleOf = 10 ** -declaredType.scale;
+  } else if (declaredType.family === "date") Object.assign(schema, { type: "string", format: "date" });
+  else if (declaredType.family === "timestamp") Object.assign(schema, { type: "string", "x-okf-temporal-kind": "timestamp-without-time-zone" });
+  else if (declaredType.family === "timestamptz") Object.assign(schema, { type: "string", format: "date-time" });
+  else if (declaredType.family === "uuid") Object.assign(schema, { type: "string", format: "uuid" });
+  return schema;
+}
+
 function scalarSchema(kind: ScalarKind): JsonSchema {
   if (kind === "boolean") return { type: "boolean" };
   if (kind === "integer") return { type: "integer" };
@@ -292,14 +351,14 @@ function scalarSchema(kind: ScalarKind): JsonSchema {
 }
 
 function nodeSchema(node: ContractNode): JsonSchema {
-  if (node.kind === "scalar") return scalarSchema(node.scalar);
+  if (node.kind === "scalar") return node.declaredType === undefined ? scalarSchema(node.scalar) : declaredScalarSchema(node.declaredType);
   if (node.kind === "literal") return { type: "string", const: node.value };
   if (node.kind === "any") return {};
   if (node.kind === "list") {
     const item = node.itemNullable
       ? { anyOf: [nodeSchema(node.item), { type: "null" }] }
       : nodeSchema(node.item);
-    return { type: "array", items: item };
+    return { type: "array", items: item, ...(node.declaredType === undefined ? {} : { "x-okf-duckdb-type": node.declaredType.sql }) };
   }
   const properties: Record<string, JsonSchema> = {};
   const required: string[] = [];
@@ -339,6 +398,19 @@ export async function exportJsonSchema(
   });
 }
 
+function declaredScalarZod(declaredType: DeclaredLogicalType): string {
+  if (declaredType.family === "integer") return declaredType.isJsSafeInteger === false ? "z.union([z.number().int(), z.bigint()])" : "z.number().int()";
+  if (declaredType.family === "string") return "z.string()";
+  if (declaredType.family === "boolean") return "z.boolean()";
+  if (declaredType.family === "float") return "z.number()";
+  if (declaredType.family === "decimal") return "z.string()";
+  if (declaredType.family === "date") return "z.iso.date()";
+  if (declaredType.family === "timestamp") return "z.string()";
+  if (declaredType.family === "timestamptz") return "z.iso.datetime({ offset: true })";
+  if (declaredType.family === "uuid") return "z.uuid()";
+  return "z.unknown()";
+}
+
 function scalarZod(kind: ScalarKind): string {
   if (kind === "boolean") return "z.boolean()";
   if (kind === "integer") return "z.number().int()";
@@ -349,7 +421,7 @@ function scalarZod(kind: ScalarKind): string {
 }
 
 function nodeZod(node: ContractNode, indent = ""): string {
-  if (node.kind === "scalar") return scalarZod(node.scalar);
+  if (node.kind === "scalar") return node.declaredType === undefined ? scalarZod(node.scalar) : declaredScalarZod(node.declaredType);
   if (node.kind === "literal") return `z.literal(${JSON.stringify(node.value)})`;
   if (node.kind === "any") return "z.unknown()";
   if (node.kind === "list") {
