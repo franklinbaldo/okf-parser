@@ -1,0 +1,37 @@
+name: Fix 0.20.1 DuckDB test expectation
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.pull_request.head.ref == 'fix/spec-link-semantics-0.20.1'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - name: Align adapter expectations with body-link semantics
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("typescript-duckdb/test/duckdb.test.ts")
+          text = path.read_text(encoding="utf-8")
+          old = '''    link_count: 2,\n    diagnostic_count: 0,\n  });\n  await expect(count(connection, "okf.concepts")).resolves.toBe(2);\n  await expect(count(connection, "okf.links")).resolves.toBe(2);\n'''
+          new = '''    link_count: 1,\n    diagnostic_count: 0,\n  });\n  await expect(count(connection, "okf.concepts")).resolves.toBe(2);\n  await expect(count(connection, "okf.links")).resolves.toBe(1);\n'''
+          if old not in text:
+              raise SystemExit("expected DuckDB assertion block not found")
+          path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+          rm .github/workflows/fix-0-20-1-duckdb-test.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "test: align TypeScript DuckDB link count"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
