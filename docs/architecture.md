@@ -16,7 +16,7 @@ typed DuckDB / Ibis relations
 consumer projections and adapters
 ```
 
-The core answers what an authored OKF bundle says and whether it conforms. A non-reserved Markdown concept therefore needs authored OKF frontmatter and a non-empty `type`. Core graph relations come from authored Markdown links; producer-defined frontmatter strings remain data, even when they look like paths.
+The core answers what an authored OKF bundle says and whether it conforms. A non-reserved Markdown concept therefore needs authored OKF frontmatter and a non-empty `type`. Core graph relations come from authored Markdown links; producer-defined frontmatter strings remain data, even when they look like paths. Utility classifiers may still recognize path- or link-shaped strings for callers, but classification alone does not grant normative relation semantics.
 
 External corpora use a separate adaptation boundary:
 
