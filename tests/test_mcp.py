@@ -108,6 +108,10 @@ def test_mcp_public_schemas_keep_aliases_and_preview_write_pairs_match() -> None
     import_write = tools["import_write"].inputSchema
     assert import_preview == import_write
     assert "write" not in import_preview["properties"]
+    assert import_preview["properties"]["on_conflict"]["enum"] == [
+        "skip",
+        "verify-identical",
+    ]
 
     assert "classify" in tools["check"].inputSchema["properties"]
     assert "digests" in tools["inventory"].inputSchema["properties"]
@@ -204,8 +208,10 @@ def test_import_preview_and_write_share_service_with_only_commit_bit_changed(
 
     monkeypatch.setattr(cli, "import_bundle", fake_import_bundle)
 
-    preview = cli.mcp_import_preview("source.csv", "bundle", "Pessoa")
-    written = cli.mcp_import_write("source.csv", "bundle", "Pessoa")
+    preview = cli.mcp_import_preview(
+        "source.csv", "bundle", "Pessoa", on_conflict="verify-identical"
+    )
+    written = cli.mcp_import_write("source.csv", "bundle", "Pessoa", on_conflict="verify-identical")
 
     assert preview == {"written": False}
     assert written == {"written": True}
