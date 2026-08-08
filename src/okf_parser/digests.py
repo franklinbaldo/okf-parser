@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+from typing import TYPE_CHECKING
 
-from okf_parser.models import YamlValue
+if TYPE_CHECKING:
+    from okf_parser.models import YamlValue
 
 _SOURCE_PREFIX = "sha256:"
 _REVISION_PREFIX = "okf-revision-v1-sha256:"
