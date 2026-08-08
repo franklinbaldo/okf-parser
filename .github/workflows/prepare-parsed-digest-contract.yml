@@ -31,20 +31,18 @@ jobs:
 
           core = Path('typescript/src/core.ts')
           text = core.read_text(encoding='utf-8')
-          old = '''  const properties = Object.keys(value).sort();
-          return `{${properties
-            .map((property) => `${jcsString(property)}:${canonicalJson(value[property] ?? null)}`)
-            .join(",")}}`;
-          '''
-          new = '''  const record = value as FrontmatterObject;
-          const properties = Object.keys(record).sort();
-          return `{${properties
-            .map((property) => `${jcsString(property)}:${canonicalJson(record[property] ?? null)}`)
-            .join(",")}}`;
-          '''
-          if old not in text:
-              raise SystemExit('canonicalJson narrowing block not found')
-          core.write_text(text.replace(old, new, 1), encoding='utf-8')
+          if 'Object.keys(value).sort()' not in text or 'value[property] ?? null' not in text:
+              raise SystemExit('canonicalJson narrowing markers not found')
+          text = text.replace(
+              'Object.keys(value).sort()',
+              'Object.keys(value as FrontmatterObject).sort()',
+              1,
+          ).replace(
+              'value[property] ?? null',
+              '(value as FrontmatterObject)[property] ?? null',
+              1,
+          )
+          core.write_text(text, encoding='utf-8')
 
           mcp = Path('typescript/src/mcp.ts')
           text = mcp.read_text(encoding='utf-8')
