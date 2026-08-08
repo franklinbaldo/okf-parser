@@ -1,0 +1,210 @@
+name: Prepare 0.22.0
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    if: github.event.pull_request.head.ref == 'feat/explain-bundle-classification-0.22.0'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+
+      - name: Wire classification through services, CLI, MCP, and TypeScript
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"expected block not found in {path}")
+              p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          def sub(path: str, pattern: str, replacement: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              updated, count = re.subn(pattern, lambda _match: replacement, text, count=1, flags=re.S)
+              if count != 1:
+                  raise SystemExit(f"expected one regex match in {path}, got {count}")
+              p.write_text(updated, encoding="utf-8")
+
+          # Python service: ordinary check is unchanged unless classification is requested.
+          replace(
+              "src/okf_parser/service.py",
+              "from okf_parser.bundle import load_bundle, validate_path\n",
+              "from okf_parser.bundle import load_bundle, validate_path\nfrom okf_parser.classification import classify_path\n",
+          )
+          replace(
+              "src/okf_parser/service.py",
+              "    *,\n    normative_spec: bool = False,\n) -> dict[str, object]:\n",
+              "    *,\n    normative_spec: bool = False,\n    classify: bool = False,\n) -> dict[str, object]:\n",
+          )
+          old = '''    return {\n        "root": str(report.root),\n        "conformant": report.is_conformant,\n        "markdown_count": report.markdown_count,\n        "concept_count": report.concept_count,\n        "reserved_count": report.reserved_count,\n        "diagnostics": [item.model_dump(mode="json") for item in report.violations],\n    }\n'''
+          new = '''    payload: dict[str, object] = {\n        "root": str(report.root),\n        "conformant": report.is_conformant,\n        "markdown_count": report.markdown_count,\n        "concept_count": report.concept_count,\n        "reserved_count": report.reserved_count,\n        "diagnostics": [item.model_dump(mode="json") for item in report.violations],\n    }\n    if classify:\n        payload["classification"] = classify_path(Path(path), exclude)\n    return payload\n'''
+          replace("src/okf_parser/service.py", old, new)
+
+          # Python CLI + FastMCP use the same service flag; no new tool.
+          old = '''def check(\n    path: str,\n    *,\n    exclude: RepeatableStrings = None,\n    require_spec: str | None = None,\n    normative_spec: bool = False,\n) -> CliResult[JsonPayload]:\n    """Validate every Markdown file recursively as OKF v0.2."""\n    payload = check_bundle(path, exclude or (), require_spec, normative_spec=normative_spec)\n'''
+          new = '''def check(\n    path: str,\n    *,\n    exclude: RepeatableStrings = None,\n    require_spec: str | None = None,\n    normative_spec: bool = False,\n    classify: bool = False,\n) -> CliResult[JsonPayload]:\n    """Validate every Markdown file recursively as OKF v0.2."""\n    payload = check_bundle(\n        path,\n        exclude or (),\n        require_spec,\n        normative_spec=normative_spec,\n        classify=classify,\n    )\n'''
+          replace("src/okf_parser/cli.py", old, new)
+          old = '''def mcp_check(\n    path: str,\n    exclude: RepeatableStrings = None,\n    require_spec: str | None = None,\n    *,\n    normative_spec: bool = False,\n) -> dict[str, object]:\n    """Validate every Markdown file recursively as OKF v0.2."""\n    return check_bundle(path, exclude or (), require_spec, normative_spec=normative_spec)\n'''
+          new = '''def mcp_check(\n    path: str,\n    exclude: RepeatableStrings = None,\n    require_spec: str | None = None,\n    *,\n    normative_spec: bool = False,\n    classify: bool = False,\n) -> dict[str, object]:\n    """Validate every Markdown file recursively as OKF v0.2."""\n    return check_bundle(\n        path,\n        exclude or (),\n        require_spec,\n        normative_spec=normative_spec,\n        classify=classify,\n    )\n'''
+          replace("src/okf_parser/cli.py", old, new)
+
+          # Python surface regressions.
+          replace("tests/test_cli.py", "from __future__ import annotations\n\n", "from __future__ import annotations\n\nimport json\n")
+          cli_marker = '''def test_format_write_exits_nonzero_when_a_file_was_skipped(tmp_path: Path) -> None:\n'''
+          cli_test = '''def test_check_cli_can_explain_bundle_classification(\n    tmp_path: Path, capsys: pytest.CaptureFixture[str]\n) -> None:\n    (tmp_path / "concept.md").write_text("---\\ntype: Note\\n---\\n", encoding="utf-8")\n\n    app(["check", str(tmp_path), "--classify"])\n\n    payload = json.loads(capsys.readouterr().out)\n    assert payload["classification"] == {\n        "concepts": ["concept.md"],\n        "reserved": [],\n        "ignored": [],\n        "invalid_or_untyped": [],\n    }\n\n\n'''
+          replace("tests/test_cli.py", cli_marker, cli_test + cli_marker)
+          mcp_marker = '''    schema_format = tools["schema"].inputSchema["properties"]["format"]\n'''
+          replace(
+              "tests/test_mcp.py",
+              mcp_marker,
+              '''    assert "classify" in tools["check"].inputSchema["properties"]\n\n''' + mcp_marker,
+          )
+
+          # TypeScript report shape and opt-in classification.
+          replace(
+              "typescript/src/core.ts",
+              '''export interface CheckOptions extends LoadOptions {\n  readonly requireSpec?: string;\n  readonly normativeSpec?: boolean;\n}\n\nexport interface CheckReport {\n''',
+              '''export interface CheckOptions extends LoadOptions {\n  readonly requireSpec?: string;\n  readonly normativeSpec?: boolean;\n  readonly classify?: boolean;\n}\n\nexport interface BundleClassification {\n  readonly concepts: readonly string[];\n  readonly reserved: readonly string[];\n  readonly ignored: readonly string[];\n  readonly invalid_or_untyped: readonly string[];\n}\n\nexport interface CheckReport {\n''',
+          )
+          replace(
+              "typescript/src/core.ts",
+              '''  readonly diagnostics: readonly Diagnostic[];\n}\n\nexport interface InventoryReport {\n''',
+              '''  readonly diagnostics: readonly Diagnostic[];\n  readonly classification?: BundleClassification;\n}\n\nexport interface InventoryReport {\n''',
+          )
+
+          sub(
+              "typescript/src/core.ts",
+              r"export async function discoverMarkdown\(.*?\n}\n\nfunction diagnostic\(",
+              '''async function discoverMarkdownWithRules(\n  root: string,\n  rules: ExclusionRules,\n  signal?: AbortSignal,\n): Promise<readonly string[]> {\n  const prunes = !rules.hasNegation;\n  const output: string[] = [];\n\n  async function walk(directory: string): Promise<void> {\n    signal?.throwIfAborted();\n    const entries = await readdir(directory, { withFileTypes: true });\n    entries.sort((left, right) => left.name.localeCompare(right.name, "en"));\n    for (const entry of entries) {\n      signal?.throwIfAborted();\n      const candidate = path.join(directory, entry.name);\n      const relative = toPosix(path.relative(root, candidate));\n      if (entry.isSymbolicLink()) continue;\n      if (entry.isDirectory()) {\n        if (prunes && rules.excludes(relative, { isDir: true })) continue;\n        if (!IGNORED_DIRECTORIES.has(entry.name)) await walk(candidate);\n      } else if (entry.isFile() && isMarkdownFilename(entry.name)) {\n        if (rules.excludes(relative)) continue;\n        output.push(candidate);\n      }\n    }\n  }\n\n  const stat = await lstat(root);\n  if (!stat.isDirectory()) {\n    throw new OkfParserError("OKF_NOT_DIRECTORY", `bundle root is not a directory: ${root}`);\n  }\n  await walk(root);\n  return Object.freeze(output.sort((left, right) => left.localeCompare(right, "en")));\n}\n\nexport async function discoverMarkdown(\n  rootInput: string | URL,\n  options: LoadOptions = {},\n): Promise<readonly string[]> {\n  const root = path.resolve(rootInput instanceof URL ? fileURLToPath(rootInput) : rootInput);\n  const rules = await ExclusionRules.read(root, options.exclude ?? []);\n  return discoverMarkdownWithRules(root, rules, options.signal);\n}\n\nfunction diagnostic(''',
+          )
+
+          check_marker = '''export async function checkBundle(\n  root: string | URL,\n  options: CheckOptions = {},\n): Promise<CheckReport> {\n'''
+          classification_helper = '''async function classifyLoadedBundle(\n  bundle: Bundle,\n  options: CheckOptions,\n): Promise<BundleClassification> {\n  const candidates = await discoverMarkdownWithRules(\n    bundle.root,\n    new ExclusionRules(),\n    options.signal,\n  );\n  const allConcepts = new Set(bundle.concepts.map((concept) => concept.path));\n  const concepts = new Set(\n    bundle.concepts\n      .filter((concept) => concept.conceptType !== "")\n      .map((concept) => concept.path),\n  );\n  const recordedReserved = new Set(bundle.reserved.map((item) => item.path));\n  const diagnosticPaths = new Set(bundle.diagnostics.map((item) => item.path));\n  const active = new Set([...allConcepts, ...recordedReserved, ...diagnosticPaths]);\n  const reserved = new Set(\n    [...active].filter((relative) => isReservedDocument(path.join(bundle.root, relative))),\n  );\n  const candidatePaths = new Set(\n    candidates.map((candidate) => toPosix(path.relative(bundle.root, candidate))),\n  );\n  const sorted = (values: Iterable<string>): readonly string[] =>\n    Object.freeze([...values].sort((left, right) => left.localeCompare(right, "en")));\n\n  return Object.freeze({\n    concepts: sorted(concepts),\n    reserved: sorted(reserved),\n    ignored: sorted([...candidatePaths].filter((relative) => !active.has(relative))),\n    invalid_or_untyped: sorted(\n      [...active].filter((relative) => !concepts.has(relative) && !reserved.has(relative)),\n    ),\n  });\n}\n\n'''
+          replace("typescript/src/core.ts", check_marker, classification_helper + check_marker)
+          old = '''  return Object.freeze({\n    root: bundle.root,\n    conformant: !diagnostics.some((item) => item.severity === "error"),\n    markdown_count: bundle.markdownCount,\n    concept_count: bundle.concepts.length,\n    reserved_count: bundle.reserved.length,\n    diagnostics: Object.freeze(diagnostics),\n  });\n}\n'''
+          new = '''  const classification =\n    options.classify === true ? await classifyLoadedBundle(bundle, options) : undefined;\n  return Object.freeze({\n    root: bundle.root,\n    conformant: !diagnostics.some((item) => item.severity === "error"),\n    markdown_count: bundle.markdownCount,\n    concept_count: bundle.concepts.length,\n    reserved_count: bundle.reserved.length,\n    diagnostics: Object.freeze(diagnostics),\n    ...(classification === undefined ? {} : { classification }),\n  });\n}\n'''
+          replace("typescript/src/core.ts", old, new)
+
+          # TypeScript CLI flag.
+          replace(
+              "typescript/src/cli.ts",
+              "okf-parser-ts check PATH [--exclude PATTERN ...] [--require-spec TEMPLATE] [--normative-spec]",
+              "okf-parser-ts check PATH [--exclude PATTERN ...] [--require-spec TEMPLATE] [--normative-spec] [--classify]",
+          )
+          replace(
+              "typescript/src/cli.ts",
+              "  --normative-spec    Report a missing specification document as an error\n",
+              "  --normative-spec    Report a missing specification document as an error\n  --classify          Explain concept/reserved/ignored/invalid bundle membership\n",
+          )
+          replace(
+              "typescript/src/cli.ts",
+              '''      "normative-spec": { type: "boolean", default: false },\n''',
+              '''      "normative-spec": { type: "boolean", default: false },\n      classify: { type: "boolean", default: false },\n''',
+          )
+          replace(
+              "typescript/src/cli.ts",
+              '''      normativeSpec: parsed.values["normative-spec"],\n''',
+              '''      normativeSpec: parsed.values["normative-spec"],\n      classify: parsed.values.classify,\n''',
+          )
+
+          # TypeScript MCP: same check tool, one optional serializable argument.
+          replace(
+              "typescript/src/mcp.ts",
+              '''const normativeSpecSchema = z\n  .boolean()\n  .optional()\n  .describe("Report a missing specification document as an error instead of a warning");\n''',
+              '''const normativeSpecSchema = z\n  .boolean()\n  .optional()\n  .describe("Report a missing specification document as an error instead of a warning");\nconst classifySchema = z\n  .boolean()\n  .optional()\n  .describe("Explain concept, reserved, ignored, and invalid bundle membership");\n''',
+          )
+          replace(
+              "typescript/src/mcp.ts",
+              '''        normative_spec: normativeSpecSchema,\n''',
+              '''        normative_spec: normativeSpecSchema,\n        classify: classifySchema,\n''',
+          )
+          replace(
+              "typescript/src/mcp.ts",
+              '''    ({ path, exclude, require_spec, normative_spec }) =>\n''',
+              '''    ({ path, exclude, require_spec, normative_spec, classify }) =>\n''',
+          )
+          replace(
+              "typescript/src/mcp.ts",
+              '''          normativeSpec: normative_spec ?? false,\n''',
+              '''          normativeSpec: normative_spec ?? false,\n          classify: classify ?? false,\n''',
+          )
+          replace(
+              "typescript/test/mcp.test.ts",
+              '''  const check = await client.callTool({ name: "check", arguments: { path: root } });\n  expect(check.isError).not.toBe(true);\n  expect(check.structuredContent).toMatchObject({ conformant: true, concept_count: 1 });\n''',
+              '''  const check = await client.callTool({\n    name: "check",\n    arguments: { path: root, classify: true },\n  });\n  expect(check.isError).not.toBe(true);\n  expect(check.structuredContent).toMatchObject({\n    conformant: true,\n    concept_count: 1,\n    classification: {\n      concepts: ["sample.md"],\n      reserved: [],\n      ignored: [],\n      invalid_or_untyped: [],\n    },\n  });\n''',
+          )
+
+          # Docs: classification explains the existing strict behavior; it does not enable it.
+          replace(
+              "docs/cli.md",
+              "uv run okf-parser check path/to/bundle [--exclude PATTERN]... [--require-spec TEMPLATE] [--normative-spec]",
+              "uv run okf-parser check path/to/bundle [--exclude PATTERN]... [--require-spec TEMPLATE] [--normative-spec] [--classify]",
+          )
+          replace(
+              "docs/cli.md",
+              '''- `--normative-spec` — promote missing or mismatched required specifications\n  from advisory diagnostics to normative errors.\n\nMCP tool: `check`.\n''',
+              '''- `--normative-spec` — promote missing or mismatched required specifications\n  from advisory diagnostics to normative errors.\n- `--classify` — add a deterministic `classification` object with `concepts`,\n  `reserved`, `ignored`, and `invalid_or_untyped` paths. This explains the\n  existing strict check; it does not enable a second strictness mode. Ignored\n  paths are those removed by valid `.okfignore` or `--exclude` rules.\n\nMCP tool: `check` with the same optional `classify` argument.\n''',
+          )
+
+          # Release metadata.
+          replace("README.md", "franklinbaldo/okf-parser@v0.21.0", "franklinbaldo/okf-parser@v0.22.0")
+          replace("pyproject.toml", 'version = "0.21.0"', 'version = "0.22.0"')
+          replace("typescript/package.json", '"version": "0.21.0"', '"version": "0.22.0"')
+          replace("typescript-duckdb/package.json", '"version": "0.21.0"', '"version": "0.22.0"')
+          replace("typescript-duckdb/package.json", '"okf-parser": "^0.21.0"', '"okf-parser": "^0.22.0"')
+          replace("typescript/src/version.ts", 'export const PROTOCOL_VERSION = "0.21.0";', 'export const PROTOCOL_VERSION = "0.22.0";')
+          Path("changelog/0.22.0.md").write_text('''---\ntype: Release\ntitle: okf-parser 0.22.0\ndescription: make strict bundle membership explainable without adding another validation mode\n---\n\n# okf-parser 0.22.0\n\n- `check --classify` adds deterministic `concepts`, `reserved`, `ignored`, and `invalid_or_untyped` path sets while leaving ordinary conformance behavior unchanged (#46).\n- The normal `check` path pays no extra traversal cost; unfiltered candidate discovery happens only when classification is explicitly requested.\n- Python CLI/service/FastMCP and the TypeScript core/CLI/MCP expose the same opt-in classification semantics.\n- Hidden `.claude`/`.agents` paths preserve their literal leading dots under canonical `.okfignore` matching; root-anchored patterns use Git's `/path/` spelling rather than inventing support for the non-matching `./path/` spelling.\n- This release does not add a redundant `--strict-coverage` mode: current `check` already rejects in-scope non-reserved Markdown that lacks valid OKF frontmatter/type.\n''', encoding="utf-8")
+          PY
+
+      - name: Refresh locks, format, and run the full stack gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv lock
+          npm install --package-lock-only --ignore-scripts --prefix typescript
+          npm install --package-lock-only --ignore-scripts --prefix typescript-duckdb
+          uv sync --frozen --all-groups
+          npm ci --prefix typescript
+          npm ci --prefix typescript-duckdb
+          uv run ruff format .
+          uv run ruff check .
+          uv run ty check src tests
+          uv run pytest
+          uv run python scripts/release_contract.py verify-source --root .
+          npm run check --prefix typescript
+          npm test --prefix typescript
+          npm run check --prefix typescript-duckdb
+          npm test --prefix typescript-duckdb
+
+      - name: Commit final patch and remove helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/prepare-0-22-0.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat: explain strict bundle classification"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
