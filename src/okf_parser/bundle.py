@@ -22,10 +22,10 @@ from okf_parser.models import (
 )
 from okf_parser.parser import (
     DocumentParseError,
+    MarkdownFacts,
     concept_id,
     has_markdown_suffix,
     is_reserved_document,
-    MarkdownFacts,
     markdown_facts,
     parse_document,
     resolve_local_target,
