@@ -1,3 +1,8 @@
+---
+type: Architecture
+title: Strict OKF core and source-adapter boundary
+---
+
 # Architecture boundary
 
 `okf-parser` keeps one strict core and puts source adaptation outside that core.
