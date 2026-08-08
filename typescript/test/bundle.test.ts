@@ -4,7 +4,14 @@ import path from "node:path";
 
 import { expect, test } from "vitest";
 
-import { checkBundle, discoverMarkdown, graphBundle, inventoryBundle } from "../src/index.js";
+import { readUtf8Ordered, type ReadUtf8Result } from "../src/core.js";
+import {
+  checkBundle,
+  discoverMarkdown,
+  graphBundle,
+  inventoryBundle,
+  loadBundle,
+} from "../src/index.js";
 
 async function bundle(): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "okf-parser-ts-"));
@@ -44,4 +51,69 @@ test("validates, inventories, and projects the graph", async () => {
     strongly_connected_components: 2,
     directed_acyclic: true,
   });
+});
+
+test("bounded read-ahead preserves path order and isolates decode failures", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "okf-parser-ts-read-ahead-"));
+  const names = Array.from({ length: 70 }, (_, index) => `concept-${String(index).padStart(3, "0")}.md`);
+  await Promise.all(
+    names.map((name) => writeFile(path.join(root, name), "---\ntype: Benchmark\n---\n# Concept\n")),
+  );
+  await writeFile(path.join(root, "invalid.md"), Buffer.from([0xff]));
+
+  const sequential = await loadBundle(root, { readConcurrency: 1 });
+  const loaded = await loadBundle(root, { readConcurrency: 32 });
+
+  expect(loaded.concepts.map((concept) => concept.path)).toEqual(names);
+  expect(loaded.diagnostics).toMatchObject([
+    { code: "OKF001", path: "invalid.md", severity: "error" },
+  ]);
+  expect(loaded).toEqual(sequential);
+  await expect(loadBundle(root, { readConcurrency: 0 })).rejects.toMatchObject({
+    code: "OKF_READ_CONCURRENCY",
+  });
+});
+
+test("bounded read-ahead admits no work after cancellation", async () => {
+  const controller = new AbortController();
+  const admitted: string[] = [];
+  let releaseFirst: (() => void) | undefined;
+  const firstBlocked = new Promise<void>((resolve) => {
+    releaseFirst = resolve;
+  });
+  const read = async (filePath: string): Promise<ReadUtf8Result> => {
+    admitted.push(filePath);
+    if (filePath === "a.md") await firstBlocked;
+    return { filePath, text: "" };
+  };
+  const iterator = readUtf8Ordered(
+    ["a.md", "b.md", "c.md"],
+    1,
+    controller.signal,
+    read,
+  );
+  const pending = iterator.next();
+  await Promise.resolve();
+  expect(admitted).toEqual(["a.md"]);
+
+  controller.abort();
+  releaseFirst?.();
+
+  await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  expect(admitted).toEqual(["a.md"]);
+
+  const alreadyAborted = new AbortController();
+  alreadyAborted.abort();
+  const neverAdmitted: string[] = [];
+  const abortedIterator = readUtf8Ordered(
+    ["d.md"],
+    1,
+    alreadyAborted.signal,
+    async (filePath) => {
+      neverAdmitted.push(filePath);
+      return { filePath, text: "" };
+    },
+  );
+  await expect(abortedIterator.next()).rejects.toMatchObject({ name: "AbortError" });
+  expect(neverAdmitted).toEqual([]);
 });
