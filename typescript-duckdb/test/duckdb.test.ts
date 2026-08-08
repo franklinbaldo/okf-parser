@@ -5,7 +5,14 @@ import path from "node:path";
 import { DuckDBConnection, DuckDBInstance } from "@duckdb/node-api";
 import { afterEach, expect, test } from "vitest";
 
-import { BundleExportError, attachOkf, exportDuckDb } from "../src/index.js";
+import {
+  BundleExportError,
+  DeclaredSchemaError,
+  attachOkf,
+  compileDeclaredTypeContracts,
+  exportDeclaredJsonSchema,
+  exportDuckDb,
+} from "../src/index.js";
 
 const connections: DuckDBConnection[] = [];
 
@@ -91,4 +98,45 @@ test("exports a persistent database file", async () => {
   const connection = await instance.connect();
   connections.push(connection);
   await expect(count(connection, "okf.concepts")).resolves.toBe(2);
+});
+
+
+test("executes trusted RFC 0006 SQL and projects DuckDB catalog types", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "okf-parser-declared-ts-"));
+  await writeFile(path.join(root, "one.md"), "---\ntype: Registro\nvalor: '12.34'\nid_externo: 550e8400-e29b-41d4-a716-446655440000\n---\n");
+  const types = path.join(root, "docs", "types");
+  await import("node:fs/promises").then(({ mkdir }) => mkdir(types, { recursive: true }));
+  await writeFile(path.join(types, "registro.schema.sql"), `CREATE TABLE "Registro" (
+    valor DECIMAL(18, 4),
+    id_externo UUID,
+    sequencia BIGINT,
+    registrado_em TIMESTAMPTZ,
+    dias INTEGER[]
+  );`);
+
+  const contracts = await compileDeclaredTypeContracts(root, { specTemplate: "docs/types/{slug}.md" });
+  const fields = contracts[0]?.root.fields ?? [];
+  expect(fields.find((field) => field.name === "valor")?.value).toMatchObject({
+    declaredType: { sql: "DECIMAL(18,4)", family: "decimal", precision: 18, scale: 4 },
+  });
+  expect(fields.find((field) => field.name === "dias")?.value).toMatchObject({
+    kind: "list", declaredType: { sql: "INTEGER[]", family: "list" },
+  });
+
+  const report = await exportDeclaredJsonSchema(root, { specTemplate: "docs/types/{slug}.md" });
+  const properties = (report.schemas.Registro as { properties: Record<string, Record<string, unknown>> }).properties;
+  expect(properties.id_externo).toMatchObject({ type: "string", format: "uuid", "x-okf-duckdb-type": "UUID" });
+  expect(properties.registrado_em).toMatchObject({ type: "string", format: "date-time", "x-okf-duckdb-type": "TIMESTAMP WITH TIME ZONE" });
+});
+
+test("requires the RFC 0006 catalog post-condition", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "okf-parser-declared-failure-ts-"));
+  await writeFile(path.join(root, "one.md"), "---\ntype: Registro\n---\n");
+  const types = path.join(root, "docs", "types");
+  await import("node:fs/promises").then(({ mkdir }) => mkdir(types, { recursive: true }));
+  await writeFile(path.join(types, "registro.schema.sql"), "CREATE TABLE Wrong (id UUID);");
+
+  await expect(
+    compileDeclaredTypeContracts(root, { specTemplate: "docs/types/{slug}.md" }),
+  ).rejects.toBeInstanceOf(DeclaredSchemaError);
 });
