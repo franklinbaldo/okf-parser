@@ -164,7 +164,6 @@ export class ExclusionFileError extends OkfParserError {
   }
 }
 
-const FRONTMATTER_RE = /^(?:\uFEFF)?---[ \t]*\r?\n([\s\S]*?)(?:\r?\n)?---[ \t]*(?:\r?\n([\s\S]*))?$/;
 const RESERVED_FILENAMES = new Set(["index.md", "log.md"]);
 const IGNORED_DIRECTORIES = new Set([
   ".git",
@@ -184,6 +183,35 @@ const nullTag = {
   resolve: (): null => null,
   stringify: (): string => "null",
 };
+
+function isFrontmatterDelimiter(line: string): boolean {
+  const content = line.endsWith("\n") ? line.slice(0, -1) : line;
+  const normalized = content.endsWith("\r") ? content.slice(0, -1) : content;
+  return normalized.startsWith("---") && normalized.slice(3).trim().length === 0;
+}
+
+function splitFrontmatterSource(content: string): readonly [string, string] | null {
+  const normalized = content.startsWith("\uFEFF") ? content.slice(1) : content;
+  const openingEnd = normalized.indexOf("\n");
+  if (openingEnd < 0 || !isFrontmatterDelimiter(normalized.slice(0, openingEnd + 1))) return null;
+
+  let cursor = openingEnd + 1;
+  while (cursor <= normalized.length) {
+    const newline = normalized.indexOf("\n", cursor);
+    const lineEnd = newline < 0 ? normalized.length : newline + 1;
+    if (isFrontmatterDelimiter(normalized.slice(cursor, lineEnd))) {
+      let blockEnd = cursor;
+      if (blockEnd > openingEnd + 1 && normalized[blockEnd - 1] === "\n") {
+        blockEnd -= 1;
+        if (blockEnd > openingEnd + 1 && normalized[blockEnd - 1] === "\r") blockEnd -= 1;
+      }
+      return [normalized.slice(openingEnd + 1, blockEnd), normalized.slice(lineEnd)];
+    }
+    if (newline < 0) break;
+    cursor = lineEnd;
+  }
+  return null;
+}
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -274,15 +302,16 @@ function optionalText(frontmatter: Readonly<Record<string, FrontmatterValue>>, k
 }
 
 export function parseDocumentContent(content: string, documentPath = "<memory>"): ParsedDocument {
-  const match = FRONTMATTER_RE.exec(content);
-  if (match === null) {
+  const split = splitFrontmatterSource(content);
+  if (split === null) {
     throw new DocumentParseError("concept must start with YAML frontmatter delimited by ---", {
       path: documentPath,
     });
   }
+  const [frontmatterBlock, body] = split;
   let frontmatter: Readonly<Record<string, FrontmatterValue>>;
   try {
-    frontmatter = parseFrontmatterBlock(match[1] ?? "");
+    frontmatter = parseFrontmatterBlock(frontmatterBlock);
   } catch (error) {
     if (error instanceof DocumentParseError) {
       throw new DocumentParseError(error.message, { path: documentPath, cause: error });
@@ -295,7 +324,7 @@ export function parseDocumentContent(content: string, documentPath = "<memory>")
     path: documentPath,
     frontmatter,
     frontmatterJson: JSON.stringify(stableFrontmatter(frontmatter)),
-    body: match[2] ?? "",
+    body,
     conceptType,
     title: optionalText(frontmatter, "title"),
     description: optionalText(frontmatter, "description"),
@@ -318,9 +347,9 @@ export function splitOptionalFrontmatter(
 ): readonly [Readonly<Record<string, FrontmatterValue>> | null, string] {
   const normalized = content.startsWith("\uFEFF") ? content.slice(1) : content;
   if (!normalized.startsWith("---")) return [null, normalized];
-  const match = FRONTMATTER_RE.exec(normalized);
-  if (match === null) throw new DocumentParseError("invalid YAML frontmatter delimiters");
-  return [parseFrontmatterBlock(match[1] ?? ""), match[2] ?? ""];
+  const split = splitFrontmatterSource(normalized);
+  if (split === null) throw new DocumentParseError("invalid YAML frontmatter delimiters");
+  return [parseFrontmatterBlock(split[0]), split[1]];
 }
 
 export function isReservedDocument(filePath: string): boolean {
