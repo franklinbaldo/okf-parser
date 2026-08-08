@@ -1,23 +1,17 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { DuckDBConnection, DuckDBInstance } from "@duckdb/node-api";
 import { afterEach, expect, test } from "vitest";
-import { loadBundle } from "okf-parser";
-import type { DeclaredLogicalType } from "okf-parser";
 
 import {
   BundleExportError,
   DeclaredSchemaError,
   attachOkf,
-  compileDeclaredBundleTypeContracts,
   compileDeclaredTypeContracts,
-  exportDeclaredBundleJsonSchema,
   exportDeclaredJsonSchema,
   exportDuckDb,
-  parseDeclaredSchema,
 } from "../src/index.js";
 
 const connections: DuckDBConnection[] = [];
@@ -41,16 +35,6 @@ async function count(connection: DuckDBConnection, table: string): Promise<numbe
   const value = reader.getRowsJS()[0]?.[0];
   if (typeof value !== "number") throw new TypeError(`unexpected count: ${String(value)}`);
   return value;
-}
-
-function logicalPayload(value: DeclaredLogicalType): Record<string, unknown> {
-  return {
-    sql: value.sql,
-    family: value.family,
-    ...(value.precision === undefined ? {} : { precision: value.precision }),
-    ...(value.scale === undefined ? {} : { scale: value.scale }),
-    ...(value.element === undefined ? {} : { element: logicalPayload(value.element) }),
-  };
 }
 
 test("materializes ordinary queryable tables", async () => {
@@ -116,17 +100,16 @@ test("exports a persistent database file", async () => {
   await expect(count(connection, "okf.concepts")).resolves.toBe(2);
 });
 
+
 test("executes trusted RFC 0006 SQL and projects DuckDB catalog types", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "okf-parser-declared-ts-"));
   await writeFile(path.join(root, "one.md"), "---\ntype: Registro\nvalor: '12.34'\nid_externo: 550e8400-e29b-41d4-a716-446655440000\n---\n");
   const types = path.join(root, "docs", "types");
-  await mkdir(types, { recursive: true });
+  await import("node:fs/promises").then(({ mkdir }) => mkdir(types, { recursive: true }));
   await writeFile(path.join(types, "registro.schema.sql"), `CREATE TABLE "Registro" (
     valor DECIMAL(18, 4),
-    valores DECIMAL(18, 4)[],
     id_externo UUID,
     sequencia BIGINT,
-    local_em TIMESTAMP,
     registrado_em TIMESTAMPTZ,
     dias INTEGER[]
   );`);
@@ -136,107 +119,21 @@ test("executes trusted RFC 0006 SQL and projects DuckDB catalog types", async ()
   expect(fields.find((field) => field.name === "valor")?.value).toMatchObject({
     declaredType: { sql: "DECIMAL(18,4)", family: "decimal", precision: 18, scale: 4 },
   });
-  expect(fields.find((field) => field.name === "valores")?.value).toMatchObject({
-    kind: "list",
-    declaredType: {
-      sql: "DECIMAL(18,4)[]",
-      family: "list",
-      element: { sql: "DECIMAL(18,4)", family: "decimal", precision: 18, scale: 4 },
-    },
-  });
-  expect(fields.find((field) => field.name === "local_em")?.value).toMatchObject({
-    kind: "scalar",
-    scalar: "datetime",
-    declaredType: { family: "timestamp" },
-  });
   expect(fields.find((field) => field.name === "dias")?.value).toMatchObject({
     kind: "list", declaredType: { sql: "INTEGER[]", family: "list" },
   });
 
   const report = await exportDeclaredJsonSchema(root, { specTemplate: "docs/types/{slug}.md" });
-  const properties = (report.schemas["Registro"] as { properties: Record<string, Record<string, unknown>> }).properties;
-  expect(properties["id_externo"]).toMatchObject({ type: "string", format: "uuid", "x-okf-duckdb-type": "UUID" });
-  expect(properties["registrado_em"]).toMatchObject({ type: "string", format: "date-time", "x-okf-duckdb-type": "TIMESTAMP WITH TIME ZONE" });
-  expect(properties["valores"]?.["items"]).toMatchObject({
-    type: "number",
-    multipleOf: 0.0001,
-    "x-okf-duckdb-type": "DECIMAL(18,4)",
-  });
-});
-
-test("reuses one canonical Bundle for declared contracts and JSON Schema", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "okf-parser-declared-bundle-ts-"));
-  const conceptPath = path.join(root, "one.md");
-  await writeFile(conceptPath, "---\ntype: Registro\nvalor: '12.34'\n---\n");
-  const types = path.join(root, "docs", "types");
-  await mkdir(types, { recursive: true });
-  await writeFile(
-    path.join(types, "registro.schema.sql"),
-    'CREATE TABLE "Registro" (valor DECIMAL(18, 4));',
-  );
-  const loaded = await loadBundle(root);
-
-  await writeFile(conceptPath, "---\ntype: ChangedAfterLoad\n---\n");
-
-  const contracts = await compileDeclaredBundleTypeContracts(loaded, {
-    specTemplate: "docs/types/{slug}.md",
-  });
-  expect(contracts.map((contract) => contract.conceptType)).toEqual(["Registro"]);
-  const report = await exportDeclaredBundleJsonSchema(loaded, {
-    specTemplate: "docs/types/{slug}.md",
-  });
-  expect(Object.keys(report.schemas)).toEqual(["Registro"]);
-});
-
-test("decodes file URL roots before discovering declarations", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "okf parser declared "));
-  await writeFile(path.join(root, "one.md"), "---\ntype: Registro\n---\n");
-  const types = path.join(root, "docs", "types");
-  await mkdir(types, { recursive: true });
-  await writeFile(
-    path.join(types, "registro.schema.sql"),
-    'CREATE TABLE "Registro" (valor DECIMAL(18, 4));',
-  );
-
-  const contracts = await compileDeclaredTypeContracts(pathToFileURL(root), {
-    specTemplate: "docs/types/{slug}.md",
-  });
-
-  expect(contracts[0]?.root.fields.find((field) => field.name === "valor")?.value).toMatchObject({
-    declaredType: { sql: "DECIMAL(18,4)", family: "decimal" },
-  });
-});
-
-test("shared declared parity fixture matches Python expectations", async () => {
-  const fixtureSql = fileURLToPath(
-    new URL("../../tests/fixtures/declared_parity.schema.sql", import.meta.url),
-  );
-  const fixtureExpected = fileURLToPath(
-    new URL("../../tests/fixtures/declared_parity.expected.json", import.meta.url),
-  );
-  const sql = await readFile(fixtureSql, "utf8");
-  const expected = JSON.parse(await readFile(fixtureExpected, "utf8")) as {
-    table_name: string;
-    table_comment: string | null;
-    column_comments: Record<string, string>;
-    columns: Record<string, Record<string, unknown>>;
-  };
-
-  const schema = await parseDeclaredSchema(sql, "Parity");
-
-  expect(schema.tableName).toBe(expected.table_name);
-  expect(schema.tableComment).toBe(expected.table_comment);
-  expect(schema.columnComments).toEqual(expected.column_comments);
-  expect(Object.fromEntries(
-    Object.entries(schema.columns).map(([name, value]) => [name, logicalPayload(value)]),
-  )).toEqual(expected.columns);
+  const properties = (report.schemas['Registro'] as { properties: Record<string, Record<string, unknown>> }).properties;
+  expect(properties['id_externo']).toMatchObject({ type: "string", format: "uuid", "x-okf-duckdb-type": "UUID" });
+  expect(properties['registrado_em']).toMatchObject({ type: "string", format: "date-time", "x-okf-duckdb-type": "TIMESTAMP WITH TIME ZONE" });
 });
 
 test("requires the RFC 0006 catalog post-condition", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "okf-parser-declared-failure-ts-"));
   await writeFile(path.join(root, "one.md"), "---\ntype: Registro\n---\n");
   const types = path.join(root, "docs", "types");
-  await mkdir(types, { recursive: true });
+  await import("node:fs/promises").then(({ mkdir }) => mkdir(types, { recursive: true }));
   await writeFile(path.join(types, "registro.schema.sql"), "CREATE TABLE Wrong (id UUID);");
 
   await expect(

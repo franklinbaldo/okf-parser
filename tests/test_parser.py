@@ -33,6 +33,26 @@ def test_frontmatter_value_may_contain_triple_dash(tmp_path: Path) -> None:
     assert parsed.body == "# Body\n"
 
 
+def test_linear_splitter_preserves_crlf_body_and_delimiter_like_content(tmp_path: Path) -> None:
+    path = tmp_path / "concept.md"
+    path.write_bytes(
+        b"---\r\ntype: Reference\r\nnote: before --- after\r\n---\t \r\n# Body\r\n---\r\n"
+    )
+
+    parsed = parse_document(path)
+
+    assert parsed.frontmatter["note"] == "before --- after"
+    assert parsed.body == "# Body\n---\n"
+
+
+def test_frontmatter_delimiter_must_be_an_isolated_line(tmp_path: Path) -> None:
+    path = tmp_path / "concept.md"
+    path.write_text("---\ntype: Reference\n--- nope\n# Body\n", encoding="utf-8")
+
+    with pytest.raises(DocumentParseError, match="frontmatter delimited"):
+        parse_document(path)
+
+
 def test_frontmatter_must_be_mapping(tmp_path: Path) -> None:
     path = tmp_path / "concept.md"
     path.write_text("---\n- item\n---\n", encoding="utf-8")

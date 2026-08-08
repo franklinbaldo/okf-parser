@@ -1,14 +1,10 @@
 export {
   DeclaredSchemaError,
-  compileDeclaredBundleTypeContracts,
   compileDeclaredTypeContracts,
-  exportDeclaredBundleJsonSchema,
   exportDeclaredJsonSchema,
-  loadDeclaredSchemas,
   loadDeclaredTypes,
-  parseDeclaredSchema,
 } from "./declared.js";
-export type { DeclaredCatalogSchema, DeclaredSchemaOptions } from "./declared.js";
+export type { DeclaredSchemaOptions } from "./declared.js";
 
 import path from "node:path";
 
