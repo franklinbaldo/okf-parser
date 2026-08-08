@@ -120,6 +120,19 @@ function isRecord(value: FrontmatterValue): value is Readonly<Record<string, Fro
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function freezeContractNode<T extends ContractNode>(node: T): T {
+  if (node.kind === "object") {
+    for (const field of node.fields) {
+      freezeContractNode(field.value);
+      Object.freeze(field);
+    }
+    Object.freeze(node.fields);
+  } else if (node.kind === "list") {
+    freezeContractNode(node.item);
+  }
+  return Object.freeze(node);
+}
+
 function scalarContract(values: readonly string[], fieldPath: string, options: CompileOptions): ContractNode {
   const explicit = options.casts.get(fieldPath);
   if (explicit !== undefined) {
@@ -258,7 +271,7 @@ export function compileBundleTypeContracts(bundle: Bundle, schemaOptions: Schema
       Object.freeze({
         conceptType,
         modelName: names.get(conceptType) ?? identifierName(conceptType, "Concept"),
-        root: compileObject(documents, "", options, conceptType),
+        root: freezeContractNode(compileObject(documents, "", options, conceptType)),
       }),
     );
   const unused = [...options.casts.keys()].filter((field) => !options.usedCasts.has(field));
