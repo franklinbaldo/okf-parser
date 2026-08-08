@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING
 from urllib.parse import SplitResult, unquote, urlsplit
 
@@ -16,10 +15,6 @@ from okf_parser.models import FRONTMATTER_ADAPTER, ParsedDocument, YamlValue
 if TYPE_CHECKING:
     from pathlib import Path
 
-_FRONTMATTER_RE = re.compile(
-    r"\A---[ \t]*\r?\n(.*?)(?:\r?\n)?---[ \t]*(?:\r?\n(.*))?\Z",
-    re.DOTALL,
-)
 RESERVED_FILENAMES = frozenset({"index.md", "log.md"})
 _MARKDOWN = MarkdownIt("commonmark")
 _SCALAR_TAGS = (
@@ -55,6 +50,36 @@ def is_reserved_document(path: Path) -> bool:
 
 class DocumentParseError(ValueError):
     """Raised when one concept document cannot be structurally parsed."""
+
+
+def _is_frontmatter_delimiter(line: str) -> bool:
+    """Return whether one complete source line is an OKF `---` delimiter."""
+    content = line.removesuffix("\n").removesuffix("\r")
+    return content.startswith("---") and not content.removeprefix("---").strip(" \t")
+
+
+def _split_frontmatter_source(text: str) -> tuple[str, str] | None:
+    """Split frontmatter and body with one bounded linear scan."""
+    normalized = text.removeprefix("\ufeff")
+    opening_end = normalized.find("\n")
+    if opening_end < 0 or not _is_frontmatter_delimiter(normalized[: opening_end + 1]):
+        return None
+
+    cursor = opening_end + 1
+    while cursor <= len(normalized):
+        newline = normalized.find("\n", cursor)
+        line_end = len(normalized) if newline < 0 else newline + 1
+        if _is_frontmatter_delimiter(normalized[cursor:line_end]):
+            block_end = cursor
+            if block_end > opening_end + 1 and normalized[block_end - 1] == "\n":
+                block_end -= 1
+                if block_end > opening_end + 1 and normalized[block_end - 1] == "\r":
+                    block_end -= 1
+            return normalized[opening_end + 1 : block_end], normalized[line_end:]
+        if newline < 0:
+            break
+        cursor = line_end
+    return None
 
 
 def _describe_frontmatter_error(exc: ValidationError) -> str:
@@ -114,15 +139,16 @@ def parse_document_text(path: Path, text: str) -> ParsedDocument:
     (hashing, a freshness check) should read once and call this directly,
     rather than `parse_document`, which reads the file itself.
     """
-    match = _FRONTMATTER_RE.match(text.removeprefix("\ufeff"))
-    if match is None:
+    split = _split_frontmatter_source(text)
+    if split is None:
         msg = "concept must start with YAML frontmatter delimited by ---"
         raise DocumentParseError(msg)
+    frontmatter, body = split
 
     return ParsedDocument(
         path=path,
-        frontmatter=_load_frontmatter(match.group(1)) or {},
-        body=match.group(2) or "",
+        frontmatter=_load_frontmatter(frontmatter) or {},
+        body=body,
     )
 
 
@@ -131,11 +157,12 @@ def split_optional_frontmatter(text: str) -> tuple[dict[str, YamlValue] | None, 
     normalized = text.removeprefix("\ufeff")
     if not normalized.startswith("---"):
         return None, normalized
-    match = _FRONTMATTER_RE.match(normalized)
-    if match is None:
+    split = _split_frontmatter_source(normalized)
+    if split is None:
         msg = "invalid YAML frontmatter delimiters"
         raise DocumentParseError(msg)
-    return _load_frontmatter(match.group(1)) or {}, match.group(2) or ""
+    frontmatter, body = split
+    return _load_frontmatter(frontmatter) or {}, body
 
 
 def concept_id(bundle_root: Path, path: Path) -> str:

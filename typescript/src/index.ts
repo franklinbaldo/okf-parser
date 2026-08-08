@@ -62,7 +62,6 @@ export {
   SchemaNameCollisionError,
   compileBundleTypeContracts,
   compileTypeContracts,
-  exportBundleJsonSchema,
   exportJsonSchema,
   exportZod,
 } from "./schema.js";
