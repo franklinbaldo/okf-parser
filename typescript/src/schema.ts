@@ -35,23 +35,23 @@ export interface SchemaReport {
 
 export type JsonSchema = Readonly<Record<string, unknown>>;
 
-type ScalarKind = CastKind;
+export type ScalarKind = CastKind;
 
-type ContractNode =
+export type ContractNode =
   | { readonly kind: "scalar"; readonly scalar: ScalarKind }
   | { readonly kind: "literal"; readonly value: string }
   | { readonly kind: "object"; readonly fields: readonly FieldContract[] }
   | { readonly kind: "list"; readonly item: ContractNode; readonly itemNullable: boolean }
   | { readonly kind: "any" };
 
-interface FieldContract {
+export interface FieldContract {
   readonly name: string;
   readonly required: boolean;
   readonly nullable: boolean;
   readonly value: ContractNode;
 }
 
-interface TypeContract {
+export interface TypeContract {
   readonly conceptType: string;
   readonly modelName: string;
   readonly root: Extract<ContractNode, { readonly kind: "object" }>;
@@ -238,7 +238,7 @@ function parseFrontmatterJson(value: string): Readonly<Record<string, Frontmatte
   return parsed as Readonly<Record<string, FrontmatterValue>>;
 }
 
-function compileContracts(bundle: Bundle, schemaOptions: SchemaOptions): readonly TypeContract[] {
+export function compileBundleTypeContracts(bundle: Bundle, schemaOptions: SchemaOptions = {}): readonly TypeContract[] {
   const specifications = schemaOptions.casts ?? [];
   const options: CompileOptions = {
     inferTypes: schemaOptions.inferTypes ?? false,
@@ -268,6 +268,14 @@ function compileContracts(bundle: Bundle, schemaOptions: SchemaOptions): readonl
     );
   }
   return Object.freeze(contracts);
+}
+
+export async function compileTypeContracts(
+  root: string | URL,
+  options: SchemaOptions = {},
+): Promise<readonly TypeContract[]> {
+  const bundle = await loadBundle(root, options);
+  return compileBundleTypeContracts(bundle, options);
 }
 
 function titleFor(name: string): string {
@@ -315,7 +323,7 @@ export async function exportJsonSchema(
   options: SchemaOptions = {},
 ): Promise<SchemaReport> {
   const bundle = await loadBundle(root, options);
-  const contracts = compileContracts(bundle, options);
+  const contracts = compileBundleTypeContracts(bundle, options);
   const schemas = Object.fromEntries(
     contracts.map((contract) => [
       contract.conceptType,
@@ -363,7 +371,7 @@ export async function exportZod(
   options: ZodOptions = {},
 ): Promise<string> {
   const bundle = await loadBundle(root, options);
-  const contracts = compileContracts(bundle, options);
+  const contracts = compileBundleTypeContracts(bundle, options);
   const variableNames = uniqueNames(
     contracts.map((contract) => contract.conceptType),
     "Schema",
