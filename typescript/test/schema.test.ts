@@ -90,3 +90,40 @@ test("exposes one deeply immutable deterministic TypeContract per authored type"
     expect.objectContaining({ name: "rank", required: false, nullable: false }),
   ]));
 });
+
+test("preserves declared DuckDB identity in TypeContract, JSON Schema, and Zod", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "okf-declared-contract-ts-"));
+  await writeConcept(root, "one.md", "type: Registro\nvalor: '12.34'\nsequencia: '9007199254740993'\n");
+  const declaredTypesByType = {
+    Registro: {
+      valor: { sql: "DECIMAL(18,4)", family: "decimal", precision: 18, scale: 4 },
+      sequencia: { sql: "BIGINT", family: "integer", isJsSafeInteger: false },
+      criado_em: { sql: "TIMESTAMP", family: "timestamp" },
+    },
+  } as const;
+
+  const contracts = await compileTypeContracts(root, { declaredTypesByType });
+  const fields = contracts[0]?.root.fields ?? [];
+  const valor = fields.find((field) => field.name === "valor")?.value;
+  const criadoEm = fields.find((field) => field.name === "criado_em")?.value;
+  expect(valor).toMatchObject({
+    declaredType: { sql: "DECIMAL(18,4)", family: "decimal" },
+  });
+  expect(Object.isFrozen(valor)).toBe(true);
+  if (valor?.kind === "scalar") expect(Object.isFrozen(valor.declaredType)).toBe(true);
+  expect(criadoEm).toMatchObject({
+    kind: "scalar",
+    scalar: "datetime",
+    declaredType: { sql: "TIMESTAMP", family: "timestamp" },
+  });
+  expect(fields.find((field) => field.name === "criado_em")?.required).toBe(false);
+
+  const schema = await exportJsonSchema(root, { declaredTypesByType });
+  const properties = (schema.schemas.Registro as { properties: Record<string, Record<string, unknown>> }).properties;
+  expect(properties.valor).toMatchObject({ type: "number", multipleOf: 0.0001, "x-okf-duckdb-type": "DECIMAL(18,4)" });
+  expect(properties.criado_em).toMatchObject({ type: "string", "x-okf-temporal-kind": "timestamp-without-time-zone" });
+
+  const zod = await exportZod(root, { declaredTypesByType });
+  expect(zod).toContain('"valor": z.string()');
+  expect(zod).toContain('"sequencia": z.union([z.number().int(), z.bigint()])');
+});
