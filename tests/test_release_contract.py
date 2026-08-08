@@ -60,6 +60,9 @@ def _write_source(root: Path, *, protocol_version: str = VERSION) -> None:
         f"---\ntype: Release\ntitle: okf-parser {VERSION}\ndescription: Test\n---\n",
         encoding="utf-8",
     )
+    (root / "README.md").write_text(
+        f"- uses: franklinbaldo/okf-parser@v{VERSION}\n", encoding="utf-8"
+    )
 
 
 def _tar_bytes(archive: tarfile.TarFile, member: tarfile.TarInfo) -> bytes:
@@ -131,6 +134,15 @@ def test_verify_source_accepts_synchronized_metadata(tmp_path: Path) -> None:
     _write_source(tmp_path)
     contract = verify_source(tmp_path, f"v{VERSION}")
     assert contract.version == VERSION
+
+
+def test_verify_source_rejects_stale_documented_action_version(tmp_path: Path) -> None:
+    _write_source(tmp_path)
+    (tmp_path / "README.md").write_text(
+        "- uses: franklinbaldo/okf-parser@v1.2.2\n", encoding="utf-8"
+    )
+    with pytest.raises(ContractError, match="GitHub Action example"):
+        verify_source(tmp_path)
 
 
 def test_verify_source_rejects_protocol_drift(tmp_path: Path) -> None:

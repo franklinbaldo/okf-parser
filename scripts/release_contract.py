@@ -19,6 +19,9 @@ from typing import Final, Literal, Never, cast
 
 STABLE_SEMVER: Final = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 FULL_SHA: Final = re.compile(r"^[0-9a-f]{40}$")
+ACTION_REF: Final = re.compile(
+    r"franklinbaldo/okf-parser@v(?P<version>(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))"
+)
 PROTOCOL_VERSION: Final = re.compile(
     r'^export const PROTOCOL_VERSION = "(?P<version>[^"]+)";\s*$', re.MULTILINE
 )
@@ -250,6 +253,20 @@ def _verify_protocol(root: Path, version: str) -> None:
         _fail("TypeScript protocol version differs from package version")
 
 
+def _verify_readme_action(root: Path, version: str) -> None:
+    path = root / "README.md"
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        _fail(f"cannot read {path}: {exc}")
+    versions = [match.group("version") for match in ACTION_REF.finditer(text)]
+    if versions != [version]:
+        _fail(
+            "README GitHub Action example must contain exactly one exact current-version ref "
+            f"v{version}; found {versions}"
+        )
+
+
 def _verify_changelog(root: Path, version: str) -> Path:
     path = root / "changelog" / f"{version}.md"
     metadata = _frontmatter(path)
@@ -264,6 +281,7 @@ def verify_source(root: Path, tag: str | None = None) -> SourceContract:
     _verify_npm_contract(root, version)
     _verify_protocol(root, version)
     changelog = _verify_changelog(root, version)
+    _verify_readme_action(root, version)
     if tag is not None and tag != f"v{version}":
         _fail(f"tag must be v{version}, found {tag!r}")
     return SourceContract(version=version, changelog=changelog.relative_to(root).as_posix())

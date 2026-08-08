@@ -29,6 +29,9 @@ layer:
 - let projects add cross-concept rules as Ibis expressions;
 - produce stable human-readable and JSON reports for CI and agents.
 
+The architectural boundary between strict authored OKF and source adapters is documented in
+[`docs/architecture.md`](docs/architecture.md).
+
 The parser and validation model are inspired by
 [`franklinbaldo/sisprev`](https://github.com/franklinbaldo/sisprev): parse
 documents independently from semantic validation, aggregate violations instead
@@ -205,7 +208,7 @@ Add the repository as a CI check:
 ```yaml
 steps:
   - uses: actions/checkout@v7
-  - uses: franklinbaldo/okf-parser@v0.4.0
+  - uses: franklinbaldo/okf-parser@v0.20.1
     with:
       path: knowledge
 ```
