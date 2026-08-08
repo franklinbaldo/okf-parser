@@ -44,22 +44,20 @@ jobs:
           def sub(path: str, pattern: str, replacement: str) -> None:
               p = Path(path)
               text = p.read_text(encoding="utf-8")
-              updated, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+              updated, count = re.subn(
+                  pattern,
+                  lambda _match: replacement,
+                  text,
+                  count=1,
+                  flags=re.S,
+              )
               if count != 1:
                   raise SystemExit(f"expected one regex match in {path}, got {count}")
               p.write_text(updated, encoding="utf-8")
 
           # #44: only authored Markdown links become normative OKF relations.
-          replace(
-              "src/okf_parser/bundle.py",
-              "    YamlValue,\n",
-              "",
-          )
-          replace(
-              "src/okf_parser/bundle.py",
-              "    looks_like_frontmatter_link,\n",
-              "",
-          )
+          replace("src/okf_parser/bundle.py", "    YamlValue,\n", "")
+          replace("src/okf_parser/bundle.py", "    looks_like_frontmatter_link,\n", "")
           replace(
               "src/okf_parser/bundle.py",
               "    raw_links = [(target, \"body\") for target in iter_markdown_links(parsed.body)]\n    raw_links.extend(_iter_frontmatter_links(parsed.frontmatter))\n",
@@ -70,29 +68,19 @@ jobs:
               r"\n\ndef _iter_frontmatter_links\(.*?\n    return \[\]\n",
               "",
           )
-
           sub(
               "typescript/src/core.ts",
               r"\nfunction frontmatterLinks\(.*?\n}\n\nfunction diagnostic\(",
               "\nfunction diagnostic(",
           )
-          replace(
-              "typescript/src/core.ts",
-              "    rawLinks.push(...frontmatterLinks(parsed.frontmatter));\n",
-              "",
-          )
+          replace("typescript/src/core.ts", "    rawLinks.push(...frontmatterLinks(parsed.frontmatter));\n", "")
 
           sub(
               "tests/test_bundle.py",
               r"def test_frontmatter_links_are_relations_with_field_origin\(tmp_path: Path\) -> None:\n.*?\n\n\ndef test_link_to_reserved_index",
               '''def test_frontmatter_markdown_paths_remain_metadata_not_relations(tmp_path: Path) -> None:\n    _write(\n        tmp_path / "a.md",\n        "---\\ntype: Node\\nsource_path: source/SKILL.md\\nmetadata:\\n  related:\\n    - /b.md\\n---\\n",\n    )\n    _write(tmp_path / "b.md", "---\\ntype: Node\\n---\\n")\n\n    bundle = load_bundle(tmp_path)\n\n    assert bundle.links.count().execute() == 0\n    assert bundle.validate() == []\n\n\ndef test_link_to_reserved_index''',
           )
-
-          replace(
-              "typescript/test/bundle.test.ts",
-              "    edges: 2,\n",
-              "    edges: 1,\n",
-          )
+          replace("typescript/test/bundle.test.ts", "    edges: 2,\n", "    edges: 1,\n")
           replace(
               "typescript/test/bundle.test.ts",
               "  expect(await graphBundle(root)).toMatchObject({\n",
@@ -114,8 +102,7 @@ jobs:
               raise SystemExit("release contract constant marker not found")
           text = text.replace(
               marker,
-              marker
-              + 'ACTION_REF: Final = re.compile(r"franklinbaldo/okf-parser@v(?P<version>(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*))")\n',
+              marker + 'ACTION_REF: Final = re.compile(r"franklinbaldo/okf-parser@v(?P<version>(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*))")\n',
               1,
           )
           marker = "def _verify_changelog(root: Path, version: str) -> Path:\n"
@@ -151,11 +138,7 @@ jobs:
           replace("typescript/package.json", '"version": "0.20.0"', '"version": "0.20.1"')
           replace("typescript-duckdb/package.json", '"version": "0.20.0"', '"version": "0.20.1"')
           replace("typescript-duckdb/package.json", '"okf-parser": "^0.20.0"', '"okf-parser": "^0.20.1"')
-          replace(
-              "typescript/src/version.ts",
-              'export const PROTOCOL_VERSION = "0.20.0";',
-              'export const PROTOCOL_VERSION = "0.20.1";',
-          )
+          replace("typescript/src/version.ts", 'export const PROTOCOL_VERSION = "0.20.0";', 'export const PROTOCOL_VERSION = "0.20.1";')
           Path("changelog/0.20.1.md").write_text('''---\ntype: Release\ntitle: okf-parser 0.20.1\ndescription: align normative link semantics and codify the strict-core adapter boundary\n---\n\n# okf-parser 0.20.1\n\n- Core link relations now come only from authored Markdown links; arbitrary frontmatter strings ending in `.md` remain metadata instead of creating graph edges or `OKF101` warnings (#44).\n- The Python and TypeScript implementations share that relation boundary.\n- `docs/architecture.md` distinguishes strict authored OKF conformance from explicit source-adapter/projection policy (#58).\n- The README GitHub Action example is pinned to the current release, and source-release verification fails when that documented ref drifts from the package version (#39).\n''', encoding="utf-8")
           PY
 
