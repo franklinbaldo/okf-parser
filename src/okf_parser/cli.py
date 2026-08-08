@@ -30,6 +30,7 @@ type McpTransport = Literal["stdio", "http", "sse"]
 type SchemaFormat = Literal["json", "zod", "pydantic"]
 type ZodImport = Literal["zod", "astro"]
 type CliSchemaFormat = Annotated[SchemaFormat, Parameter(name="format")]
+type ImportConflictPolicy = Literal["skip", "verify-identical"]
 type RepeatableStrings = list[str] | None
 type JsonPayload = dict[str, object]
 
@@ -93,12 +94,20 @@ def import_command(  # each argument is an independent public CLI flag.
     id_column: str | None = None,
     write: bool = False,
     overwrite: bool = False,
+    on_conflict: ImportConflictPolicy = "skip",
 ) -> CliResult[JsonPayload]:
     """Materialize every row of a DuckDB-readable source (CSV, Parquet, JSON) as a concept."""
     payload = import_bundle(
-        source, path, type, id_column=id_column, write=write, overwrite=overwrite
+        source,
+        path,
+        type,
+        id_column=id_column,
+        write=write,
+        overwrite=overwrite,
+        on_conflict=on_conflict,
     )
-    return CliResult(payload, 1 if payload["duplicate_ids"] else 0)
+    failed = bool(payload["duplicate_ids"]) or bool(payload["conflicting_existing"])
+    return CliResult(payload, 1 if failed else 0)
 
 
 @app.command
@@ -413,6 +422,7 @@ def mcp_import_preview(
     *,
     id_column: str | None = None,
     overwrite: bool = False,
+    on_conflict: ImportConflictPolicy = "skip",
 ) -> dict[str, object]:
     """Plan a tabular import without creating or replacing concept files."""
     return import_bundle(
@@ -422,6 +432,7 @@ def mcp_import_preview(
         id_column=id_column,
         write=False,
         overwrite=overwrite,
+        on_conflict=on_conflict,
     )
 
 
@@ -432,6 +443,7 @@ def mcp_import_write(
     *,
     id_column: str | None = None,
     overwrite: bool = False,
+    on_conflict: ImportConflictPolicy = "skip",
 ) -> dict[str, object]:
     """Commit a tabular import using the existing import service."""
     return import_bundle(
@@ -441,6 +453,7 @@ def mcp_import_write(
         id_column=id_column,
         write=True,
         overwrite=overwrite,
+        on_conflict=on_conflict,
     )
 
 

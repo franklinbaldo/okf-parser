@@ -70,6 +70,121 @@ def test_existing_destination_is_skipped_without_overwrite(tmp_path: Path) -> No
     assert "Custom" in existing.read_text(encoding="utf-8")
 
 
+def test_verify_identical_classifies_an_idempotent_reapplication(tmp_path: Path) -> None:
+    csv = tmp_path / "source.csv"
+    _write_csv(csv)
+    bundle = tmp_path / "bundle"
+    import_bundle(str(csv), str(bundle), "Pessoa", id_column="id", write=True)
+
+    result = import_bundle(
+        str(csv),
+        str(bundle),
+        "Pessoa",
+        id_column="id",
+        write=True,
+        on_conflict="verify-identical",
+    )
+
+    assert result["written"] is True
+    assert result["created"] == []
+    assert result["matched_existing"] == ["pessoa/r1.md", "pessoa/r2.md"]
+    assert result["conflicting_existing"] == []
+
+
+def test_verify_identical_uses_parsed_value_not_yaml_spelling(tmp_path: Path) -> None:
+    csv = tmp_path / "source.csv"
+    _write_csv(csv)
+    bundle = tmp_path / "bundle"
+    existing = bundle / "pessoa" / "r1.md"
+    existing.parent.mkdir(parents=True)
+    existing.write_text(
+        "---\nidade: 30\nnome: Ana\nid: r1\ntype: Pessoa\n---\n",
+        encoding="utf-8",
+    )
+
+    result = import_bundle(
+        str(csv),
+        str(bundle),
+        "Pessoa",
+        id_column="id",
+        on_conflict="verify-identical",
+    )
+
+    assert result["matched_existing"] == ["pessoa/r1.md"]
+    assert result["conflicting_existing"] == []
+
+
+def test_verify_identical_rejects_a_divergent_identity_atomically(tmp_path: Path) -> None:
+    csv = tmp_path / "source.csv"
+    _write_csv(csv)
+    bundle = tmp_path / "bundle"
+    existing = bundle / "pessoa" / "r1.md"
+    existing.parent.mkdir(parents=True)
+    existing.write_text(
+        "---\ntype: Pessoa\nid: r1\nnome: Outra\nidade: '30'\n---\n",
+        encoding="utf-8",
+    )
+
+    result = import_bundle(
+        str(csv),
+        str(bundle),
+        "Pessoa",
+        id_column="id",
+        write=True,
+        on_conflict="verify-identical",
+    )
+
+    assert result["written"] is False
+    assert result["created"] == []
+    assert result["would_create"] == ["pessoa/r2.md"]
+    assert result["conflicting_existing"] == ["pessoa/r1.md"]
+    assert not (bundle / "pessoa" / "r2.md").exists()
+
+
+@pytest.mark.parametrize(
+    "existing_text",
+    [
+        "---\ntype: Pessoa\nid: r1\nnome: Ana\nidade: '30'\n---\nBody inesperado\n",
+        "---\ntype: Pessoa\nid: r1\nnome: Ana\nidade: '30'\nextra: null\n---\n",
+        "não é um conceito OKF\n",
+    ],
+)
+def test_verify_identical_fails_closed_for_unexpected_documents(
+    tmp_path: Path, existing_text: str
+) -> None:
+    csv = tmp_path / "source.csv"
+    _write_csv(csv)
+    bundle = tmp_path / "bundle"
+    existing = bundle / "pessoa" / "r1.md"
+    existing.parent.mkdir(parents=True)
+    existing.write_text(existing_text, encoding="utf-8")
+
+    result = import_bundle(
+        str(csv),
+        str(bundle),
+        "Pessoa",
+        id_column="id",
+        on_conflict="verify-identical",
+    )
+
+    assert result["conflicting_existing"] == ["pessoa/r1.md"]
+
+
+def test_verify_identical_cannot_be_combined_with_overwrite(tmp_path: Path) -> None:
+    csv = tmp_path / "source.csv"
+    _write_csv(csv)
+
+    with pytest.raises(BundleImportError, match="mutually exclusive"):
+        import_bundle(
+            str(csv),
+            str(tmp_path / "bundle"),
+            "Pessoa",
+            id_column="id",
+            overwrite=True,
+            on_conflict="verify-identical",
+        )
+
+
 def test_overwrite_replaces_an_existing_destination(tmp_path: Path) -> None:
     csv = tmp_path / "source.csv"
     _write_csv(csv)
