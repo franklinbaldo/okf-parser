@@ -1,0 +1,192 @@
+name: Prepare 0.20.1
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    if: github.event.pull_request.head.ref == 'fix/spec-link-semantics-0.20.1'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+
+      - name: Apply the spec-alignment patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"expected block not found in {path}")
+              p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          def sub(path: str, pattern: str, replacement: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              updated, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+              if count != 1:
+                  raise SystemExit(f"expected one regex match in {path}, got {count}")
+              p.write_text(updated, encoding="utf-8")
+
+          # #44: only authored Markdown links become normative OKF relations.
+          replace(
+              "src/okf_parser/bundle.py",
+              "    YamlValue,\n",
+              "",
+          )
+          replace(
+              "src/okf_parser/bundle.py",
+              "    looks_like_frontmatter_link,\n",
+              "",
+          )
+          replace(
+              "src/okf_parser/bundle.py",
+              "    raw_links = [(target, \"body\") for target in iter_markdown_links(parsed.body)]\n    raw_links.extend(_iter_frontmatter_links(parsed.frontmatter))\n",
+              "    raw_links = [(target, \"body\") for target in iter_markdown_links(parsed.body)]\n",
+          )
+          sub(
+              "src/okf_parser/bundle.py",
+              r"\n\ndef _iter_frontmatter_links\(.*?\n    return \[\]\n",
+              "",
+          )
+
+          sub(
+              "typescript/src/core.ts",
+              r"\nfunction frontmatterLinks\(.*?\n}\n\nfunction diagnostic\(",
+              "\nfunction diagnostic(",
+          )
+          replace(
+              "typescript/src/core.ts",
+              "    rawLinks.push(...frontmatterLinks(parsed.frontmatter));\n",
+              "",
+          )
+
+          sub(
+              "tests/test_bundle.py",
+              r"def test_frontmatter_links_are_relations_with_field_origin\(tmp_path: Path\) -> None:\n.*?\n\n\ndef test_link_to_reserved_index",
+              '''def test_frontmatter_markdown_paths_remain_metadata_not_relations(tmp_path: Path) -> None:\n    _write(\n        tmp_path / "a.md",\n        "---\\ntype: Node\\nsource_path: source/SKILL.md\\nmetadata:\\n  related:\\n    - /b.md\\n---\\n",\n    )\n    _write(tmp_path / "b.md", "---\\ntype: Node\\n---\\n")\n\n    bundle = load_bundle(tmp_path)\n\n    assert bundle.links.count().execute() == 0\n    assert bundle.validate() == []\n\n\ndef test_link_to_reserved_index''',
+          )
+
+          replace(
+              "typescript/test/bundle.test.ts",
+              "    edges: 2,\n",
+              "    edges: 1,\n",
+          )
+          replace(
+              "typescript/test/bundle.test.ts",
+              "  expect(await graphBundle(root)).toMatchObject({\n",
+              "  // `related: two.md` is producer metadata; only [Two](two.md) is a relation.\n  expect(await graphBundle(root)).toMatchObject({\n",
+          )
+
+          # #39: pin the documented Action to the release version and make drift fail source verification.
+          replace("README.md", "franklinbaldo/okf-parser@v0.4.0", "franklinbaldo/okf-parser@v0.20.1")
+          replace(
+              "README.md",
+              "The parser and validation model are inspired by\n",
+              "The architectural boundary between strict authored OKF and source adapters is documented in\n[`docs/architecture.md`](docs/architecture.md).\n\nThe parser and validation model are inspired by\n",
+          )
+
+          release = Path("scripts/release_contract.py")
+          text = release.read_text(encoding="utf-8")
+          marker = 'FULL_SHA: Final = re.compile(r"^[0-9a-f]{40}$")\n'
+          if marker not in text:
+              raise SystemExit("release contract constant marker not found")
+          text = text.replace(
+              marker,
+              marker
+              + 'ACTION_REF: Final = re.compile(r"franklinbaldo/okf-parser@v(?P<version>(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*))")\n',
+              1,
+          )
+          marker = "def _verify_changelog(root: Path, version: str) -> Path:\n"
+          if marker not in text:
+              raise SystemExit("release contract function marker not found")
+          helper = '''def _verify_readme_action(root: Path, version: str) -> None:\n    path = root / "README.md"\n    try:\n        text = path.read_text(encoding="utf-8")\n    except (OSError, UnicodeError) as exc:\n        _fail(f"cannot read {path}: {exc}")\n    versions = [match.group("version") for match in ACTION_REF.finditer(text)]\n    if versions != [version]:\n        _fail(\n            "README GitHub Action example must contain exactly one exact current-version ref "\n            f"v{version}; found {versions}"\n        )\n\n\n'''
+          text = text.replace(marker, helper + marker, 1)
+          old = "    changelog = _verify_changelog(root, version)\n"
+          if old not in text:
+              raise SystemExit("verify_source call marker not found")
+          text = text.replace(old, old + "    _verify_readme_action(root, version)\n", 1)
+          release.write_text(text, encoding="utf-8")
+
+          tests = Path("tests/test_release_contract.py")
+          text = tests.read_text(encoding="utf-8")
+          old = '''    (root / "changelog" / f"{VERSION}.md").write_text(\n        f"---\\ntype: Release\\ntitle: okf-parser {VERSION}\\ndescription: Test\\n---\\n",\n        encoding="utf-8",\n    )\n'''
+          if old not in text:
+              raise SystemExit("release test fixture marker not found")
+          new = old + '''    (root / "README.md").write_text(\n        f"- uses: franklinbaldo/okf-parser@v{VERSION}\\n", encoding="utf-8"\n    )\n'''
+          text = text.replace(old, new, 1)
+          marker = "def test_verify_source_rejects_protocol_drift(tmp_path: Path) -> None:\n"
+          if marker not in text:
+              raise SystemExit("release test insertion marker not found")
+          test = '''def test_verify_source_rejects_stale_documented_action_version(tmp_path: Path) -> None:\n    _write_source(tmp_path)\n    (tmp_path / "README.md").write_text(\n        "- uses: franklinbaldo/okf-parser@v1.2.2\\n", encoding="utf-8"\n    )\n    with pytest.raises(ContractError, match="GitHub Action example"):\n        verify_source(tmp_path)\n\n\n'''
+          text = text.replace(marker, test + marker, 1)
+          tests.write_text(text, encoding="utf-8")
+
+          # #58: codify the boundary without adding a new command/config layer.
+          Path("docs/architecture.md").write_text('''# Architecture boundary\n\n`okf-parser` keeps one strict core and puts source adaptation outside that core.\n\n```text\ndiscovery / classification\n        ↓\nstrict authored OKF parse\n        ↓\nauthoritative normalized relations\n        ↓\nTypeContract\n        ↓\ntyped DuckDB / Ibis relations\n        ↓\nconsumer projections and adapters\n```\n\nThe core answers what an authored OKF bundle says and whether it conforms. A non-reserved Markdown concept therefore needs authored OKF frontmatter and a non-empty `type`. Core graph relations come from authored Markdown links; producer-defined frontmatter strings remain data, even when they look like paths.\n\nExternal corpora use a separate adaptation boundary:\n\n```text\nexternal source (MDX, legacy Markdown, Agent Skills, ...)\n        ↓\nsource adapter / projection policy\n        ↓\nprojection plan + explicit provenance\n        ↓\ncanonical OKF representation\n        ↓\nordinary core pipeline\n```\n\nAn adapter may derive an effective type, rewrite a source relation into the projected namespace, or recognize a source dialect. It must preserve enough provenance to distinguish authored evidence from projection policy. The downstream graph, schema, DuckDB/Ibis and MCP surfaces should consume the canonical OKF representation instead of learning every source dialect independently.\n\nThis is primarily an internal architecture rule. Ordinary conformant bundles should not need adapter configuration, profiles or extra command hierarchy. Advanced adaptation is progressive disclosure.\n''', encoding="utf-8")
+
+          # Release metadata.
+          replace("pyproject.toml", 'version = "0.20.0"', 'version = "0.20.1"')
+          replace("typescript/package.json", '"version": "0.20.0"', '"version": "0.20.1"')
+          replace("typescript-duckdb/package.json", '"version": "0.20.0"', '"version": "0.20.1"')
+          replace("typescript-duckdb/package.json", '"okf-parser": "^0.20.0"', '"okf-parser": "^0.20.1"')
+          replace(
+              "typescript/src/version.ts",
+              'export const PROTOCOL_VERSION = "0.20.0";',
+              'export const PROTOCOL_VERSION = "0.20.1";',
+          )
+          Path("changelog/0.20.1.md").write_text('''---\ntype: Release\ntitle: okf-parser 0.20.1\ndescription: align normative link semantics and codify the strict-core adapter boundary\n---\n\n# okf-parser 0.20.1\n\n- Core link relations now come only from authored Markdown links; arbitrary frontmatter strings ending in `.md` remain metadata instead of creating graph edges or `OKF101` warnings (#44).\n- The Python and TypeScript implementations share that relation boundary.\n- `docs/architecture.md` distinguishes strict authored OKF conformance from explicit source-adapter/projection policy (#58).\n- The README GitHub Action example is pinned to the current release, and source-release verification fails when that documented ref drifts from the package version (#39).\n''', encoding="utf-8")
+          PY
+
+      - name: Refresh derived locks and format
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv lock
+          npm install --package-lock-only --ignore-scripts --prefix typescript
+          npm install --package-lock-only --ignore-scripts --prefix typescript-duckdb
+          uv sync --frozen --all-groups
+          uv run ruff format .
+
+      - name: Run focused validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run ruff check .
+          uv run ty check src tests
+          uv run pytest tests/test_bundle.py tests/test_parser.py tests/test_release_contract.py
+          uv run python scripts/release_contract.py verify-source --root .
+          npm run check --prefix typescript
+          npm test --prefix typescript
+
+      - name: Commit final patch and remove helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/prepare-0-20-1.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: align core relation semantics with OKF"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
