@@ -83,7 +83,12 @@ def _write_bundle(root: Path, documents: list[str]) -> None:
         (root / f"concept-{index}.md").write_text(source, encoding="utf-8")
 
 
-def _measure(size: int, body_paragraphs: int, rounds: int) -> dict[str, int]:
+def _measure(
+    size: int,
+    body_paragraphs: int,
+    rounds: int,
+    read_concurrencies: list[int],
+) -> dict[str, object]:
     documents = [_document(index, body_paragraphs) for index in range(size)]
     bodies = [source.split("---\n", 2)[2] for source in documents]
 
@@ -113,11 +118,14 @@ def _measure(size: int, body_paragraphs: int, rounds: int) -> dict[str, int]:
             lambda: [path.read_bytes() for path in paths],
             rounds,
         )
-        with ThreadPoolExecutor(max_workers=min(32, len(paths))) as executor:
-            concurrent_read_ns = _median_ns(
-                lambda: list(executor.map(Path.read_bytes, paths)),
-                rounds,
-            )
+        concurrent_read_ns: dict[str, int] = {}
+        for concurrency in read_concurrencies:
+            with ThreadPoolExecutor(max_workers=min(concurrency, len(paths))) as executor:
+                elapsed = _median_ns(
+                    lambda: list(executor.map(Path.read_bytes, paths)),
+                    rounds,
+                )
+            concurrent_read_ns[str(concurrency)] = elapsed // len(paths)
         load_ns = _median_ns(lambda: load_bundle(root), rounds)
 
     markdown_files = len(paths)
@@ -131,7 +139,7 @@ def _measure(size: int, body_paragraphs: int, rounds: int) -> dict[str, int]:
         "markdown_headings_ns_per_document": headings_ns // size,
         "filesystem_discovery_ns_per_file": discovery_ns // markdown_files,
         "filesystem_sequential_read_ns_per_file": sequential_read_ns // markdown_files,
-        "filesystem_concurrent_read_ns_per_file": concurrent_read_ns // markdown_files,
+        "filesystem_read_ns_per_file_by_concurrency": concurrent_read_ns,
         "bundle_load_ns_per_document": load_ns // size,
         "bundle_load_ms": load_ns // 1_000_000,
     }
@@ -143,15 +151,25 @@ def main() -> None:
     parser.add_argument("--sizes", default="100,1000,5000")
     parser.add_argument("--body-paragraphs", type=int, default=4)
     parser.add_argument("--rounds", type=int, default=5)
+    parser.add_argument("--read-concurrencies", default="32")
     args = parser.parse_args()
     sizes = [int(value) for value in args.sizes.split(",") if value]
+    read_concurrencies = [
+        int(value) for value in args.read_concurrencies.split(",") if value
+    ]
+    if not read_concurrencies or any(value < 1 for value in read_concurrencies):
+        parser.error("--read-concurrencies must contain positive integers")
 
     report = {
         "runtime": "python",
         "runtime_version": platform.python_version(),
         "rounds": args.rounds,
         "body_paragraphs": args.body_paragraphs,
-        "results": [_measure(size, args.body_paragraphs, args.rounds) for size in sizes],
+        "read_concurrencies": read_concurrencies,
+        "results": [
+            _measure(size, args.body_paragraphs, args.rounds, read_concurrencies)
+            for size in sizes
+        ],
     }
     print(json.dumps(report, indent=2, sort_keys=True))  # noqa: T201
 

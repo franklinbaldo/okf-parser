@@ -82,6 +82,21 @@ async function medianAsyncNs(operation, rounds) {
   return Math.trunc(samples[Math.floor(samples.length / 2)]);
 }
 
+async function readAllBounded(paths, concurrency) {
+  let next = 0;
+  async function worker() {
+    while (next < paths.length) {
+      const index = next;
+      next += 1;
+      const filePath = paths[index];
+      if (filePath !== undefined) await readFile(filePath);
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, paths.length) }, () => worker()),
+  );
+}
+
 async function measure(size, bodyParagraphs, rounds) {
   const documents = Array.from({ length: size }, (_, index) => documentSource(index, bodyParagraphs));
   const bodies = documents.map((source) => splitFrontmatterSource(source)[1]);
@@ -107,10 +122,14 @@ async function measure(size, bodyParagraphs, rounds) {
     const sequentialReadNs = await medianAsyncNs(async () => {
       for (const filePath of paths) await readFile(filePath);
     }, rounds);
-    const concurrentReadNs = await medianAsyncNs(
-      () => Promise.all(paths.map((filePath) => readFile(filePath))),
-      rounds,
-    );
+    const concurrentReadNs = {};
+    for (const concurrency of readConcurrencies) {
+      const elapsed = await medianAsyncNs(
+        () => readAllBounded(paths, concurrency),
+        rounds,
+      );
+      concurrentReadNs[String(concurrency)] = Math.trunc(elapsed / paths.length);
+    }
     const loadNs = await medianAsyncNs(() => loadBundle(root), rounds);
     return {
       documents: size,
@@ -122,7 +141,7 @@ async function measure(size, bodyParagraphs, rounds) {
       markdown_headings_ns_per_document: Math.trunc(headingsNs / size),
       filesystem_discovery_ns_per_file: Math.trunc(discoveryNs / paths.length),
       filesystem_sequential_read_ns_per_file: Math.trunc(sequentialReadNs / paths.length),
-      filesystem_concurrent_read_ns_per_file: Math.trunc(concurrentReadNs / paths.length),
+      filesystem_read_ns_per_file_by_concurrency: concurrentReadNs,
       bundle_load_ns_per_document: Math.trunc(loadNs / size),
       bundle_load_ms: Math.trunc(loadNs / 1_000_000),
     };
@@ -140,6 +159,16 @@ const values = new Map(
 const sizes = (values.get("sizes") ?? "100,1000,5000").split(",").filter(Boolean).map(Number);
 const bodyParagraphs = Number(values.get("body-paragraphs") ?? 4);
 const rounds = Number(values.get("rounds") ?? 5);
+const readConcurrencies = (values.get("read-concurrencies") ?? "32")
+  .split(",")
+  .filter(Boolean)
+  .map(Number);
+if (
+  readConcurrencies.length === 0 ||
+  readConcurrencies.some((value) => !Number.isSafeInteger(value) || value < 1)
+) {
+  throw new Error("--read-concurrencies must contain positive integers");
+}
 const results = [];
 for (const size of sizes) results.push(await measure(size, bodyParagraphs, rounds));
 
@@ -150,6 +179,7 @@ console.log(
       runtime_version: process.version,
       rounds,
       body_paragraphs: bodyParagraphs,
+      read_concurrencies: readConcurrencies,
       results,
     },
     null,
