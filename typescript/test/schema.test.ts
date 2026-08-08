@@ -6,6 +6,7 @@ import { expect, test } from "vitest";
 
 import {
   SchemaNameCollisionError,
+  compileTypeContracts,
   exportJsonSchema,
   exportZod,
 } from "../src/index.js";
@@ -59,4 +60,22 @@ test("preserves Unicode names and rejects normalized collisions", async () => {
   await writeConcept(collision, "hyphen.md", "type: a-o\n");
   await writeConcept(collision, "underscore.md", "type: a_o\n");
   await expect(exportJsonSchema(collision)).rejects.toBeInstanceOf(SchemaNameCollisionError);
+});
+
+
+test("exposes one immutable deterministic TypeContract per authored type", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "okf-contract-ts-"));
+  await writeConcept(root, "one.md", "type: Note\nrank: 1\n");
+  await writeConcept(root, "two.md", "type: Note\n");
+
+  const contracts = await compileTypeContracts(root, { inferTypes: true });
+
+  expect(Object.isFrozen(contracts)).toBe(true);
+  expect(contracts).toHaveLength(1);
+  expect(contracts[0]?.conceptType).toBe("Note");
+  expect(contracts[0]?.modelName).toBe("NoteConcept");
+  expect(contracts[0]?.root.fields).toEqual(expect.arrayContaining([
+    expect.objectContaining({ name: "type", required: true, nullable: false }),
+    expect.objectContaining({ name: "rank", required: false, nullable: false }),
+  ]));
 });
