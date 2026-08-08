@@ -92,7 +92,6 @@ def test_link_extraction_uses_commonmark_tokens() -> None:
     ]
 
 
-
 def test_markdown_facts_collect_links_and_headings_together() -> None:
     body = "# Title\n\n[ordinary](ordinary.md)\n\n## Detail\n"
     facts = markdown_facts(body)
