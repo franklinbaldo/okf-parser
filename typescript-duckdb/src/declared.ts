@@ -106,6 +106,11 @@ async function parseDeclaredSchema(sqlText: string, conceptType: string): Promis
       throw new DeclaredSchemaError(`declared schema script left more than one table named ${JSON.stringify(conceptType)}`);
     }
     const [databaseOid, schemaOid, tableOid] = matches[0] ?? [];
+    if (!((typeof databaseOid === "number" || typeof databaseOid === "bigint") &&
+      (typeof schemaOid === "number" || typeof schemaOid === "bigint") &&
+      (typeof tableOid === "number" || typeof tableOid === "bigint"))) {
+      throw new DeclaredSchemaError("DuckDB catalog returned non-numeric table identity");
+    }
     const columnsReader = await connection.runAndReadAll(
       "SELECT column_name, data_type, numeric_precision, numeric_scale FROM duckdb_columns() " +
       "WHERE database_oid = $databaseOid AND schema_oid = $schemaOid AND table_oid = $tableOid ORDER BY column_index",
@@ -143,7 +148,7 @@ export async function loadDeclaredTypes(
     if (!(await isFile(declarationPath))) continue;
     if (owners.length > 1) {
       throw new DeclaredSchemaError(
-        `declared schema path ${JSON.stringify(relative)} is shared by concept types ${owners.sort().map(JSON.stringify).join(", ")}`
+        `declared schema path ${JSON.stringify(relative)} is shared by concept types ${owners.sort().map((owner) => JSON.stringify(owner)).join(", ")}`
       );
     }
     const conceptType = owners[0];
