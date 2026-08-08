@@ -187,7 +187,7 @@ const nullTag = {
 function isFrontmatterDelimiter(line: string): boolean {
   const content = line.endsWith("\n") ? line.slice(0, -1) : line;
   const normalized = content.endsWith("\r") ? content.slice(0, -1) : content;
-  return normalized.startsWith("---") && normalized.slice(3).trim().length === 0;
+  return normalized.startsWith("---") && /^[ \\t]*$/u.test(normalized.slice(3));
 }
 
 function splitFrontmatterSource(content: string): readonly [string, string] | null {
