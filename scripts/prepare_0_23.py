@@ -212,7 +212,7 @@ replace(
 )
 replace(
     "docs/cli.md",
-    '''Counts concepts by producer-defined `type`.\n\nMCP tool: `inventory`.\n''',
+    '''Counts concepts by type using an Ibis relation over the parsed bundle. Always\nexits `0`.\n\nMCP tool: `inventory`.\n''',
     '''Counts concepts by producer-defined `type`. `--revisions` also returns one\ndeterministic identity record per concept with `concept_id`, `path`,\n`source_digest`, and `revision_digest`. `source_digest` hashes exact authored\nUTF-8 source, while `revision_digest` uses the versioned parsed representation\nand normalizes physical newline/frontmatter-order differences. The digest\nprefixes identify their algorithms directly.\n\nMCP tool: `inventory` with the same optional `revisions` argument.\n''',
 )
 replace("README.md", "franklinbaldo/okf-parser@v0.22.0", "franklinbaldo/okf-parser@v0.23.0")
