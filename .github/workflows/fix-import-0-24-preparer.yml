@@ -1,0 +1,34 @@
+name: Fix import 0.24 preparer
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.head_ref == 'agent/import-verify-identical'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: agent/import-verify-identical
+      - name: Keep CLI conflict enum local for runtime schema generation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/prepare_import_0_24.py')
+          text = path.read_text(encoding='utf-8')
+          old = '''# Keep one runtime type alias for Cyclopts/FastMCP schema generation.\nreplace(\n    "src/okf_parser/cli.py",\n    "from okf_parser.duckdb import BundleExportError\\n",\n    "from okf_parser.bundle_import import ImportConflictPolicy\\nfrom okf_parser.duckdb import BundleExportError\\n",\n)\n'''
+          new = '''# Keep one tiny runtime alias local to the public CLI/FastMCP schema.\nreplace(\n    "src/okf_parser/cli.py",\n    'type CliSchemaFormat = Annotated[SchemaFormat, Parameter(name="format")]\\n',\n    'type CliSchemaFormat = Annotated[SchemaFormat, Parameter(name="format")]\\n'\n    'type ImportConflictPolicy = Literal["skip", "verify-identical"]\\n',\n)\n'''
+          if old not in text:
+              raise SystemExit('runtime alias preparer block not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add scripts/prepare_import_0_24.py
+          git commit -m 'chore: keep import conflict enum in public schema'
+          git push origin HEAD:agent/import-verify-identical
