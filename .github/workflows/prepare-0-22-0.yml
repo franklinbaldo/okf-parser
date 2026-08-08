@@ -36,6 +36,7 @@ jobs:
           npm install --package-lock-only --ignore-scripts --prefix typescript-duckdb
           uv sync --frozen --all-groups
           npm ci --prefix typescript
+          npm run build --prefix typescript
           npm ci --prefix typescript-duckdb
 
       - name: Run full stack gate
