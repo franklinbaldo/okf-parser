@@ -120,6 +120,9 @@ jobs:
       - name: Build distributions
         run: uv build
 
+      - name: Smoke-test the Python benchmark harness
+        run: uv run python benchmarks/python-parser.py --sizes 10 --rounds 1 > "$RUNNER_TEMP/python-benchmark.json"
+
   typescript-quality:
     name: TypeScript / Node ${{ matrix.node }}
     runs-on: ubuntu-latest
@@ -149,6 +152,9 @@ jobs:
 
       - name: Build ESM and declarations
         run: npm run build --prefix typescript
+
+      - name: Smoke-test the TypeScript benchmark harness
+        run: node benchmarks/typescript-parser.mjs --sizes=10 --rounds=1 > "$RUNNER_TEMP/typescript-benchmark.json"
 
       - name: Dogfood the TypeScript CLI
         run: node typescript/dist/cli.js check . > "$RUNNER_TEMP/okf-check.json"
