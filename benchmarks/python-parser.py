@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING
 
 from okf_parser.bundle import load_bundle
 from okf_parser.parser import (
-    _split_frontmatter_source,
     iter_headings,
     iter_markdown_links,
     parse_document_text,
@@ -21,6 +20,34 @@ from okf_parser.parser import (
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+
+def _is_delimiter(line: str) -> bool:
+    content = line.removesuffix("\n").removesuffix("\r")
+    return content.startswith("---") and not content.removeprefix("---").strip(" \t")
+
+
+def _split_frontmatter_source(text: str) -> tuple[str, str] | None:
+    normalized = text.removeprefix("\ufeff")
+    opening_end = normalized.find("\n")
+    if opening_end < 0 or not _is_delimiter(normalized[: opening_end + 1]):
+        return None
+
+    cursor = opening_end + 1
+    while cursor <= len(normalized):
+        newline = normalized.find("\n", cursor)
+        line_end = len(normalized) if newline < 0 else newline + 1
+        if _is_delimiter(normalized[cursor:line_end]):
+            block_end = cursor
+            if block_end > opening_end + 1 and normalized[block_end - 1] == "\n":
+                block_end -= 1
+                if block_end > opening_end + 1 and normalized[block_end - 1] == "\r":
+                    block_end -= 1
+            return normalized[opening_end + 1 : block_end], normalized[line_end:]
+        if newline < 0:
+            break
+        cursor = line_end
+    return None
 
 
 def _document(index: int, body_paragraphs: int) -> str:
@@ -37,7 +64,7 @@ def _document(index: int, body_paragraphs: int) -> str:
     )
 
 
-def _median_ns(operation: Callable[[], None], rounds: int) -> int:
+def _median_ns(operation: Callable[[], object], rounds: int) -> int:
     operation()
     samples: list[int] = []
     for _ in range(rounds):
@@ -89,6 +116,7 @@ def _measure(size: int, body_paragraphs: int, rounds: int) -> dict[str, int]:
 
 
 def main() -> None:
+    """Run the selected benchmark matrix and emit one JSON report."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--sizes", default="100,1000,5000")
     parser.add_argument("--body-paragraphs", type=int, default=4)
@@ -103,7 +131,7 @@ def main() -> None:
         "body_paragraphs": args.body_paragraphs,
         "results": [_measure(size, args.body_paragraphs, args.rounds) for size in sizes],
     }
-    print(json.dumps(report, indent=2, sort_keys=True))
+    print(json.dumps(report, indent=2, sort_keys=True))  # noqa: T201
 
 
 if __name__ == "__main__":
