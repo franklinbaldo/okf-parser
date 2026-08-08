@@ -78,6 +78,7 @@ export interface Bundle {
 
 export interface LoadOptions {
   readonly exclude?: readonly string[];
+  readonly readConcurrency?: number;
   readonly signal?: AbortSignal;
 }
 
@@ -175,6 +176,8 @@ const IGNORED_DIRECTORIES = new Set([
   "node_modules",
 ]);
 const markdown = new MarkdownIt("commonmark");
+const DEFAULT_READ_CONCURRENCY = 32;
+const MAX_READ_CONCURRENCY = 256;
 
 const nullTag = {
   tag: "tag:yaml.org,2002:null",
@@ -228,6 +231,49 @@ async function readUtf8(filePath: string): Promise<string> {
     return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
   } catch (error) {
     throw new DocumentParseError("document must be valid UTF-8", { path: filePath, cause: error });
+  }
+}
+
+export type ReadUtf8Result =
+  | { readonly filePath: string; readonly text: string; readonly error?: never }
+  | { readonly filePath: string; readonly text?: never; readonly error: unknown };
+
+async function readUtf8Result(filePath: string): Promise<ReadUtf8Result> {
+  try {
+    return { filePath, text: await readUtf8(filePath) };
+  } catch (error) {
+    return { filePath, error };
+  }
+}
+
+export async function* readUtf8Ordered(
+  paths: readonly string[],
+  concurrency: number,
+  signal?: AbortSignal,
+  read: (filePath: string) => Promise<ReadUtf8Result> = readUtf8Result,
+): AsyncGenerator<ReadUtf8Result> {
+  const pending = new Map<number, Promise<ReadUtf8Result>>();
+  let next = 0;
+
+  const schedule = (): void => {
+    signal?.throwIfAborted();
+    while (next < paths.length && pending.size < concurrency) {
+      const index = next;
+      const filePath = paths[index];
+      if (filePath !== undefined) pending.set(index, read(filePath));
+      next += 1;
+    }
+  };
+
+  signal?.throwIfAborted();
+  schedule();
+  for (let index = 0; index < paths.length; index += 1) {
+    signal?.throwIfAborted();
+    const result = await pending.get(index);
+    signal?.throwIfAborted();
+    pending.delete(index);
+    schedule();
+    if (result !== undefined) yield result;
   }
 }
 
@@ -760,6 +806,17 @@ export async function loadBundle(
   options: LoadOptions = {},
 ): Promise<Bundle> {
   const root = path.resolve(rootInput instanceof URL ? fileURLToPath(rootInput) : rootInput);
+  const readConcurrency = options.readConcurrency ?? DEFAULT_READ_CONCURRENCY;
+  if (
+    !Number.isSafeInteger(readConcurrency) ||
+    readConcurrency < 1 ||
+    readConcurrency > MAX_READ_CONCURRENCY
+  ) {
+    throw new OkfParserError(
+      "OKF_READ_CONCURRENCY",
+      `read concurrency must be an integer from 1 through ${MAX_READ_CONCURRENCY}`,
+    );
+  }
   const paths = await discoverMarkdown(root, options);
   const knownPaths = new Set(paths.map((item) => path.resolve(item)));
   const concepts: ConceptRecord[] = [];
@@ -767,21 +824,26 @@ export async function loadBundle(
   const links: LinkRecord[] = [];
   const diagnostics: Diagnostic[] = [];
 
-  for (const filePath of paths) {
+  for await (const loaded of readUtf8Ordered(paths, readConcurrency, options.signal)) {
     options.signal?.throwIfAborted();
+    const { filePath } = loaded;
     const relative = toPosix(path.relative(root, filePath));
+    if ("error" in loaded) {
+      diagnostics.push(
+        diagnostic(
+          isReservedDocument(filePath) ? "OKF003" : "OKF001",
+          "error",
+          relative,
+          messageOf(loaded.error),
+        ),
+      );
+      continue;
+    }
     if (isReservedDocument(filePath)) {
-      let text: string;
-      try {
-        text = await readUtf8(filePath);
-      } catch (error) {
-        diagnostics.push(diagnostic("OKF003", "error", relative, messageOf(error)));
-        continue;
-      }
       const [body, reservedDiagnostics] =
         path.basename(filePath) === "index.md"
-          ? validateIndex(root, filePath, text)
-          : validateLog(root, filePath, text);
+          ? validateIndex(root, filePath, loaded.text)
+          : validateLog(root, filePath, loaded.text);
       diagnostics.push(...reservedDiagnostics);
       reserved.push(
         Object.freeze({
@@ -795,7 +857,7 @@ export async function loadBundle(
 
     let parsed: ParsedDocument;
     try {
-      parsed = await parseDocument(filePath);
+      parsed = parseDocumentContent(loaded.text, filePath);
     } catch (error) {
       diagnostics.push(diagnostic("OKF001", "error", relative, messageOf(error)));
       continue;
