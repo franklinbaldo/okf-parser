@@ -20,11 +20,12 @@ def replace(path: str, old: str, new: str, *, count: int = 1) -> None:
     write(path, text.replace(old, new, count))
 
 
-# Keep one runtime type alias for Cyclopts/FastMCP schema generation.
+# Keep one tiny runtime alias local to the public CLI/FastMCP schema.
 replace(
     "src/okf_parser/cli.py",
-    "from okf_parser.duckdb import BundleExportError\n",
-    "from okf_parser.bundle_import import ImportConflictPolicy\nfrom okf_parser.duckdb import BundleExportError\n",
+    'type CliSchemaFormat = Annotated[SchemaFormat, Parameter(name="format")]\n',
+    'type CliSchemaFormat = Annotated[SchemaFormat, Parameter(name="format")]\n'
+    'type ImportConflictPolicy = Literal["skip", "verify-identical"]\n',
 )
 replace(
     "src/okf_parser/cli.py",
