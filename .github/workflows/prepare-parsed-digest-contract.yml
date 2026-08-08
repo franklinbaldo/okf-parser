@@ -24,7 +24,32 @@ jobs:
         with:
           node-version: '24'
       - name: Apply contract correction
-        run: python scripts/prepare_parsed_digest_contract.py
+        run: |
+          python scripts/prepare_parsed_digest_contract.py
+          python - <<'PY'
+          from pathlib import Path
+
+          core = Path('typescript/src/core.ts')
+          text = core.read_text(encoding='utf-8')
+          old = '''  const properties = Object.keys(value).sort();
+          return `{${properties
+            .map((property) => `${jcsString(property)}:${canonicalJson(value[property] ?? null)}`)
+            .join(",")}}`;
+          '''
+          new = '''  const record = value as FrontmatterObject;
+          const properties = Object.keys(record).sort();
+          return `{${properties
+            .map((property) => `${jcsString(property)}:${canonicalJson(record[property] ?? null)}`)
+            .join(",")}}`;
+          '''
+          if old not in text:
+              raise SystemExit('canonicalJson narrowing block not found')
+          core.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          mcp = Path('typescript/src/mcp.ts')
+          text = mcp.read_text(encoding='utf-8')
+          mcp.write_text(text.replace('revisions', 'digests'), encoding='utf-8')
+          PY
       - name: Install locked dependencies
         run: |
           set -euo pipefail
