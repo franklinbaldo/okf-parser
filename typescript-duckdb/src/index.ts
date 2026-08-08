@@ -1,3 +1,11 @@
+export {
+  DeclaredSchemaError,
+  compileDeclaredTypeContracts,
+  exportDeclaredJsonSchema,
+  loadDeclaredTypes,
+} from "./declared.js";
+export type { DeclaredSchemaOptions } from "./declared.js";
+
 import path from "node:path";
 
 import {
