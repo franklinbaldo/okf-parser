@@ -42,11 +42,11 @@ test("materializes ordinary queryable tables", async () => {
     conformant: true,
     markdown_count: 2,
     concept_count: 2,
-    link_count: 2,
+    link_count: 1,
     diagnostic_count: 0,
   });
   await expect(count(connection, "okf.concepts")).resolves.toBe(2);
-  await expect(count(connection, "okf.links")).resolves.toBe(2);
+  await expect(count(connection, "okf.links")).resolves.toBe(1);
   await expect(count(connection, "okf.reserved")).resolves.toBe(0);
   await expect(count(connection, "okf.diagnostics")).resolves.toBe(0);
 });
