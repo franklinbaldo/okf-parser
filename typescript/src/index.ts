@@ -36,6 +36,12 @@ export type {
   ReservedRecord,
   Severity,
 } from "./core.js";
+export { ingestDocuments } from "./ingestion.js";
+export type {
+  DocumentEnvelope,
+  IngestionCapability,
+  IngestionOptions,
+} from "./ingestion.js";
 export {
   formatMarkdown,
   formatPath,
@@ -94,6 +100,7 @@ export const capabilityManifest = Object.freeze({
     check: "stable",
     inventory: "stable",
     graph: "stable",
+    ingestion: "experimental",
     schema_json: "stable",
     schema_zod: "stable",
     format: "stable",
