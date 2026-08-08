@@ -411,12 +411,12 @@ export function conceptId(bundleRoot: string, filePath: string): string {
   return relative.slice(0, relative.length - path.extname(relative).length);
 }
 
-interface MarkdownFacts {
+export interface MarkdownFacts {
   readonly links: readonly string[];
   readonly headings: readonly (readonly [number, string])[];
 }
 
-function markdownFacts(body: string): MarkdownFacts {
+export function markdownFacts(body: string): MarkdownFacts {
   const links: string[] = [];
   const headings: Array<readonly [number, string]> = [];
   const tokens = markdown.parse(body, {});
