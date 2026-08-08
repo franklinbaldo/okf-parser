@@ -87,18 +87,17 @@ def test_networkx_graph_uses_the_same_relations(tmp_path: Path) -> None:
     assert {(source, target) for source, target, _key in graph.edges} == {("a", "b")}
 
 
-def test_frontmatter_links_are_relations_with_field_origin(tmp_path: Path) -> None:
+def test_frontmatter_markdown_paths_remain_metadata_not_relations(tmp_path: Path) -> None:
     _write(
         tmp_path / "a.md",
-        "---\ntype: Node\nrelated:\n  - /b.md\n---\n",
+        "---\ntype: Node\nsource_path: source/SKILL.md\nmetadata:\n  related:\n    - /b.md\n---\n",
     )
     _write(tmp_path / "b.md", "---\ntype: Node\n---\n")
 
     bundle = load_bundle(tmp_path)
-    [link] = bundle.links.execute().to_dict(orient="records")
 
-    assert link["target_id"] == "b"
-    assert link["origin"] == "frontmatter.related[0]"
+    assert bundle.links.count().execute() == 0
+    assert bundle.validate() == []
 
 
 def test_link_to_reserved_index_does_not_create_nan_graph_node(tmp_path: Path) -> None:

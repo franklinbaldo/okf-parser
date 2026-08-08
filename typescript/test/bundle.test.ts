@@ -36,9 +36,10 @@ test("validates, inventories, and projects the graph", async () => {
   expect(await inventoryBundle(root)).toMatchObject({
     types: [{ concept_type: "Reference", concept_count: 2 }],
   });
+  // `related: two.md` is producer metadata; only [Two](two.md) is a relation.
   expect(await graphBundle(root)).toMatchObject({
     nodes: 2,
-    edges: 2,
+    edges: 1,
     weakly_connected_components: 1,
     strongly_connected_components: 2,
     directed_acyclic: true,

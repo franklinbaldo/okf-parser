@@ -19,7 +19,6 @@ from okf_parser.models import (
     Severity,
     ValidationReport,
     Violation,
-    YamlValue,
 )
 from okf_parser.parser import (
     DocumentParseError,
@@ -28,7 +27,6 @@ from okf_parser.parser import (
     is_reserved_document,
     iter_headings,
     iter_markdown_links,
-    looks_like_frontmatter_link,
     parse_document,
     resolve_local_target,
     split_optional_frontmatter,
@@ -175,7 +173,6 @@ def _load_concept(
     doc_id = concept_id(root, path)
     links: list[LinkRecord] = []
     raw_links = [(target, "body") for target in iter_markdown_links(parsed.body)]
-    raw_links.extend(_iter_frontmatter_links(parsed.frontmatter))
     for raw_target, origin in raw_links:
         resolved = resolve_local_target(root, path, raw_target)
         if resolved is None or not has_markdown_suffix(raw_target):
@@ -214,32 +211,6 @@ def _load_concept(
         body=parsed.body,
     )
     return record, links, diagnostics
-
-
-def _iter_frontmatter_links(
-    value: YamlValue,
-    field_path: str = "frontmatter",
-) -> list[tuple[str, str]]:
-    """Find local Markdown references nested in producer-defined frontmatter.
-
-    The frontmatter has already been validated, so the structure is a finite
-    tree: a cyclic YAML anchor is rejected before this walk ever runs.
-    """
-    if isinstance(value, dict):
-        return [
-            item
-            for key, child in value.items()
-            for item in _iter_frontmatter_links(child, f"{field_path}.{key}")
-        ]
-    if isinstance(value, list):
-        return [
-            item
-            for index, child in enumerate(value)
-            for item in _iter_frontmatter_links(child, f"{field_path}[{index}]")
-        ]
-    if isinstance(value, str) and looks_like_frontmatter_link(value):
-        return [(value, field_path)]
-    return []
 
 
 def _validate_index(root: Path, path: Path, text: str) -> tuple[str, list[Violation]]:

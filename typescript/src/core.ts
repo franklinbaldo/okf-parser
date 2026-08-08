@@ -598,23 +598,6 @@ export async function discoverMarkdown(
   return Object.freeze(output.sort((left, right) => left.localeCompare(right, "en")));
 }
 
-function frontmatterLinks(
-  value: FrontmatterValue,
-  fieldPath = "frontmatter",
-): readonly (readonly [string, string])[] {
-  if (Array.isArray(value)) {
-    return value.flatMap((child, index) => frontmatterLinks(child, `${fieldPath}[${index}]`));
-  }
-  if (value !== null && typeof value === "object") {
-    return Object.entries(value).flatMap(([key, child]) =>
-      frontmatterLinks(child, `${fieldPath}.${key}`),
-    );
-  }
-  return typeof value === "string" && looksLikeFrontmatterLink(value)
-    ? [[value, fieldPath] as const]
-    : [];
-}
-
 function diagnostic(
   code: string,
   severity: Severity,
@@ -762,7 +745,6 @@ export async function loadBundle(
       target,
       "body",
     ]);
-    rawLinks.push(...frontmatterLinks(parsed.frontmatter));
     for (const [rawTarget, origin] of rawLinks) {
       const resolved = resolveLocalTarget(root, filePath, rawTarget);
       if (resolved === null || !hasMarkdownSuffix(rawTarget)) continue;

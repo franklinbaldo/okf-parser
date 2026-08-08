@@ -27,7 +27,7 @@ def test_attach_okf_materializes_queryable_tables(tmp_path: Path) -> None:
 
     assert result["conformant"]
     assert connection.sql("SELECT count(*) FROM okf.concepts").fetchone() == (2,)
-    assert connection.sql("SELECT count(*) FROM okf.links").fetchone() == (2,)
+    assert connection.sql("SELECT count(*) FROM okf.links").fetchone() == (1,)
     assert connection.sql("SELECT count(*) FROM okf.diagnostics").fetchone() == (0,)
 
 
