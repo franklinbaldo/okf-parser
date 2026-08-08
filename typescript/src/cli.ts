@@ -14,7 +14,7 @@ import {
 
 const USAGE = `Usage:
   okf-parser-ts check PATH [--exclude PATTERN ...] [--require-spec TEMPLATE] [--normative-spec] [--classify]
-  okf-parser-ts inventory PATH [--exclude PATTERN ...] [--revisions]
+  okf-parser-ts inventory PATH [--exclude PATTERN ...] [--digests]
   okf-parser-ts graph PATH [--exclude PATTERN ...]
   okf-parser-ts schema PATH [--format json|zod] [--infer-types] [--cast FIELD=TYPE ...]
   okf-parser-ts format PATH [--write] [--exclude PATTERN ...]
@@ -24,7 +24,7 @@ Options:
   --require-spec T    Require a specification document per type, e.g. ".okf/specs/{slug}.md"
   --normative-spec    Report a missing specification document as an error
   --classify          Explain concept/reserved/ignored/invalid bundle membership
-  --revisions         Include deterministic source/revision identity in inventory
+  --digests         Include deterministic source/parsed content digests in inventory
   --infer-types       Infer scalar types from all observed values
   --cast FIELD=TYPE   Apply one strict explicit scalar cast (repeatable)
   --format FORMAT     Schema format: json or zod
@@ -47,7 +47,7 @@ async function main(argv: readonly string[]): Promise<number> {
       "require-spec": { type: "string" },
       "normative-spec": { type: "boolean", default: false },
       classify: { type: "boolean", default: false },
-      revisions: { type: "boolean", default: false },
+      digests: { type: "boolean", default: false },
       "infer-types": { type: "boolean", default: false },
       cast: { type: "string", multiple: true, default: [] },
       format: { type: "string", default: "json" },
@@ -77,7 +77,7 @@ async function main(argv: readonly string[]): Promise<number> {
     return report.conformant ? 0 : 1;
   }
   if (command === "inventory") {
-    writeJson(await inventoryBundle(root, { ...common, revisions: parsed.values.revisions }));
+    writeJson(await inventoryBundle(root, { ...common, digests: parsed.values.digests }));
     return 0;
   }
   if (command === "graph") {

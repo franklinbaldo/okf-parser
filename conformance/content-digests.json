@@ -1,0 +1,54 @@
+{
+  "algorithm": "okf-parsed-v1-jcs-sha256",
+  "cases": [
+    {
+      "name": "canonical",
+      "source": "---\ntype: Note\ntitle: Olá\n---\nBody\n",
+      "source_digest": "sha256:6ebd9feb42e363e7c571bca818c4c9e7dc00dc3d8c89c1f6e19ef6e10da7032a",
+      "parsed_canonical": "[{\"title\":\"Olá\",\"type\":\"Note\"},\"Body\\n\"]",
+      "parsed_digest": "okf-parsed-v1-jcs-sha256:d2590de244a63fc0db7bc05a085ee532f6adca0f0214827471e84f69eaf5b8ee"
+    },
+    {
+      "name": "bom_crlf",
+      "source": "﻿---\r\ntype: Note\r\ntitle: Olá\r\n---\r\nBody\r\n",
+      "source_digest": "sha256:aefb0f5ecc26e14afc9bcfe2b229432da21896d036c8e0c5eabc358905e7d9b0",
+      "parsed_canonical": "[{\"title\":\"Olá\",\"type\":\"Note\"},\"Body\\n\"]",
+      "parsed_digest": "okf-parsed-v1-jcs-sha256:d2590de244a63fc0db7bc05a085ee532f6adca0f0214827471e84f69eaf5b8ee"
+    },
+    {
+      "name": "semantic_change",
+      "source": "---\ntype: Note\ntitle: Olá\n---\nChanged\n",
+      "source_digest": "sha256:aff09e66a693ccc5e094f78036028b24049f04a96d5360e782d5652046c9e62d",
+      "parsed_canonical": "[{\"title\":\"Olá\",\"type\":\"Note\"},\"Changed\\n\"]",
+      "parsed_digest": "okf-parsed-v1-jcs-sha256:0618c4d785692c19deca164c8884c825f507a0b659b83a6806edc8cedb716304"
+    },
+    {
+      "name": "unicode_keys",
+      "source": "---\ntype: Note\nz: one\nä: two\n---\nBody\n",
+      "source_digest": "sha256:8c8ccd6b6213a5b2faff9b5e1699a8f5cee9f0f3cc0e28bb58f2e6ff2ac3e526",
+      "parsed_canonical": "[{\"type\":\"Note\",\"z\":\"one\",\"ä\":\"two\"},\"Body\\n\"]",
+      "parsed_digest": "okf-parsed-v1-jcs-sha256:1eb63d85899aaf4002e10cbd579907e21ebd181f5ee941c62f1a2c258fd5755b"
+    },
+    {
+      "name": "integer_like_keys",
+      "source": "---\ntype: Note\n\"10\": a\n\"2\": b\n---\nBody\n",
+      "source_digest": "sha256:f64dd0296bb612ad918b920a83db3a63e81ad951bdc5ff7e8a71e4621d36a5cb",
+      "parsed_canonical": "[{\"10\":\"a\",\"2\":\"b\",\"type\":\"Note\"},\"Body\\n\"]",
+      "parsed_digest": "okf-parsed-v1-jcs-sha256:208cb352e18493377f215469361dcd672ea4da682fa1f86631fadaafbb0a22b9"
+    },
+    {
+      "name": "nested_keys",
+      "source": "---\ntype: Note\nnested:\n  \"10\": ten\n  \"2\": two\n  z: zee\n  ä: umlaut\n---\nBody\n",
+      "source_digest": "sha256:16a8ac973d2257583bafdc7296d717587e8cf38607fcb03d46623cf3283c6584",
+      "parsed_canonical": "[{\"nested\":{\"10\":\"ten\",\"2\":\"two\",\"z\":\"zee\",\"ä\":\"umlaut\"},\"type\":\"Note\"},\"Body\\n\"]",
+      "parsed_digest": "okf-parsed-v1-jcs-sha256:37e10623a6e781fca7650c9cfc11c6158bde9f7bde61780ffbce803f35f619a2"
+    },
+    {
+      "name": "utf16_order",
+      "source": "---\ntype: Note\n\"😀\": emoji\n\"דּ\": hebrew\n---\nBody\n",
+      "source_digest": "sha256:9987760eb37e98b5dfd5c79da5c338811933aff70e3c1e93aef8bf72e275f507",
+      "parsed_canonical": "[{\"type\":\"Note\",\"😀\":\"emoji\",\"דּ\":\"hebrew\"},\"Body\\n\"]",
+      "parsed_digest": "okf-parsed-v1-jcs-sha256:749e1a29b4e0cad36bb5f9e8e019f704941d8a4ed10acca05e7010f2583267a1"
+    }
+  ]
+}

@@ -93,17 +93,18 @@ MCP tools: `init_preview`; `init_write` with `--allow-write`.
 ## `inventory`
 
 ```bash
-uv run okf-parser inventory path/to/bundle [--exclude PATTERN]... [--revisions]
+uv run okf-parser inventory path/to/bundle [--exclude PATTERN]... [--digests]
 ```
 
-Counts concepts by producer-defined `type`. `--revisions` also returns one
-deterministic identity record per concept with `concept_id`, `path`,
-`source_digest`, and `revision_digest`. `source_digest` hashes exact authored
-UTF-8 source, while `revision_digest` uses the versioned parsed representation
-and normalizes physical newline/frontmatter-order differences. The digest
-prefixes identify their algorithms directly.
+Counts concepts by producer-defined `type`. `--digests` also returns one record
+per concept with `concept_id`, `path`, `source_digest`, and `parsed_digest`.
+`source_digest` hashes the exact valid UTF-8 source. `parsed_digest` fingerprints
+the parser's frontmatter/body value using the RFC 8785/JCS string/object rules
+and LF-normalized parsed body under the self-describing
+`okf-parsed-v1-jcs-sha256:` prefix. It is not a historical `Revision` id and it
+does not claim editorial/Markdown semantic equivalence.
 
-MCP tool: `inventory` with the same optional `revisions` argument.
+MCP tool: `inventory` with the same optional `digests` argument.
 
 ## `graph`
 

@@ -87,7 +87,7 @@ def check_bundle(
 
 
 def inventory_bundle(
-    path: str, exclude: Sequence[str] = (), *, revisions: bool = False
+    path: str, exclude: Sequence[str] = (), *, digests: bool = False
 ) -> dict[str, object]:
     """Count concepts by their producer-defined type."""
     bundle = load_bundle(Path(path), exclude)
@@ -99,9 +99,9 @@ def inventory_bundle(
         .to_dict(orient="records")
     )
     payload: dict[str, object] = {"root": str(bundle.root), "types": rows}
-    if revisions:
-        payload["revisions"] = (
-            bundle.concepts.select("concept_id", "path", "source_digest", "revision_digest")
+    if digests:
+        payload["digests"] = (
+            bundle.concepts.select("concept_id", "path", "source_digest", "parsed_digest")
             .order_by("path")
             .execute()
             .to_dict(orient="records")

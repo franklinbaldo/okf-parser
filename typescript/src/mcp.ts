@@ -24,7 +24,7 @@ const classifySchema = z
   .boolean()
   .optional()
   .describe("Explain concept, reserved, ignored, and invalid bundle membership");
-const revisionsSchema = z
+const digestsSchema = z
   .boolean()
   .optional()
   .describe("Include deterministic source and parsed-revision identity");
@@ -101,12 +101,12 @@ export function createMcpServer(): McpServer {
       inputSchema: z.object({
         path: pathSchema,
         exclude: excludeSchema,
-        revisions: revisionsSchema,
+        digests: digestsSchema,
       }),
     },
-    ({ path, exclude, revisions }) =>
+    ({ path, exclude, digests }) =>
       toolResult(() =>
-        inventoryBundle(path, { ...loadOptions(exclude), revisions: revisions ?? false }),
+        inventoryBundle(path, { ...loadOptions(exclude), digests: digests ?? false }),
       ),
   );
 

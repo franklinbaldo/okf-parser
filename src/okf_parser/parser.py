@@ -14,7 +14,7 @@ from okf_parser.digests import (
     normalize_newlines,
 )
 from okf_parser.digests import (
-    revision_digest as _revision_digest,
+    parsed_digest as _parsed_digest,
 )
 from okf_parser.digests import (
     source_digest as _source_digest,
@@ -137,7 +137,7 @@ def parse_document_text(path: Path, text: str) -> ParsedDocument:
         frontmatter=frontmatter,
         body=body,
         source_digest=source_identity,
-        revision_digest=_revision_digest(frontmatter, body),
+        parsed_digest=_parsed_digest(frontmatter, body),
     )
 
 

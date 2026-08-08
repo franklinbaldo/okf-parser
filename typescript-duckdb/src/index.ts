@@ -102,7 +102,7 @@ async function replaceConcepts(
     `CREATE TABLE ${table} (` +
       "concept_id VARCHAR NOT NULL, logical_key VARCHAR NOT NULL, path VARCHAR NOT NULL, " +
       "concept_type VARCHAR NOT NULL, title VARCHAR, description VARCHAR, " +
-      "source_digest VARCHAR NOT NULL, revision_digest VARCHAR NOT NULL, " +
+      "source_digest VARCHAR NOT NULL, parsed_digest VARCHAR NOT NULL, " +
       "frontmatter_json VARCHAR NOT NULL, body VARCHAR NOT NULL)",
   );
   const appender = await connection.createAppender("concepts", schema);
@@ -115,7 +115,7 @@ async function replaceConcepts(
       appendNullableVarchar(appender, row.title);
       appendNullableVarchar(appender, row.description);
       appender.appendVarchar(row.sourceDigest);
-      appender.appendVarchar(row.revisionDigest);
+      appender.appendVarchar(row.parsedDigest);
       appender.appendVarchar(row.frontmatterJson);
       appender.appendVarchar(row.body);
       appender.endRow();

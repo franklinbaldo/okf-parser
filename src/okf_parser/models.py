@@ -45,7 +45,7 @@ class ConceptRecord(BaseModel):
     title: str | None
     description: str | None
     source_digest: str
-    revision_digest: str
+    parsed_digest: str
     frontmatter_json: str
     body: str
 
@@ -81,7 +81,7 @@ class ParsedDocument(BaseModel):
     frontmatter: dict[str, YamlValue]
     body: str
     source_digest: str
-    revision_digest: str
+    parsed_digest: str
 
     @property
     def concept_type(self) -> str:

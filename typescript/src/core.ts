@@ -42,7 +42,7 @@ export interface ParsedDocument {
   readonly title: string | null;
   readonly description: string | null;
   readonly sourceDigest: string;
-  readonly revisionDigest: string;
+  readonly parsedDigest: string;
 }
 
 export interface ConceptRecord {
@@ -53,7 +53,7 @@ export interface ConceptRecord {
   readonly title: string | null;
   readonly description: string | null;
   readonly sourceDigest: string;
-  readonly revisionDigest: string;
+  readonly parsedDigest: string;
   readonly frontmatterJson: string;
   readonly body: string;
 }
@@ -116,14 +116,14 @@ export interface CheckReport {
 }
 
 export interface InventoryOptions extends LoadOptions {
-  readonly revisions?: boolean;
+  readonly digests?: boolean;
 }
 
-export interface RevisionRecord {
+export interface DigestRecord {
   readonly concept_id: string;
   readonly path: string;
   readonly source_digest: string;
-  readonly revision_digest: string;
+  readonly parsed_digest: string;
 }
 
 export interface InventoryReport {
@@ -132,7 +132,7 @@ export interface InventoryReport {
     readonly concept_type: string;
     readonly concept_count: number;
   }[];
-  readonly revisions?: readonly RevisionRecord[];
+  readonly digests?: readonly DigestRecord[];
 }
 
 export interface GraphReport {
@@ -297,16 +297,42 @@ function sourceDigest(content: string): string {
   return `sha256:${sha256(content)}`;
 }
 
-function revisionDigest(
+function assertJcsString(value: string): void {
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) {
+        throw new DocumentParseError("JCS strings must not contain lone UTF-16 surrogates");
+      }
+      index += 1;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      throw new DocumentParseError("JCS strings must not contain lone UTF-16 surrogates");
+    }
+  }
+}
+
+function jcsString(value: string): string {
+  assertJcsString(value);
+  return JSON.stringify(value);
+}
+
+function canonicalJson(value: FrontmatterValue): string {
+  if (value === null) return "null";
+  if (typeof value === "string") return jcsString(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const properties = Object.keys(value as FrontmatterObject).sort();
+  return `{${properties
+    .map((property) => `${jcsString(property)}:${canonicalJson((value as FrontmatterObject)[property] ?? null)}`)
+    .join(",")}}`;
+}
+
+function parsedDigest(
   frontmatter: Readonly<Record<string, FrontmatterValue>>,
   body: string,
 ): string {
-  const canonical = JSON.stringify({
-    body: normalizeNewlines(body),
-    frontmatter: stableFrontmatter(frontmatter),
-    version: 1,
-  });
-  return `okf-revision-v1-sha256:${sha256(canonical)}`;
+  const payload: FrontmatterValue = [frontmatter, normalizeNewlines(body)];
+  return `okf-parsed-v1-jcs-sha256:${sha256(canonicalJson(payload))}`;
 }
 
 function optionalText(frontmatter: Readonly<Record<string, FrontmatterValue>>, key: string): string | null {
@@ -343,7 +369,7 @@ export function parseDocumentContent(content: string, documentPath = "<memory>")
     title: optionalText(frontmatter, "title"),
     description: optionalText(frontmatter, "description"),
     sourceDigest: sourceIdentity,
-    revisionDigest: revisionDigest(frontmatter, match[2] ?? ""),
+    parsedDigest: parsedDigest(frontmatter, match[2] ?? ""),
   });
 }
 
@@ -829,7 +855,7 @@ export async function loadBundle(
         title: parsed.title,
         description: parsed.description,
         sourceDigest: parsed.sourceDigest,
-        revisionDigest: parsed.revisionDigest,
+        parsedDigest: parsed.parsedDigest,
         frontmatterJson: parsed.frontmatterJson,
         body: parsed.body,
       }),
@@ -923,8 +949,8 @@ export async function inventoryBundle(
   for (const concept of bundle.concepts) {
     counts.set(concept.conceptType, (counts.get(concept.conceptType) ?? 0) + 1);
   }
-  const revisions =
-    options.revisions === true
+  const digests =
+    options.digests === true
       ? Object.freeze(
           bundle.concepts
             .map((concept) =>
@@ -932,7 +958,7 @@ export async function inventoryBundle(
                 concept_id: concept.conceptId,
                 path: concept.path,
                 source_digest: concept.sourceDigest,
-                revision_digest: concept.revisionDigest,
+                parsed_digest: concept.parsedDigest,
               }),
             )
             .sort((left, right) => left.path.localeCompare(right.path, "en")),
@@ -945,7 +971,7 @@ export async function inventoryBundle(
         .sort(([left], [right]) => left.localeCompare(right, "en"))
         .map(([concept_type, concept_count]) => Object.freeze({ concept_type, concept_count })),
     ),
-    ...(revisions === undefined ? {} : { revisions }),
+    ...(digests === undefined ? {} : { digests }),
   });
 }
 
