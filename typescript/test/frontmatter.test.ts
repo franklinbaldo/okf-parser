@@ -30,7 +30,6 @@ test("rejects cyclic aliases instead of recursing forever", () => {
   ).toThrow(/cyclic YAML anchor/u);
 });
 
-
 test("linear splitter preserves CRLF bodies and ignores delimiter-like content", () => {
   const parsed = parseDocumentContent(
     "---\r\ntype: Reference\r\nnote: before --- after\r\n---\t \r\n# Body\r\n---\r\n",
