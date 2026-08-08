@@ -1,0 +1,28 @@
+name: Fix 0.22.0 applicator literal
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.event.pull_request.head.ref == 'feat/explain-bundle-classification-0.22.0'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - name: Fix the temporary applicator
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/fix_prepare_0_22.py
+          rm scripts/fix_prepare_0_22.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/prepare_0_22.py scripts/fix_prepare_0_22.py
+          git commit -m "ci: fix generated CLI fixture literal"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
