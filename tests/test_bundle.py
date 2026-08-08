@@ -66,6 +66,15 @@ def test_broken_link_is_advisory_not_nonconformant(tmp_path: Path) -> None:
     assert diagnostic.severity is Severity.WARNING
 
 
+def test_repeated_targets_preserve_each_authored_link(tmp_path: Path) -> None:
+    _write(tmp_path / "a.md", "---\ntype: Node\n---\n[B](b.md) and [B again](b.md)\n")
+    _write(tmp_path / "b.md", "---\ntype: Node\n---\n")
+
+    links = load_bundle(tmp_path).links.execute().to_dict(orient="records")
+
+    assert [link["target_id"] for link in links] == ["b", "b"]
+
+
 def test_link_cannot_escape_bundle(tmp_path: Path) -> None:
     _write(
         tmp_path / "source.md",

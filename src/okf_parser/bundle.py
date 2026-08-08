@@ -178,8 +178,11 @@ def _load_concept(
     doc_id = concept_id(root, path)
     links: list[LinkRecord] = []
     raw_links = [(target, "body") for target in markdown_facts(parsed.body).links]
+    resolved_targets: dict[str, Path | None] = {}
     for raw_target, origin in raw_links:
-        resolved = resolve_local_target(root, path, raw_target)
+        if raw_target not in resolved_targets:
+            resolved_targets[raw_target] = resolve_local_target(root, path, raw_target)
+        resolved = resolved_targets[raw_target]
         if resolved is None or not has_markdown_suffix(raw_target):
             continue
         exists = resolved in known_paths

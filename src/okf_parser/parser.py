@@ -24,18 +24,19 @@ _SCALAR_TAGS = (
     "tag:yaml.org,2002:float",
     "tag:yaml.org,2002:timestamp",
 )
+_BaseSafeLoader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
 
 
-class _StringScalarLoader(yaml.SafeLoader):
+class _StringScalarLoader(_BaseSafeLoader):
     """Preserve scalar spelling while retaining YAML mapping/list structure."""
 
 
-# Copy before filtering: mutating the inherited registry would change SafeLoader
+# Copy before filtering: mutating the inherited registry would change the base loader
 # process-wide. Remove only implicit scalar typing; null, merge keys and every
 # other structural resolver keep their SafeLoader behavior.
 _StringScalarLoader.yaml_implicit_resolvers = {
     key: [resolver for resolver in resolvers if resolver[0] not in _SCALAR_TAGS]
-    for key, resolvers in yaml.SafeLoader.yaml_implicit_resolvers.items()
+    for key, resolvers in _BaseSafeLoader.yaml_implicit_resolvers.items()
 }
 for _tag in _SCALAR_TAGS:
     _StringScalarLoader.add_constructor(
