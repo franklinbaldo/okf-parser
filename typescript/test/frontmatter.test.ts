@@ -29,3 +29,19 @@ test("rejects cyclic aliases instead of recursing forever", () => {
     parseDocumentContent("---\ntype: Reference\nself: &a\n  child: *a\n---\n", "cyclic.md"),
   ).toThrow(/cyclic YAML anchor/u);
 });
+
+
+test("linear splitter preserves CRLF bodies and ignores delimiter-like content", () => {
+  const parsed = parseDocumentContent(
+    "---\r\ntype: Reference\r\nnote: before --- after\r\n---\t \r\n# Body\r\n---\r\n",
+    "crlf.md",
+  );
+  expect(parsed.frontmatter.note).toBe("before --- after");
+  expect(parsed.body).toBe("# Body\r\n---\r\n");
+});
+
+test("frontmatter delimiter must be an isolated line", () => {
+  expect(() =>
+    parseDocumentContent("---\ntype: Reference\n--- nope\n# Body\n", "invalid.md"),
+  ).toThrow(/frontmatter delimited/u);
+});
