@@ -29,6 +29,22 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
+          digests = Path('src/okf_parser/digests.py')
+          text = digests.read_text(encoding='utf-8')
+          marker = '_PARSED_PREFIX = "okf-parsed-v1-jcs-sha256:"\n'
+          if marker not in text or '0xD800 <= ord(char) <= 0xDFFF' not in text:
+              raise SystemExit('Python surrogate markers not found')
+          text = text.replace(
+              marker,
+              marker + '_SURROGATE_MIN = 0xD800\n_SURROGATE_MAX = 0xDFFF\n',
+              1,
+          ).replace(
+              '0xD800 <= ord(char) <= 0xDFFF',
+              '_SURROGATE_MIN <= ord(char) <= _SURROGATE_MAX',
+              1,
+          )
+          digests.write_text(text, encoding='utf-8')
+
           core = Path('typescript/src/core.ts')
           text = core.read_text(encoding='utf-8')
           if 'Object.keys(value).sort()' not in text or 'value[property] ?? null' not in text:
