@@ -69,6 +69,8 @@ export {
 export type {
   CastKind,
   ContractNode,
+  DeclaredLogicalType,
+  DeclaredTypesByType,
   FieldContract,
   JsonSchema,
   ScalarKind,
