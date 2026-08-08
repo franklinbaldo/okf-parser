@@ -21,6 +21,7 @@ from okf_parser.spec_scaffold import scaffold_missing_declared_schemas, scaffold
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from okf_parser.bundle_import import ImportConflictPolicy
     from okf_parser.schema_contract import ZodImport
 
 
@@ -56,10 +57,17 @@ def import_bundle(  # each argument is an independent public CLI flag.
     id_column: str | None = None,
     write: bool = False,
     overwrite: bool = False,
+    on_conflict: ImportConflictPolicy = "skip",
 ) -> dict[str, object]:
     """Materialize every row of a DuckDB-readable source as one concept document."""
     return _import_bundle(
-        source, path, concept_type, id_column=id_column, write=write, overwrite=overwrite
+        source,
+        path,
+        concept_type,
+        id_column=id_column,
+        write=write,
+        overwrite=overwrite,
+        on_conflict=on_conflict,
     )
 
 
