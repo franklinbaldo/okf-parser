@@ -331,11 +331,10 @@ function nodeSchema(node: ContractNode): JsonSchema {
   };
 }
 
-export async function exportJsonSchema(
-  root: string | URL,
+export function exportBundleJsonSchema(
+  bundle: Bundle,
   options: SchemaOptions = {},
-): Promise<SchemaReport> {
-  const bundle = await loadBundle(root, options);
+): SchemaReport {
   const contracts = compileBundleTypeContracts(bundle, options);
   const schemas = Object.fromEntries(
     contracts.map((contract) => [
@@ -350,6 +349,14 @@ export async function exportJsonSchema(
     casts: Object.freeze([...(options.casts ?? [])]),
     schemas: Object.freeze(schemas),
   });
+}
+
+export async function exportJsonSchema(
+  root: string | URL,
+  options: SchemaOptions = {},
+): Promise<SchemaReport> {
+  const bundle = await loadBundle(root, options);
+  return exportBundleJsonSchema(bundle, options);
 }
 
 function scalarZod(kind: ScalarKind): string {
