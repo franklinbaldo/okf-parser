@@ -33,7 +33,6 @@ def test_frontmatter_value_may_contain_triple_dash(tmp_path: Path) -> None:
     assert parsed.body == "# Body\n"
 
 
-
 def test_linear_splitter_preserves_crlf_body_and_delimiter_like_content(tmp_path: Path) -> None:
     path = tmp_path / "concept.md"
     path.write_bytes(
