@@ -189,7 +189,7 @@ function compileValue(
     if (options.casts.has(fieldPath)) {
       throw new SchemaCastError(`cannot cast ${JSON.stringify(fieldPath)}: the field contains objects`);
     }
-    return compileObject(nonNull, fieldPath, options, conceptType);
+    return compileObject(nonNull, fieldPath, options);
   }
 
   if (nonNull.every(Array.isArray)) {
@@ -333,7 +333,7 @@ function declaredScalarSchema(declaredType: DeclaredLogicalType): JsonSchema {
   else if (declaredType.family === "integer") schema.type = "integer";
   else if (declaredType.family === "float" || declaredType.family === "decimal") {
     schema.type = "number";
-    if (declaredType.family === "decimal" && declaredType.scale !== undefined && declaredType.scale > 0) schema.multipleOf = 10 ** -declaredType.scale;
+    if (declaredType.family === "decimal" && declaredType.scale !== undefined && declaredType.scale > 0) schema.multipleOf = Number(`1e-${declaredType.scale}`);
   } else if (declaredType.family === "date") Object.assign(schema, { type: "string", format: "date" });
   else if (declaredType.family === "timestamp") Object.assign(schema, { type: "string", "x-okf-temporal-kind": "timestamp-without-time-zone" });
   else if (declaredType.family === "timestamptz") Object.assign(schema, { type: "string", format: "date-time" });
