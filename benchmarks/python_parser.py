@@ -154,9 +154,7 @@ def main() -> None:
     parser.add_argument("--read-concurrencies", default="32")
     args = parser.parse_args()
     sizes = [int(value) for value in args.sizes.split(",") if value]
-    read_concurrencies = [
-        int(value) for value in args.read_concurrencies.split(",") if value
-    ]
+    read_concurrencies = [int(value) for value in args.read_concurrencies.split(",") if value]
     if not read_concurrencies or any(value < 1 for value in read_concurrencies):
         parser.error("--read-concurrencies must contain positive integers")
 
@@ -167,8 +165,7 @@ def main() -> None:
         "body_paragraphs": args.body_paragraphs,
         "read_concurrencies": read_concurrencies,
         "results": [
-            _measure(size, args.body_paragraphs, args.rounds, read_concurrencies)
-            for size in sizes
+            _measure(size, args.body_paragraphs, args.rounds, read_concurrencies) for size in sizes
         ],
     }
     print(json.dumps(report, indent=2, sort_keys=True))  # noqa: T201
