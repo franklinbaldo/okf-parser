@@ -124,9 +124,9 @@ test("executes trusted RFC 0006 SQL and projects DuckDB catalog types", async ()
   });
 
   const report = await exportDeclaredJsonSchema(root, { specTemplate: "docs/types/{slug}.md" });
-  const properties = (report.schemas.Registro as { properties: Record<string, Record<string, unknown>> }).properties;
-  expect(properties.id_externo).toMatchObject({ type: "string", format: "uuid", "x-okf-duckdb-type": "UUID" });
-  expect(properties.registrado_em).toMatchObject({ type: "string", format: "date-time", "x-okf-duckdb-type": "TIMESTAMP WITH TIME ZONE" });
+  const properties = (report.schemas['Registro'] as { properties: Record<string, Record<string, unknown>> }).properties;
+  expect(properties['id_externo']).toMatchObject({ type: "string", format: "uuid", "x-okf-duckdb-type": "UUID" });
+  expect(properties['registrado_em']).toMatchObject({ type: "string", format: "date-time", "x-okf-duckdb-type": "TIMESTAMP WITH TIME ZONE" });
 });
 
 test("requires the RFC 0006 catalog post-condition", async () => {
