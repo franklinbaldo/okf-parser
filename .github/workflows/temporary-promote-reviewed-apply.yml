@@ -1,0 +1,69 @@
+name: Temporary promote reviewed apply
+
+on:
+  pull_request:
+    branches:
+      - feat/single-concept-edit-0.24.0
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  promote:
+    if: github.head_ref == 'feat/apply-reviewed-preview-token'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/apply-reviewed-preview-token
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Require release and preview-token contract
+        run: |
+          grep -F 'version = "0.24.1"' pyproject.toml
+          grep -F 'expected_preview_token' src/okf_parser/apply.py
+          grep -F 'okf-apply-preview-v1-sha256:' src/okf_parser/apply.py
+          test -f changelog/0.24.1.md
+      - name: Full validation
+        run: |
+          uv sync --frozen
+          uv run ruff check src tests
+          uv run ruff format --check src tests
+          uv run ty check src tests
+          uv run vulture src tests --min-confidence 100
+          uv run pytest -q
+          uv build
+          npm --prefix typescript ci
+          npm --prefix typescript test
+          npm --prefix typescript run build
+          npm --prefix typescript-duckdb ci
+          npm --prefix typescript-duckdb test
+          npm --prefix typescript-duckdb run build
+      - name: Rebuild one clean semantic commit
+        run: |
+          set -euo pipefail
+          git fetch origin feat/single-concept-edit-0.24.0
+          git reset --soft origin/feat/single-concept-edit-0.24.0
+          temporary=$(git ls-files '.github/workflows/temporary-*.yml' || true)
+          if [ -n "$temporary" ]; then
+            while IFS= read -r workflow; do
+              git rm -f --cached "$workflow"
+              rm -f "$workflow"
+            done <<< "$temporary"
+          fi
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'feat(apply): bind commit to reviewed preview candidate'
+          git push --force-with-lease origin HEAD:feat/apply-reviewed-preview-token
+      - name: Mark PR ready
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr ready "${{ github.event.pull_request.number }}" --repo "${{ github.repository }}"
