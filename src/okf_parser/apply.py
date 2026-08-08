@@ -24,11 +24,7 @@ ones, produced it.
 
 from __future__ import annotations
 
-import hashlib
-import os
 import re
-import shutil
-import tempfile
 from dataclasses import dataclass
 from io import StringIO
 from pathlib import Path
@@ -40,15 +36,7 @@ from ruamel.yaml import YAML
 
 from okf_parser.bundle import validate_path
 from okf_parser.declared_schema import DeclaredSchema, DeclaredSchemaError
-from okf_parser.discovery import IGNORED_DIRECTORIES, is_markdown_filename
-from okf_parser.exclusion import ExclusionRules
 from okf_parser.models import Severity
-from okf_parser.parser import (
-    DocumentParseError,
-    concept_id,
-    is_reserved_document,
-    parse_document_text,
-)
 from okf_parser.typed_tables import (
     TypedTableError,
     TypedTablePlan,
@@ -56,6 +44,14 @@ from okf_parser.typed_tables import (
     discover_declared_schemas,
     duckdb_identifier_key,
     field_input_value,
+)
+from okf_parser.write_support import (
+    ConceptSnapshot as _Concept,
+    RawDocument as _RawDocument,
+    WriteResult as ApplyResult,
+    WriteSupportError,
+    snapshot_bundle as _snapshot_bundle,
+    stage_validate_write as _stage_validate_write,
 )
 
 if TYPE_CHECKING:
@@ -81,69 +77,8 @@ class ApplyError(ValueError):
     """Raised when `--sql` is malformed or a script violates the v1 contract."""
 
 
-@dataclass(frozen=True, slots=True)
-class ApplyResult:
-    """The outcome of one `apply` invocation."""
-
-    changed_paths: tuple[str, ...] = ()
-    skipped_paths: tuple[str, ...] = ()
-    succeeded: bool = True
-    written: bool = False
-    validation: tuple[dict[str, object], ...] = ()
-    conflict_paths: tuple[str, ...] = ()
-    error: str | None = None
-
-    def to_dict(self) -> dict[str, object]:
-        """JSON-ready payload matching the CLI surface."""
-        payload: dict[str, object] = {
-            "changed_paths": list(self.changed_paths),
-            "skipped_paths": list(self.skipped_paths),
-            "succeeded": self.succeeded,
-            "written": self.written,
-            "validation": list(self.validation),
-            "conflict_paths": list(self.conflict_paths),
-        }
-        if self.error is not None:
-            payload["error"] = self.error
-        return payload
-
-
 def _quote_ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
-
-
-@dataclass(frozen=True, slots=True)
-class _RawDocument:
-    """A concept document's bytes, split for lossless round-tripping."""
-
-    bom: bytes
-    crlf: bool
-    frontmatter_text: str
-    body_text: str
-
-
-def _parse_raw(data: bytes) -> _RawDocument | None:
-    """Split already-read bytes for lossless round-tripping.
-
-    Deliberately takes bytes, not a path: every candidate this module writes
-    must be built from the same bytes the SQL diff was computed against
-    (captured once in `_snapshot_bundle`), never from a fresh read of the
-    real file made later in the pipeline - that second, later read is
-    exactly the gap a concurrent edit could hide in.
-    """
-    bom = b"\xef\xbb\xbf" if data.startswith(b"\xef\xbb\xbf") else b""
-    try:
-        text = data[len(bom) :].decode("utf-8")
-    except UnicodeDecodeError:
-        return None
-    crlf = "\r\n" in text
-    normalized = text.replace("\r\n", "\n")
-    match = _FRONTMATTER_RE.match(normalized)
-    if match is None:
-        return None
-    return _RawDocument(
-        bom=bom, crlf=crlf, frontmatter_text=match.group(1), body_text=match.group(2) or ""
-    )
 
 
 def _round_trips_losslessly(yaml: YAML, frontmatter_text: str) -> bool:
@@ -154,147 +89,6 @@ def _round_trips_losslessly(yaml: YAML, frontmatter_text: str) -> bool:
     except Exception:  # any load/dump failure means "cannot round-trip"
         return False
     return buffer.getvalue().rstrip("\n") == frontmatter_text.rstrip("\n")
-
-
-def _write_raw(path: Path, raw: _RawDocument, frontmatter_text: str) -> None:
-    text = "---\n" + frontmatter_text
-    if not text.endswith("\n"):
-        text += "\n"
-    text += "---\n" + raw.body_text
-    if raw.crlf:
-        text = text.replace("\n", "\r\n")
-    data = raw.bom + text.encode("utf-8")
-    tmp = path.with_name(f".{path.name}.okf-apply.tmp")
-    tmp.write_bytes(data)
-    tmp.replace(path)
-
-
-def _sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-@dataclass(frozen=True, slots=True)
-class _Concept:
-    path: Path
-    relative: str
-    concept_id: str
-    concept_type: str
-    frontmatter: dict[str, object]
-    body: str
-    content_hash: str
-    raw: _RawDocument
-
-
-def _parse_concept(root: Path, path: Path, raw: bytes) -> _Concept | None:
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return None
-    try:
-        parsed = parse_document_text(path, text)
-    except DocumentParseError:
-        return None
-    if not parsed.concept_type:
-        return None
-    raw_document = _parse_raw(raw)
-    if raw_document is None:
-        return None
-    return _Concept(
-        path=path,
-        relative=path.relative_to(root).as_posix(),
-        concept_id=concept_id(root, path),
-        concept_type=parsed.concept_type,
-        frontmatter=dict(parsed.frontmatter),
-        body=parsed.body,
-        content_hash=hashlib.sha256(raw).hexdigest(),
-        raw=raw_document,
-    )
-
-
-def _file_signature(path: Path) -> tuple[int, int]:
-    """(size, mtime_ns) for one file - a freshness baseline, or to bracket a read."""
-    stat = path.stat()
-    return (stat.st_size, stat.st_mtime_ns)
-
-
-def _prune_walk_directories(
-    directory: Path, directory_names: list[str], base: Path, rules: ExclusionRules, *, prunes: bool
-) -> None:
-    """Filter `directory_names` in place to the exact universe every bundle walk must agree on.
-
-    Shared by `_snapshot_bundle` (the baseline), `_snapshot_manifest` (the
-    write-time recheck), and `_build_candidate_tree` (the staged tree
-    `check` validates) - if any of the three pruned a different set of
-    directories, an excluded directory's files would appear in one walk's
-    universe but not another's, and `apply --write` would either miss a real
-    conflict or report a false one purely from directory-level exclusion.
-    """
-    directory_names[:] = [
-        name
-        for name in directory_names
-        if name not in IGNORED_DIRECTORIES
-        and not (directory / name).is_symlink()
-        and not (prunes and rules.excludes((base / name).as_posix(), is_dir=True))
-    ]
-
-
-@dataclass(frozen=True, slots=True)
-class _BundleSnapshot:
-    manifest: dict[str, tuple[int, int]]
-    concepts: list[_Concept]
-
-
-def _snapshot_bundle(root: Path, exclude: Sequence[str]) -> _BundleSnapshot:
-    """One coherent walk: every real file's freshness signature, concept bytes read once.
-
-    Reading a concept document's bytes and recording its manifest signature
-    in the very same visit - rather than as two separate filesystem passes
-    made minutes apart in wall-clock terms - closes (to the extent a normal
-    filesystem allows at all) the window where a concurrent edit between
-    "read for the SQL diff" and "record the freshness baseline" would let a
-    document be materialized against one version of its content while the
-    later write-time conflict check compares against a manifest that was
-    itself captured after the edit, and so never notices anything moved.
-    """
-    rules = ExclusionRules.read(root, exclude)
-    prunes = not rules.has_negation
-    manifest: dict[str, tuple[int, int]] = {}
-    concepts: list[_Concept] = []
-    for directory, directory_names, filenames in root.walk(follow_symlinks=False):
-        base = directory.relative_to(root)
-        _prune_walk_directories(directory, directory_names, base, rules, prunes=prunes)
-        for name in filenames:
-            source = directory / name
-            if source.is_symlink():
-                continue
-            posix = (base / name).as_posix()
-            is_concept_candidate = (
-                is_markdown_filename(name)
-                and not rules.excludes(posix)
-                and not is_reserved_document(source)
-            )
-            if not is_concept_candidate:
-                manifest[posix] = _file_signature(source)
-                continue
-            # stat both sides of the read, not just after it: a same-size
-            # replace landing between `read_bytes()` and a single trailing
-            # `stat()` would record (old bytes' length, new mtime) - a
-            # signature that happens to still match a same-size file at the
-            # final recheck, so the stale read is never caught. Requiring
-            # the two stats to agree means the recorded signature always
-            # truly corresponds to the bytes just read, not to whichever
-            # file existed at the moment of the second syscall.
-            before_stat = _file_signature(source)
-            raw = source.read_bytes()
-            after_stat = _file_signature(source)
-            if before_stat != after_stat:
-                msg = f"file changed while apply was reading it: {posix}"
-                raise ApplyError(msg)
-            manifest[posix] = after_stat
-            concept = _parse_concept(root, source, raw)
-            if concept is not None:
-                concepts.append(concept)
-    return _BundleSnapshot(manifest=manifest, concepts=concepts)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1164,7 +958,7 @@ def apply_bundle(  # each argument is an independent public CLI flag.
             con.raw_sql("SET TimeZone = 'UTC'")
         materialized = _materialize(con, concepts, declarations)
         outcome = _execute_script(con, materialized, alter_queries, update_query)
-    except (ApplyError, DeclaredSchemaError, TypedTableError) as exc:
+    except (ApplyError, DeclaredSchemaError, TypedTableError, WriteSupportError) as exc:
         return ApplyResult(succeeded=False, error=str(exc)).to_dict()
 
     if outcome.touched_type is None or not outcome.row_diffs:
@@ -1206,132 +1000,13 @@ def apply_bundle(  # each argument is an independent public CLI flag.
 
     touched_hashes = {rel: content_hashes[rel] for rel in candidates}
     return _stage_validate_write(
-        root, exclude, candidates, baseline_keys, changed_paths, touched_hashes, snapshot.manifest
+        root,
+        exclude,
+        candidates,
+        baseline_keys,
+        changed_paths,
+        touched_hashes,
+        snapshot.manifest,
+        conflict_error="the bundle changed since apply validated it",
+        temp_prefix="okf-apply-",
     )
-
-
-def _snapshot_manifest(root: Path, exclude: Sequence[str]) -> dict[str, tuple[int, int]]:
-    """Relative path -> (size, mtime_ns) for every real file `check` could see.
-
-    Pruned via the same `_prune_walk_directories` helper - and the same
-    `exclude` argument - `_snapshot_bundle` uses for the baseline: an
-    excluded directory must be absent from both walks' universes, or present
-    in both, never split between them, or a mismatch shows up as a false
-    conflict (or a missed real one) purely from directory-level exclusion.
-    Used only for the write-time recheck; the baseline comes from
-    `_snapshot_bundle`.
-    """
-    rules = ExclusionRules.read(root, exclude)
-    prunes = not rules.has_negation
-    manifest: dict[str, tuple[int, int]] = {}
-    for directory, directory_names, filenames in root.walk(follow_symlinks=False):
-        base = directory.relative_to(root)
-        _prune_walk_directories(directory, directory_names, base, rules, prunes=prunes)
-        for name in filenames:
-            source = directory / name
-            if source.is_symlink():
-                continue
-            manifest[(base / name).as_posix()] = _file_signature(source)
-    return manifest
-
-
-def _stage_validate_write(  # each argument is a distinct write-path input.
-    root: Path,
-    exclude: Sequence[str],
-    candidates: dict[str, tuple[_RawDocument, str, Path]],
-    baseline_keys: set[tuple[str, str, str]],
-    changed_paths: list[str],
-    touched_hashes: dict[str, str],
-    baseline_manifest: dict[str, tuple[int, int]],
-) -> dict[str, object]:
-    with tempfile.TemporaryDirectory(prefix="okf-apply-") as tmp:
-        candidate_root = Path(tmp) / "bundle"
-        candidate_root.mkdir()
-        try:
-            _build_candidate_tree(root, candidate_root, candidates, exclude)
-        except OSError as exc:
-            return ApplyResult(
-                succeeded=False, error=f"could not stage the candidate bundle: {exc}"
-            ).to_dict()
-
-        candidate_report = validate_path(candidate_root, exclude)
-        candidate_keys = {
-            (v.code, v.path, v.message)
-            for v in candidate_report.violations
-            if v.severity == Severity.ERROR
-        }
-        new_diagnostics = candidate_keys - baseline_keys
-        if new_diagnostics:
-            validation_payload: tuple[dict[str, object], ...] = tuple(
-                {"code": code, "path": p, "message": message}
-                for code, p, message in sorted(new_diagnostics)
-            )
-            return ApplyResult(
-                succeeded=False,
-                validation=validation_payload,
-                error="candidate bundle introduces new normative diagnostics",
-            ).to_dict()
-
-        # Re-check the whole manifest `check` saw, immediately before writing,
-        # not just the touched documents: an untouched file may have changed,
-        # and a file may have appeared or disappeared since validation ran.
-        current_manifest = _snapshot_manifest(root, exclude)
-        added_or_removed = set(baseline_manifest) ^ set(current_manifest)
-        stale_untouched = {
-            rel
-            for rel in baseline_manifest.keys() & current_manifest.keys() - candidates.keys()
-            if baseline_manifest[rel] != current_manifest[rel]
-        }
-        stale_touched = {
-            rel for rel, (_, _, real) in candidates.items() if _sha256(real) != touched_hashes[rel]
-        }
-        conflicts = added_or_removed | stale_untouched | stale_touched
-        if conflicts:
-            return ApplyResult(
-                succeeded=False,
-                conflict_paths=tuple(sorted(conflicts)),
-                error="the bundle changed since apply validated it",
-            ).to_dict()
-
-        for raw, frontmatter_text, real_path in candidates.values():
-            _write_raw(real_path, raw, frontmatter_text)
-
-    return ApplyResult(changed_paths=tuple(sorted(changed_paths)), written=True).to_dict()
-
-
-def _build_candidate_tree(
-    root: Path,
-    candidate_root: Path,
-    candidates: dict[str, tuple[_RawDocument, str, Path]],
-    exclude: Sequence[str],
-) -> None:
-    """Hardlink (copy-fallback) every real file `check` would see into a staging tree.
-
-    Pruned via the same `_prune_walk_directories` helper `_snapshot_bundle`
-    and `_snapshot_manifest` use, with the same `exclude` argument: an
-    excluded directory (``.okfignore``, `--exclude`) is skipped exactly the
-    same way here as in the manifest walks, not just the fixed
-    `IGNORED_DIRECTORIES` (``.git``, ``.venv``, caches) - keeping the staged
-    tree's universe identical to what both manifests already agree on.
-    """
-    rules = ExclusionRules.read(root, exclude)
-    prunes = not rules.has_negation
-    for directory, directory_names, filenames in root.walk(follow_symlinks=False):
-        base = directory.relative_to(root)
-        _prune_walk_directories(directory, directory_names, base, rules, prunes=prunes)
-        for name in filenames:
-            source = directory / name
-            if source.is_symlink():
-                continue
-            relative = base / name
-            destination = candidate_root / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            posix = relative.as_posix()
-            if posix in candidates:
-                raw, frontmatter_text, _ = candidates[posix]
-                _write_raw(destination, raw, frontmatter_text)
-                continue
-            try:
-                os.link(source, destination)
-            except OSError:
-                shutil.copy2(source, destination)
