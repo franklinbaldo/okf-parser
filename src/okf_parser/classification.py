@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from okf_parser.bundle import load_bundle
 from okf_parser.discovery import discover_markdown
+from okf_parser.parser import is_reserved_document
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from pathlib import Path
 
 
 def classify_path(path: Path, exclude: Sequence[str] = ()) -> dict[str, list[str]]:
@@ -34,13 +35,14 @@ def classify_path(path: Path, exclude: Sequence[str] = ()) -> dict[str, list[str
         and isinstance(row["concept_type"], str)
         and row["concept_type"]
     }
-    reserved = {
+    recorded_reserved = {
         row["path"]
         for row in bundle.reserved.select("path").execute().to_dict(orient="records")
         if isinstance(row["path"], str)
     }
     diagnostic_paths = {item.path for item in bundle.diagnostics}
-    active = all_concepts | reserved | diagnostic_paths
+    active = all_concepts | recorded_reserved | diagnostic_paths
+    reserved = {relative for relative in active if is_reserved_document(Path(relative))}
 
     candidates = {
         candidate.relative_to(root).as_posix() for candidate in discover_markdown(root)
