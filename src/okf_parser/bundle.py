@@ -22,11 +22,11 @@ from okf_parser.models import (
 )
 from okf_parser.parser import (
     DocumentParseError,
+    MarkdownFacts,
     concept_id,
     has_markdown_suffix,
     is_reserved_document,
-    iter_headings,
-    iter_markdown_links,
+    markdown_facts,
     parse_document,
     resolve_local_target,
     split_optional_frontmatter,
@@ -177,7 +177,7 @@ def _load_concept(
 
     doc_id = concept_id(root, path)
     links: list[LinkRecord] = []
-    raw_links = [(target, "body") for target in iter_markdown_links(parsed.body)]
+    raw_links = [(target, "body") for target in markdown_facts(parsed.body).links]
     for raw_target, origin in raw_links:
         resolved = resolve_local_target(root, path, raw_target)
         if resolved is None or not has_markdown_suffix(raw_target):
@@ -247,7 +247,8 @@ def _validate_index(root: Path, path: Path, text: str) -> tuple[str, list[Violat
                     message="root index.md frontmatter may contain only okf_version",
                 )
             )
-    if not _has_title(body):
+    facts = markdown_facts(body)
+    if not _has_title(facts):
         diagnostics.append(
             Violation(
                 code="OKF005",
@@ -259,13 +260,9 @@ def _validate_index(root: Path, path: Path, text: str) -> tuple[str, list[Violat
     return body, diagnostics
 
 
-def _has_title(body: str) -> bool:
-    """Whether the body opens a level-one section with actual text.
-
-    CommonMark emits a heading token for a bare ``#``, so the level alone is
-    not enough to satisfy the reserved-document title rules.
-    """
-    return any(level == _TITLE_LEVEL and text.strip() for level, text in iter_headings(body))
+def _has_title(facts: MarkdownFacts) -> bool:
+    """Whether parsed Markdown opens a level-one section with actual text."""
+    return any(level == _TITLE_LEVEL and text.strip() for level, text in facts.headings)
 
 
 def _validate_log(root: Path, path: Path, text: str) -> tuple[str, list[Violation]]:
@@ -286,7 +283,8 @@ def _validate_log(root: Path, path: Path, text: str) -> tuple[str, list[Violatio
                 message="log.md must not contain frontmatter",
             )
         )
-    if not _has_title(body):
+    facts = markdown_facts(body)
+    if not _has_title(facts):
         diagnostics.append(
             Violation(
                 code="OKF007",
@@ -297,7 +295,7 @@ def _validate_log(root: Path, path: Path, text: str) -> tuple[str, list[Violatio
         )
 
     parsed_dates: list[date] = []
-    for level, heading in iter_headings(body):
+    for level, heading in facts.headings:
         if level != _DATE_LEVEL:
             continue
         if _ISO_DATE_RE.fullmatch(heading) is None:
