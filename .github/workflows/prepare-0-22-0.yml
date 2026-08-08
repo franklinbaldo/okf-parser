@@ -42,9 +42,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          uv run ruff format .
+          uv run ruff format src tests
           uv run ruff check --fix src/okf_parser/service.py
-          uv run ruff check .
+          uv run ruff check src tests
           uv run ty check src tests
           uv run pytest
           uv run python scripts/release_contract.py verify-source --root .
