@@ -8,6 +8,10 @@ demonstrate the script is not restricted to plain `CREATE TABLE` DDL.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from typing import TYPE_CHECKING
+
 import pytest
 
 from okf_parser.declared_schema import (
@@ -16,7 +20,24 @@ from okf_parser.declared_schema import (
     parse_declared_schema,
 )
 
+if TYPE_CHECKING:
+    from okf_parser.duckdb_types import DuckDBLogicalType
+
 TEMPLATE = "docs/types/{slug}.md"
+
+
+def _logical_payload(logical_type: DuckDBLogicalType) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "sql": logical_type.sql,
+        "family": logical_type.family,
+    }
+    if logical_type.precision is not None:
+        payload["precision"] = logical_type.precision
+    if logical_type.scale is not None:
+        payload["scale"] = logical_type.scale
+    if logical_type.element is not None:
+        payload["element"] = _logical_payload(logical_type.element)
+    return payload
 
 
 def test_declared_schema_relative_path_swaps_the_spec_extension() -> None:
@@ -44,6 +65,23 @@ def test_parse_declared_schema_reads_columns_and_comments() -> None:
     assert schema.table_comment == "Rotina administrativa."
     assert schema.column_comments == {"registrado_em": "Momento do registro."}
     assert set(schema.columns) == {"id", "registrado_em", "custo"}
+
+
+def test_shared_declared_parity_fixture_matches_language_neutral_expectation() -> None:
+    fixture_root = Path(__file__).parent / "fixtures"
+    sql = (fixture_root / "declared_parity.schema.sql").read_text(encoding="utf-8")
+    expected = json.loads(
+        (fixture_root / "declared_parity.expected.json").read_text(encoding="utf-8")
+    )
+
+    schema = parse_declared_schema(sql, "Parity")
+
+    assert schema.table_name == expected["table_name"]
+    assert schema.table_comment == expected["table_comment"]
+    assert schema.column_comments == expected["column_comments"]
+    assert {name: _logical_payload(value) for name, value in schema.columns.items()} == expected[
+        "columns"
+    ]
 
 
 def test_parse_declared_schema_handles_a_quoted_table_name_containing_whitespace() -> None:
