@@ -45,9 +45,21 @@ test("returns structured validation and schema results", async () => {
   const client = await connectedClient();
   const root = await bundle();
 
-  const check = await client.callTool({ name: "check", arguments: { path: root } });
+  const check = await client.callTool({
+    name: "check",
+    arguments: { path: root, classify: true },
+  });
   expect(check.isError).not.toBe(true);
-  expect(check.structuredContent).toMatchObject({ conformant: true, concept_count: 1 });
+  expect(check.structuredContent).toMatchObject({
+    conformant: true,
+    concept_count: 1,
+    classification: {
+      concepts: ["sample.md"],
+      reserved: [],
+      ignored: [],
+      invalid_or_untyped: [],
+    },
+  });
 
   const schema = await client.callTool({
     name: "schema",

@@ -71,9 +71,16 @@ def check(
     exclude: RepeatableStrings = None,
     require_spec: str | None = None,
     normative_spec: bool = False,
+    classify: bool = False,
 ) -> CliResult[JsonPayload]:
     """Validate every Markdown file recursively as OKF v0.2."""
-    payload = check_bundle(path, exclude or (), require_spec, normative_spec=normative_spec)
+    payload = check_bundle(
+        path,
+        exclude or (),
+        require_spec,
+        normative_spec=normative_spec,
+        classify=classify,
+    )
     return CliResult(payload, 0 if payload["conformant"] else 1)
 
 
@@ -262,9 +269,16 @@ def mcp_check(
     require_spec: str | None = None,
     *,
     normative_spec: bool = False,
+    classify: bool = False,
 ) -> dict[str, object]:
     """Validate every Markdown file recursively as OKF v0.2."""
-    return check_bundle(path, exclude or (), require_spec, normative_spec=normative_spec)
+    return check_bundle(
+        path,
+        exclude or (),
+        require_spec,
+        normative_spec=normative_spec,
+        classify=classify,
+    )
 
 
 def mcp_inventory(path: str, exclude: RepeatableStrings = None) -> dict[str, object]:

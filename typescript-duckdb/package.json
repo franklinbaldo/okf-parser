@@ -1,6 +1,6 @@
 {
   "name": "okf-parser-duckdb",
-  "version": "0.21.0",
+  "version": "0.22.0",
   "description": "DuckDB materialization adapter for the TypeScript okf-parser package",
   "type": "module",
   "license": "MIT",
@@ -33,7 +33,7 @@
     "@duckdb/node-api": "1.5.5-r.1"
   },
   "peerDependencies": {
-    "okf-parser": "^0.21.0"
+    "okf-parser": "^0.22.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
