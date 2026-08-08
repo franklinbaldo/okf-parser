@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -6,6 +6,7 @@ import { performance } from "node:perf_hooks";
 import {
   iterHeadings,
   iterMarkdownLinks,
+  discoverMarkdown,
   loadBundle,
   parseDocumentContent,
 } from "../typescript/dist/index.js";
@@ -101,14 +102,27 @@ async function measure(size, bodyParagraphs, rounds) {
         writeFile(path.join(root, `concept-${index}.md`), source, "utf8"),
       ),
     );
+    const paths = await discoverMarkdown(root);
+    const discoveryNs = await medianAsyncNs(() => discoverMarkdown(root), rounds);
+    const sequentialReadNs = await medianAsyncNs(async () => {
+      for (const filePath of paths) await readFile(filePath);
+    }, rounds);
+    const concurrentReadNs = await medianAsyncNs(
+      () => Promise.all(paths.map((filePath) => readFile(filePath))),
+      rounds,
+    );
     const loadNs = await medianAsyncNs(() => loadBundle(root), rounds);
     return {
       documents: size,
+      markdown_files: paths.length,
       source_bytes: documents.reduce((total, source) => total + Buffer.byteLength(source), 0),
       frontmatter_split_ns_per_document: Math.trunc(splitNs / size),
       document_parse_ns_per_document: Math.trunc(parseNs / size),
       markdown_links_ns_per_document: Math.trunc(linksNs / size),
       markdown_headings_ns_per_document: Math.trunc(headingsNs / size),
+      filesystem_discovery_ns_per_file: Math.trunc(discoveryNs / paths.length),
+      filesystem_sequential_read_ns_per_file: Math.trunc(sequentialReadNs / paths.length),
+      filesystem_concurrent_read_ns_per_file: Math.trunc(concurrentReadNs / paths.length),
       bundle_load_ns_per_document: Math.trunc(loadNs / size),
       bundle_load_ms: Math.trunc(loadNs / 1_000_000),
     };

@@ -8,10 +8,13 @@ import platform
 import statistics
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from okf_parser.bundle import load_bundle
+from okf_parser.discovery import discover_markdown
+from okf_parser.exclusion import ExclusionRules
 from okf_parser.parser import (
     iter_headings,
     iter_markdown_links,
@@ -101,15 +104,34 @@ def _measure(size: int, body_paragraphs: int, rounds: int) -> dict[str, int]:
     with tempfile.TemporaryDirectory(prefix="okf-parser-benchmark-") as directory:
         root = Path(directory)
         _write_bundle(root, documents)
+        paths = discover_markdown(root, ExclusionRules.read(root))
+        discovery_ns = _median_ns(
+            lambda: discover_markdown(root, ExclusionRules.read(root)),
+            rounds,
+        )
+        sequential_read_ns = _median_ns(
+            lambda: [path.read_bytes() for path in paths],
+            rounds,
+        )
+        with ThreadPoolExecutor(max_workers=min(32, len(paths))) as executor:
+            concurrent_read_ns = _median_ns(
+                lambda: list(executor.map(Path.read_bytes, paths)),
+                rounds,
+            )
         load_ns = _median_ns(lambda: load_bundle(root), rounds)
 
+    markdown_files = len(paths)
     return {
         "documents": size,
+        "markdown_files": markdown_files,
         "source_bytes": sum(len(source.encode()) for source in documents),
         "frontmatter_split_ns_per_document": split_ns // size,
         "document_parse_ns_per_document": parse_ns // size,
         "markdown_links_ns_per_document": links_ns // size,
         "markdown_headings_ns_per_document": headings_ns // size,
+        "filesystem_discovery_ns_per_file": discovery_ns // markdown_files,
+        "filesystem_sequential_read_ns_per_file": sequential_read_ns // markdown_files,
+        "filesystem_concurrent_read_ns_per_file": concurrent_read_ns // markdown_files,
         "bundle_load_ns_per_document": load_ns // size,
         "bundle_load_ms": load_ns // 1_000_000,
     }

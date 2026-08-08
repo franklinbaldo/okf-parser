@@ -30,9 +30,15 @@ node benchmarks/typescript-parser.mjs \
 ```
 
 Each result reports nanoseconds per document for frontmatter boundary detection,
-full in-memory document parsing, Markdown link extraction, Markdown heading
-extraction and full filesystem bundle loading. Bundle loading also reports total
-milliseconds.
+full in-memory document parsing, Markdown link extraction and Markdown heading
+extraction. It also measures the many-small-files workload directly: recursive
+Markdown discovery, sequential reads, concurrent reads, and full filesystem
+bundle loading. Bundle loading also reports total milliseconds.
+
+The concurrent-read probe uses a reusable 32-worker thread pool in Python and
+one asynchronous `readFile` promise per path in TypeScript. It is diagnostic:
+the production loaders remain sequential, and the result shows whether a
+bounded batch reader is worth implementing before considering a Rust core.
 
 Results are diagnostic evidence, not a CI performance gate. Record the machine,
 operating system, filesystem and cold/warm-cache conditions whenever publishing
