@@ -1,0 +1,56 @@
+name: Prepare parsed digest contract
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    if: github.head_ref == 'feat/revision-digests-0.23.0'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/revision-digests-0.23.0
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          version: 0.11.21
+          python-version: '3.12'
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24'
+      - name: Apply contract correction
+        run: python scripts/prepare_parsed_digest_contract.py
+      - name: Install locked dependencies
+        run: |
+          set -euo pipefail
+          uv sync --frozen --all-groups
+          npm ci --prefix typescript
+          npm run build --prefix typescript
+          npm ci --prefix typescript-duckdb
+      - name: Validate full stack
+        run: |
+          set -euo pipefail
+          uv run ruff format src tests
+          uv run ruff check --fix src tests
+          uv run ruff check src tests
+          uv run ty check src tests
+          uv run pytest
+          uv run python scripts/release_contract.py verify-source --root .
+          npm run check --prefix typescript
+          npm test --prefix typescript
+          npm run check --prefix typescript-duckdb
+          npm test --prefix typescript-duckdb
+      - name: Publish corrected branch
+        run: |
+          set -euo pipefail
+          rm scripts/prepare_parsed_digest_contract.py .github/workflows/prepare-parsed-digest-contract.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix: define cross-language parsed digest contract'
+          git push origin HEAD:feat/revision-digests-0.23.0
