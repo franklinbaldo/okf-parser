@@ -121,7 +121,7 @@ jobs:
         run: uv build
 
       - name: Smoke-test the Python benchmark harness
-        run: uv run python benchmarks/python-parser.py --sizes 10 --rounds 1 > "$RUNNER_TEMP/python-benchmark.json"
+        run: uv run python benchmarks/python_parser.py --sizes 10 --rounds 1 > "$RUNNER_TEMP/python-benchmark.json"
 
   typescript-quality:
     name: TypeScript / Node ${{ matrix.node }}
