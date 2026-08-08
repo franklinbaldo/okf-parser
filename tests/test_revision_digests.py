@@ -3,13 +3,11 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, cast
+from pathlib import Path
+from typing import cast
 
 from okf_parser import load_bundle
 from okf_parser.parser import parse_document_text
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def _vectors() -> list[dict[str, str]]:
