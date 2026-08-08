@@ -13,7 +13,7 @@ import {
 } from "./index.js";
 
 const USAGE = `Usage:
-  okf-parser-ts check PATH [--exclude PATTERN ...] [--require-spec TEMPLATE] [--normative-spec]
+  okf-parser-ts check PATH [--exclude PATTERN ...] [--require-spec TEMPLATE] [--normative-spec] [--classify]
   okf-parser-ts inventory PATH [--exclude PATTERN ...]
   okf-parser-ts graph PATH [--exclude PATTERN ...]
   okf-parser-ts schema PATH [--format json|zod] [--infer-types] [--cast FIELD=TYPE ...]
@@ -23,6 +23,7 @@ Options:
   --exclude PATTERN   Exclude an anchored bundle-relative glob (repeatable)
   --require-spec T    Require a specification document per type, e.g. ".okf/specs/{slug}.md"
   --normative-spec    Report a missing specification document as an error
+  --classify          Explain concept/reserved/ignored/invalid bundle membership
   --infer-types       Infer scalar types from all observed values
   --cast FIELD=TYPE   Apply one strict explicit scalar cast (repeatable)
   --format FORMAT     Schema format: json or zod
@@ -44,6 +45,7 @@ async function main(argv: readonly string[]): Promise<number> {
       exclude: { type: "string", multiple: true, default: [] },
       "require-spec": { type: "string" },
       "normative-spec": { type: "boolean", default: false },
+      classify: { type: "boolean", default: false },
       "infer-types": { type: "boolean", default: false },
       cast: { type: "string", multiple: true, default: [] },
       format: { type: "string", default: "json" },
@@ -67,6 +69,7 @@ async function main(argv: readonly string[]): Promise<number> {
       ...common,
       ...(requireSpec === undefined ? {} : { requireSpec }),
       normativeSpec: parsed.values["normative-spec"],
+      classify: parsed.values.classify,
     });
     writeJson(report);
     return report.conformant ? 0 : 1;

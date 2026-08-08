@@ -24,9 +24,7 @@ def test_classification_explains_concepts_reserved_ignored_and_invalid(tmp_path:
     _write(tmp_path / ".claude" / "skills" / "hidden.md", "---\ntype: Note\n---\n")
     _write(tmp_path / ".agents" / "skills" / "hidden.md", "---\ntype: Note\n---\n")
     _write(tmp_path / "docs" / "excluded" / "hidden.md", "---\ntype: Note\n---\n")
-    (tmp_path / ".okfignore").write_text(
-        ".claude/\n.agents/\n/docs/excluded/\n", encoding="utf-8"
-    )
+    (tmp_path / ".okfignore").write_text(".claude/\n.agents/\n/docs/excluded/\n", encoding="utf-8")
 
     classification = classify_path(tmp_path)
 
@@ -42,7 +40,9 @@ def test_classification_explains_concepts_reserved_ignored_and_invalid(tmp_path:
     }
 
 
-def test_classification_honors_one_off_exclusions_without_reclassifying_core(tmp_path: Path) -> None:
+def test_classification_honors_one_off_exclusions_without_reclassifying_core(
+    tmp_path: Path,
+) -> None:
     _write(tmp_path / "keep.md", "---\ntype: Note\n---\n")
     _write(tmp_path / "skip.md", "---\ntype: Note\n---\n")
 

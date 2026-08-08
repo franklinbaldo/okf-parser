@@ -29,7 +29,7 @@ shown, in addition to any `.okfignore`; see
 ## `check`
 
 ```bash
-uv run okf-parser check path/to/bundle [--exclude PATTERN]... [--require-spec TEMPLATE] [--normative-spec]
+uv run okf-parser check path/to/bundle [--exclude PATTERN]... [--require-spec TEMPLATE] [--normative-spec] [--classify]
 ```
 
 Validates every Markdown file recursively as OKF v0.2. Exits `1` only when
@@ -41,8 +41,12 @@ cross-links or missing type specifications.
   `docs/types/{slug}.md`.
 - `--normative-spec` — promote missing or mismatched required specifications
   from advisory diagnostics to normative errors.
+- `--classify` — add a deterministic `classification` object with `concepts`,
+  `reserved`, `ignored`, and `invalid_or_untyped` paths. This explains the
+  existing strict check; it does not enable a second strictness mode. Ignored
+  paths are those removed by valid `.okfignore` or `--exclude` rules.
 
-MCP tool: `check`.
+MCP tool: `check` with the same optional `classify` argument.
 
 ## `import`
 

@@ -90,6 +90,14 @@ function compareDiagnostics(left: Diagnostic, right: Diagnostic): number {
 export interface CheckOptions extends LoadOptions {
   readonly requireSpec?: string;
   readonly normativeSpec?: boolean;
+  readonly classify?: boolean;
+}
+
+export interface BundleClassification {
+  readonly concepts: readonly string[];
+  readonly reserved: readonly string[];
+  readonly ignored: readonly string[];
+  readonly invalid_or_untyped: readonly string[];
 }
 
 export interface CheckReport {
@@ -99,6 +107,7 @@ export interface CheckReport {
   readonly concept_count: number;
   readonly reserved_count: number;
   readonly diagnostics: readonly Diagnostic[];
+  readonly classification?: BundleClassification;
 }
 
 export interface InventoryReport {
@@ -563,26 +572,24 @@ export class ExclusionRules {
   }
 }
 
-export async function discoverMarkdown(
-  rootInput: string | URL,
-  options: LoadOptions = {},
+async function discoverMarkdownWithRules(
+  root: string,
+  rules: ExclusionRules,
+  signal?: AbortSignal,
 ): Promise<readonly string[]> {
-  const root = path.resolve(rootInput instanceof URL ? fileURLToPath(rootInput) : rootInput);
-  const rules = await ExclusionRules.read(root, options.exclude ?? []);
   const prunes = !rules.hasNegation;
   const output: string[] = [];
 
   async function walk(directory: string): Promise<void> {
-    options.signal?.throwIfAborted();
+    signal?.throwIfAborted();
     const entries = await readdir(directory, { withFileTypes: true });
     entries.sort((left, right) => left.name.localeCompare(right.name, "en"));
     for (const entry of entries) {
-      options.signal?.throwIfAborted();
+      signal?.throwIfAborted();
       const candidate = path.join(directory, entry.name);
       const relative = toPosix(path.relative(root, candidate));
       if (entry.isSymbolicLink()) continue;
       if (entry.isDirectory()) {
-        // Pruning is only safe while nothing below can be re-included.
         if (prunes && rules.excludes(relative, { isDir: true })) continue;
         if (!IGNORED_DIRECTORIES.has(entry.name)) await walk(candidate);
       } else if (entry.isFile() && isMarkdownFilename(entry.name)) {
@@ -593,9 +600,20 @@ export async function discoverMarkdown(
   }
 
   const stat = await lstat(root);
-  if (!stat.isDirectory()) throw new OkfParserError("OKF_NOT_DIRECTORY", `bundle root is not a directory: ${root}`);
+  if (!stat.isDirectory()) {
+    throw new OkfParserError("OKF_NOT_DIRECTORY", `bundle root is not a directory: ${root}`);
+  }
   await walk(root);
   return Object.freeze(output.sort((left, right) => left.localeCompare(right, "en")));
+}
+
+export async function discoverMarkdown(
+  rootInput: string | URL,
+  options: LoadOptions = {},
+): Promise<readonly string[]> {
+  const root = path.resolve(rootInput instanceof URL ? fileURLToPath(rootInput) : rootInput);
+  const rules = await ExclusionRules.read(root, options.exclude ?? []);
+  return discoverMarkdownWithRules(root, rules, options.signal);
 }
 
 function diagnostic(
@@ -782,6 +800,43 @@ export async function loadBundle(
   });
 }
 
+async function classifyLoadedBundle(
+  bundle: Bundle,
+  options: CheckOptions,
+): Promise<BundleClassification> {
+  const candidates = await discoverMarkdownWithRules(
+    bundle.root,
+    new ExclusionRules(),
+    options.signal,
+  );
+  const allConcepts = new Set(bundle.concepts.map((concept) => concept.path));
+  const concepts = new Set(
+    bundle.concepts
+      .filter((concept) => concept.conceptType !== "")
+      .map((concept) => concept.path),
+  );
+  const recordedReserved = new Set(bundle.reserved.map((item) => item.path));
+  const diagnosticPaths = new Set(bundle.diagnostics.map((item) => item.path));
+  const active = new Set([...allConcepts, ...recordedReserved, ...diagnosticPaths]);
+  const reserved = new Set(
+    [...active].filter((relative) => isReservedDocument(path.join(bundle.root, relative))),
+  );
+  const candidatePaths = new Set(
+    candidates.map((candidate) => toPosix(path.relative(bundle.root, candidate))),
+  );
+  const sorted = (values: Iterable<string>): readonly string[] =>
+    Object.freeze([...values].sort((left, right) => left.localeCompare(right, "en")));
+
+  return Object.freeze({
+    concepts: sorted(concepts),
+    reserved: sorted(reserved),
+    ignored: sorted([...candidatePaths].filter((relative) => !active.has(relative))),
+    invalid_or_untyped: sorted(
+      [...active].filter((relative) => !concepts.has(relative) && !reserved.has(relative)),
+    ),
+  });
+}
+
 export async function checkBundle(
   root: string | URL,
   options: CheckOptions = {},
@@ -799,6 +854,8 @@ export async function checkBundle(
     );
     diagnostics.sort(compareDiagnostics);
   }
+  const classification =
+    options.classify === true ? await classifyLoadedBundle(bundle, options) : undefined;
   return Object.freeze({
     root: bundle.root,
     conformant: !diagnostics.some((item) => item.severity === "error"),
@@ -806,6 +863,7 @@ export async function checkBundle(
     concept_count: bundle.concepts.length,
     reserved_count: bundle.reserved.length,
     diagnostics: Object.freeze(diagnostics),
+    ...(classification === undefined ? {} : { classification }),
   });
 }
 

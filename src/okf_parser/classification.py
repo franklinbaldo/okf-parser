@@ -24,8 +24,8 @@ def classify_path(path: Path, exclude: Sequence[str] = ()) -> dict[str, list[str
     root = path.resolve()
     bundle = load_bundle(root, exclude)
 
-    concept_rows = bundle.concepts.select("path", "concept_type").execute().to_dict(
-        orient="records"
+    concept_rows = (
+        bundle.concepts.select("path", "concept_type").execute().to_dict(orient="records")
     )
     all_concepts = {row["path"] for row in concept_rows if isinstance(row["path"], str)}
     concepts = {
@@ -44,9 +44,7 @@ def classify_path(path: Path, exclude: Sequence[str] = ()) -> dict[str, list[str
     active = all_concepts | recorded_reserved | diagnostic_paths
     reserved = {relative for relative in active if is_reserved_document(Path(relative))}
 
-    candidates = {
-        candidate.relative_to(root).as_posix() for candidate in discover_markdown(root)
-    }
+    candidates = {candidate.relative_to(root).as_posix() for candidate in discover_markdown(root)}
     return {
         "concepts": sorted(concepts),
         "reserved": sorted(reserved),

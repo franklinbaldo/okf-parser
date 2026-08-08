@@ -11,6 +11,7 @@ import networkx as nx
 from okf_parser.apply import apply_bundle as _apply_bundle
 from okf_parser.bundle import load_bundle, validate_path
 from okf_parser.bundle_import import import_bundle as _import_bundle
+from okf_parser.classification import classify_path
 from okf_parser.duckdb import attach_okf
 from okf_parser.formatting import FormatReport, format_path
 from okf_parser.schema_export import documents_by_type as _documents_by_type
@@ -68,10 +69,11 @@ def check_bundle(
     require_spec: str | None = None,
     *,
     normative_spec: bool = False,
+    classify: bool = False,
 ) -> dict[str, object]:
     """Validate every Markdown file below a path."""
     report = validate_path(Path(path), exclude, require_spec, normative_spec=normative_spec)
-    return {
+    payload: dict[str, object] = {
         "root": str(report.root),
         "conformant": report.is_conformant,
         "markdown_count": report.markdown_count,
@@ -79,6 +81,9 @@ def check_bundle(
         "reserved_count": report.reserved_count,
         "diagnostics": [item.model_dump(mode="json") for item in report.violations],
     }
+    if classify:
+        payload["classification"] = classify_path(Path(path), exclude)
+    return payload
 
 
 def inventory_bundle(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:

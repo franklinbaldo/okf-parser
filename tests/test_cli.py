@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, Literal
 
 import pytest
@@ -11,6 +12,22 @@ from okf_parser.service import schema_bundle
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+def test_check_cli_can_explain_bundle_classification(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (tmp_path / "concept.md").write_text("---\ntype: Note\n---\n", encoding="utf-8")
+
+    app(["check", str(tmp_path), "--classify"])
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["classification"] == {
+        "concepts": ["concept.md"],
+        "reserved": [],
+        "ignored": [],
+        "invalid_or_untyped": [],
+    }
 
 
 def test_format_write_exits_nonzero_when_a_file_was_skipped(tmp_path: Path) -> None:

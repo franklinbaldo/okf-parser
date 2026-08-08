@@ -20,6 +20,10 @@ const normativeSpecSchema = z
   .boolean()
   .optional()
   .describe("Report a missing specification document as an error instead of a warning");
+const classifySchema = z
+  .boolean()
+  .optional()
+  .describe("Explain concept, reserved, ignored, and invalid bundle membership");
 
 function loadOptions(exclude: readonly string[] | undefined) {
   return exclude === undefined ? {} : { exclude };
@@ -71,14 +75,16 @@ export function createMcpServer(): McpServer {
         exclude: excludeSchema,
         require_spec: requireSpecSchema,
         normative_spec: normativeSpecSchema,
+        classify: classifySchema,
       }),
     },
-    ({ path, exclude, require_spec, normative_spec }) =>
+    ({ path, exclude, require_spec, normative_spec, classify }) =>
       toolResult(() =>
         checkBundle(path, {
           ...loadOptions(exclude),
           ...(require_spec === undefined ? {} : { requireSpec: require_spec }),
           normativeSpec: normative_spec ?? false,
+          classify: classify ?? false,
         }),
       ),
   );
