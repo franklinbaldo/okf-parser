@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFile, readdir, lstat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -40,6 +41,8 @@ export interface ParsedDocument {
   readonly conceptType: string;
   readonly title: string | null;
   readonly description: string | null;
+  readonly sourceDigest: string;
+  readonly parsedDigest: string;
 }
 
 export interface ConceptRecord {
@@ -49,6 +52,8 @@ export interface ConceptRecord {
   readonly conceptType: string;
   readonly title: string | null;
   readonly description: string | null;
+  readonly sourceDigest: string;
+  readonly parsedDigest: string;
   readonly frontmatterJson: string;
   readonly body: string;
 }
@@ -110,12 +115,24 @@ export interface CheckReport {
   readonly classification?: BundleClassification;
 }
 
+export interface InventoryOptions extends LoadOptions {
+  readonly digests?: boolean;
+}
+
+export interface DigestRecord {
+  readonly concept_id: string;
+  readonly path: string;
+  readonly source_digest: string;
+  readonly parsed_digest: string;
+}
+
 export interface InventoryReport {
   readonly root: string;
   readonly types: readonly {
     readonly concept_type: string;
     readonly concept_count: number;
   }[];
+  readonly digests?: readonly DigestRecord[];
 }
 
 export interface GraphReport {
@@ -197,7 +214,7 @@ function errorCode(error: unknown): string | null {
 async function readUtf8(filePath: string): Promise<string> {
   const bytes = await readFile(filePath);
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch (error) {
     throw new DocumentParseError("document must be valid UTF-8", { path: filePath, cause: error });
   }
@@ -268,13 +285,65 @@ function stableFrontmatter(value: FrontmatterValue): FrontmatterValue {
   return value;
 }
 
+function normalizeNewlines(text: string): string {
+  return text.replaceAll("\r\n", "\n").replaceAll("\r", "\n");
+}
+
+function sha256(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+function sourceDigest(content: string): string {
+  return `sha256:${sha256(content)}`;
+}
+
+function assertJcsString(value: string): void {
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) {
+        throw new DocumentParseError("JCS strings must not contain lone UTF-16 surrogates");
+      }
+      index += 1;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      throw new DocumentParseError("JCS strings must not contain lone UTF-16 surrogates");
+    }
+  }
+}
+
+function jcsString(value: string): string {
+  assertJcsString(value);
+  return JSON.stringify(value);
+}
+
+function canonicalJson(value: FrontmatterValue): string {
+  if (value === null) return "null";
+  if (typeof value === "string") return jcsString(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const properties = Object.keys(value as FrontmatterObject).sort();
+  return `{${properties
+    .map((property) => `${jcsString(property)}:${canonicalJson((value as FrontmatterObject)[property] ?? null)}`)
+    .join(",")}}`;
+}
+
+function parsedDigest(
+  frontmatter: Readonly<Record<string, FrontmatterValue>>,
+  body: string,
+): string {
+  const payload: FrontmatterValue = [frontmatter, normalizeNewlines(body)];
+  return `okf-parsed-v1-jcs-sha256:${sha256(canonicalJson(payload))}`;
+}
+
 function optionalText(frontmatter: Readonly<Record<string, FrontmatterValue>>, key: string): string | null {
   const value = frontmatter[key];
   return typeof value === "string" ? value : null;
 }
 
 export function parseDocumentContent(content: string, documentPath = "<memory>"): ParsedDocument {
-  const match = FRONTMATTER_RE.exec(content);
+  const sourceIdentity = sourceDigest(content);
+  const normalized = normalizeNewlines(content);
+  const match = FRONTMATTER_RE.exec(normalized);
   if (match === null) {
     throw new DocumentParseError("concept must start with YAML frontmatter delimited by ---", {
       path: documentPath,
@@ -299,6 +368,8 @@ export function parseDocumentContent(content: string, documentPath = "<memory>")
     conceptType,
     title: optionalText(frontmatter, "title"),
     description: optionalText(frontmatter, "description"),
+    sourceDigest: sourceIdentity,
+    parsedDigest: parsedDigest(frontmatter, match[2] ?? ""),
   });
 }
 
@@ -783,6 +854,8 @@ export async function loadBundle(
         conceptType: parsed.conceptType,
         title: parsed.title,
         description: parsed.description,
+        sourceDigest: parsed.sourceDigest,
+        parsedDigest: parsed.parsedDigest,
         frontmatterJson: parsed.frontmatterJson,
         body: parsed.body,
       }),
@@ -869,13 +942,28 @@ export async function checkBundle(
 
 export async function inventoryBundle(
   root: string | URL,
-  options: LoadOptions = {},
+  options: InventoryOptions = {},
 ): Promise<InventoryReport> {
   const bundle = await loadBundle(root, options);
   const counts = new Map<string, number>();
   for (const concept of bundle.concepts) {
     counts.set(concept.conceptType, (counts.get(concept.conceptType) ?? 0) + 1);
   }
+  const digests =
+    options.digests === true
+      ? Object.freeze(
+          bundle.concepts
+            .map((concept) =>
+              Object.freeze({
+                concept_id: concept.conceptId,
+                path: concept.path,
+                source_digest: concept.sourceDigest,
+                parsed_digest: concept.parsedDigest,
+              }),
+            )
+            .sort((left, right) => left.path.localeCompare(right.path, "en")),
+        )
+      : undefined;
   return Object.freeze({
     root: bundle.root,
     types: Object.freeze(
@@ -883,6 +971,7 @@ export async function inventoryBundle(
         .sort(([left], [right]) => left.localeCompare(right, "en"))
         .map(([concept_type, concept_count]) => Object.freeze({ concept_type, concept_count })),
     ),
+    ...(digests === undefined ? {} : { digests }),
   });
 }
 

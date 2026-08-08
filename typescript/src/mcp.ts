@@ -24,6 +24,10 @@ const classifySchema = z
   .boolean()
   .optional()
   .describe("Explain concept, reserved, ignored, and invalid bundle membership");
+const digestsSchema = z
+  .boolean()
+  .optional()
+  .describe("Include deterministic source and parsed-revision identity");
 
 function loadOptions(exclude: readonly string[] | undefined) {
   return exclude === undefined ? {} : { exclude };
@@ -94,9 +98,16 @@ export function createMcpServer(): McpServer {
     {
       title: "Inventory OKF concepts",
       description: "Count parsed concepts by their producer-defined type.",
-      inputSchema: z.object({ path: pathSchema, exclude: excludeSchema }),
+      inputSchema: z.object({
+        path: pathSchema,
+        exclude: excludeSchema,
+        digests: digestsSchema,
+      }),
     },
-    ({ path, exclude }) => toolResult(() => inventoryBundle(path, loadOptions(exclude))),
+    ({ path, exclude, digests }) =>
+      toolResult(() =>
+        inventoryBundle(path, { ...loadOptions(exclude), digests: digests ?? false }),
+      ),
   );
 
   server.registerTool(
