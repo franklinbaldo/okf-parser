@@ -1,3 +1,9 @@
+---
+type: Documentation
+title: Parser benchmarks
+description: Comparable Python and TypeScript parser benchmark protocol
+---
+
 # Parser benchmarks
 
 These scripts produce comparable JSON reports for the Python and TypeScript
