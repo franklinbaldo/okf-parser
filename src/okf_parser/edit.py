@@ -106,7 +106,11 @@ def _edit_concept(
     try:
         snapshot = _snapshot_bundle(root, exclude)
     except WriteSupportError as exc:
-        raise EditError(str(exc)) from exc
+        message = str(exc).replace(
+            "file changed while it was being read",
+            "file changed while edit was reading it",
+        )
+        raise EditError(message) from exc
     concept = _select_concept(snapshot, concept_id)
 
     current_source_digest = f"sha256:{concept.content_hash}"

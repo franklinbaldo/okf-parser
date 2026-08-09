@@ -940,7 +940,14 @@ def apply_bundle(  # each argument is an independent public CLI flag.
         # write-time conflict check comes from the exact same walk, and for
         # concept files the exact same bytes, that fed the SQL diff below -
         # not a second, later, independent filesystem visit.
-        snapshot = _snapshot_bundle(root, exclude)
+        try:
+            snapshot = _snapshot_bundle(root, exclude)
+        except WriteSupportError as exc:
+            message = str(exc).replace(
+                "file changed while it was being read",
+                "file changed while apply was reading it",
+            )
+            raise ApplyError(message) from exc
         concepts = snapshot.concepts
 
         baseline = validate_path(root, exclude)
