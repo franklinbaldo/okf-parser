@@ -96,8 +96,7 @@ MCP tools: `init_preview`; `init_write` with `--allow-write`.
 uv run okf-parser inventory path/to/bundle [--exclude PATTERN]...
 ```
 
-Counts concepts by type using an Ibis relation over the parsed bundle. Always
-exits `0`.
+Counts concepts by producer-defined `type`.
 
 MCP tool: `inventory`.
 
