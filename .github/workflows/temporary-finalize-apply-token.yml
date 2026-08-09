@@ -29,6 +29,7 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          from textwrap import dedent
 
           def once(text: str, old: str, new: str, label: str) -> str:
               count = text.count(old)
@@ -38,7 +39,6 @@ jobs:
 
           path = Path("src/okf_parser/apply.py")
           text = path.read_text(encoding="utf-8")
-
           text = once(
               text,
               "from __future__ import annotations\n\nimport re\n",
@@ -68,29 +68,25 @@ jobs:
               "write-support imports",
           )
 
-          apply_error = (
-              "class ApplyError(ValueError):\n"
-              "    \"\"\"Raised when `--sql` is malformed or a script violates the v1 contract.\"\"\"\n\n\n"
-          )
-          helpers = apply_error + '''@dataclass(frozen=True, slots=True)
+          apply_error = dedent('''\
+          class ApplyError(ValueError):
+              """Raised when `--sql` is malformed or a script violates the v1 contract."""
+
+
+          ''')
+          helpers = apply_error + dedent('''\
+          @dataclass(frozen=True, slots=True)
           class ApplyResult(WriteResult):
-              """RFC 0005 result plus an opaque identity for the exact reviewed candidate."""
+              """RFC 0005 result plus the identity of the exact reviewed candidate."""
 
               preview_token: str | None = None
 
               def to_dict(self) -> dict[str, object]:
-                  """Return the stable JSON-ready result, including preview identity when present."""
+                  """Return the stable JSON-ready result with preview identity when present."""
                   payload = super().to_dict()
                   if self.preview_token is not None:
                       payload["preview_token"] = self.preview_token
                   return payload
-
-
-          def _feed_preview_token(hasher: object, value: bytes) -> None:
-              """Length-frame one byte string so concatenated fields cannot collide structurally."""
-              update = getattr(hasher, "update")
-              update(len(value).to_bytes(8, "big"))
-              update(value)
 
 
           def _candidate_bytes(raw: _RawDocument, frontmatter_text: str) -> bytes:
@@ -111,30 +107,35 @@ jobs:
               exclude: Sequence[str],
               spec_template: str | None,
           ) -> str:
-              """Commit to the exact baseline, operation, and candidate bytes reviewed by a caller."""
+              """Commit to the exact baseline, operation and candidate bytes under review."""
               hasher = hashlib.sha256()
-              _feed_preview_token(hasher, b"okf-apply-preview-v1")
-              _feed_preview_token(hasher, sql.encode("utf-8"))
-              _feed_preview_token(hasher, (spec_template or "").encode("utf-8"))
+
+              def feed(value: bytes) -> None:
+                  hasher.update(len(value).to_bytes(8, "big"))
+                  hasher.update(value)
+
+              feed(b"okf-apply-preview-v1")
+              feed(sql.encode("utf-8"))
+              feed((spec_template or "").encode("utf-8"))
               for rule in exclude:
-                  _feed_preview_token(hasher, rule.encode("utf-8"))
+                  feed(rule.encode("utf-8"))
               for relative, (size, mtime_ns) in sorted(snapshot.manifest.items()):
-                  _feed_preview_token(hasher, relative.encode("utf-8"))
-                  _feed_preview_token(hasher, str(size).encode("ascii"))
-                  _feed_preview_token(hasher, str(mtime_ns).encode("ascii"))
+                  feed(relative.encode("utf-8"))
+                  feed(str(size).encode("ascii"))
+                  feed(str(mtime_ns).encode("ascii"))
               for concept in sorted(snapshot.concepts, key=lambda item: item.relative):
-                  _feed_preview_token(hasher, concept.relative.encode("utf-8"))
-                  _feed_preview_token(hasher, concept.content_hash.encode("ascii"))
+                  feed(concept.relative.encode("utf-8"))
+                  feed(concept.content_hash.encode("ascii"))
               for relative, (raw, frontmatter_text, _) in sorted(candidates.items()):
-                  _feed_preview_token(hasher, relative.encode("utf-8"))
-                  _feed_preview_token(hasher, _candidate_bytes(raw, frontmatter_text))
+                  feed(relative.encode("utf-8"))
+                  feed(_candidate_bytes(raw, frontmatter_text))
               return f"okf-apply-preview-v1-sha256:{hasher.hexdigest()}"
 
 
           def _preview_mismatch_result(
               changed_paths: Sequence[str], preview_token: str
           ) -> dict[str, object]:
-              """Return a conflict-shaped failure when commit no longer reproduces its preview."""
+              """Fail closed when a commit no longer reproduces its reviewed preview."""
               return ApplyResult(
                   changed_paths=tuple(sorted(changed_paths)),
                   succeeded=False,
@@ -145,80 +146,70 @@ jobs:
               ).to_dict()
 
 
-          '''
-          # The triple-quoted helper text above is intentionally indented in this
-          # workflow source; remove that transport indentation before insertion.
-          helpers = "\n".join(line[10:] if line.startswith("          ") else line for line in helpers.splitlines()) + "\n"
-          text = once(text, apply_error, helpers, "ApplyResult/token helpers")
-
-          signature_old = (
-              "    write: bool = False,\n"
-              "    exclude: Sequence[str] = (),\n"
-              "    spec_template: str | None = None,\n"
+          ''')
+          text = once(text, apply_error, helpers, "token helpers")
+          text = once(
+              text,
+              "    write: bool = False,\n    exclude: Sequence[str] = (),\n    spec_template: str | None = None,\n",
+              "    write: bool = False,\n    expected_preview_token: str | None = None,\n    exclude: Sequence[str] = (),\n    spec_template: str | None = None,\n",
+              "apply signature",
           )
-          signature_new = (
-              "    write: bool = False,\n"
-              "    expected_preview_token: str | None = None,\n"
-              "    exclude: Sequence[str] = (),\n"
-              "    spec_template: str | None = None,\n"
-          )
-          text = once(text, signature_old, signature_new, "apply_bundle preview token argument")
-
-          noop_old = (
-              "    if outcome.touched_type is None or not outcome.row_diffs:\n"
-              "        return ApplyResult().to_dict()\n\n"
-          )
-          noop_new = (
+          text = once(
+              text,
+              "    if outcome.touched_type is None or not outcome.row_diffs:\n        return ApplyResult().to_dict()\n\n",
               "    if outcome.touched_type is None or not outcome.row_diffs:\n"
               "        preview_token = _apply_preview_token(snapshot, sql, {}, exclude, spec_template)\n"
               "        if expected_preview_token is not None and expected_preview_token != preview_token:\n"
               "            return _preview_mismatch_result((), preview_token)\n"
-              "        return ApplyResult(preview_token=preview_token).to_dict()\n\n"
+              "        return ApplyResult(preview_token=preview_token).to_dict()\n\n",
+              "no-op token",
           )
-          text = once(text, noop_old, noop_new, "no-op preview token")
+          old_tail = dedent('''\
+              if not write:
+                  return ApplyResult(changed_paths=tuple(sorted(changed_paths))).to_dict()
 
-          tail_old = (
-              "    if not write:\n"
-              "        return ApplyResult(changed_paths=tuple(sorted(changed_paths))).to_dict()\n\n"
-              "    touched_hashes = {rel: content_hashes[rel] for rel in candidates}\n"
-              "    return _stage_validate_write(\n"
-              "        root,\n"
-              "        exclude,\n"
-              "        candidates,\n"
-              "        baseline_keys,\n"
-              "        changed_paths,\n"
-              "        touched_hashes,\n"
-              "        snapshot.manifest,\n"
-              "        conflict_error=\"the bundle changed since apply validated it\",\n"
-              "        temp_prefix=\"okf-apply-\",\n"
-              "    )\n"
-          )
-          tail_new = (
-              "    preview_token = _apply_preview_token(\n"
-              "        snapshot, sql, candidates, exclude, spec_template\n"
-              "    )\n"
-              "    if expected_preview_token is not None and expected_preview_token != preview_token:\n"
-              "        return _preview_mismatch_result(changed_paths, preview_token)\n\n"
-              "    if not write:\n"
-              "        return ApplyResult(\n"
-              "            changed_paths=tuple(sorted(changed_paths)), preview_token=preview_token\n"
-              "        ).to_dict()\n\n"
-              "    touched_hashes = {rel: content_hashes[rel] for rel in candidates}\n"
-              "    write_result = _stage_validate_write(\n"
-              "        root,\n"
-              "        exclude,\n"
-              "        candidates,\n"
-              "        baseline_keys,\n"
-              "        changed_paths,\n"
-              "        touched_hashes,\n"
-              "        snapshot.manifest,\n"
-              "        conflict_error=\"the bundle changed since apply validated it\",\n"
-              "        temp_prefix=\"okf-apply-\",\n"
-              "    )\n"
-              "    write_result[\"preview_token\"] = preview_token\n"
-              "    return write_result\n"
-          )
-          text = once(text, tail_old, tail_new, "preview/write token path")
+              touched_hashes = {rel: content_hashes[rel] for rel in candidates}
+              return _stage_validate_write(
+                  root,
+                  exclude,
+                  candidates,
+                  baseline_keys,
+                  changed_paths,
+                  touched_hashes,
+                  snapshot.manifest,
+                  conflict_error="the bundle changed since apply validated it",
+                  temp_prefix="okf-apply-",
+              )
+          ''')
+          # Restore the function-level indentation removed by dedent.
+          old_tail = "\n".join(("    " + line if line else line) for line in old_tail.splitlines()) + "\n"
+          new_tail = dedent('''\
+              preview_token = _apply_preview_token(snapshot, sql, candidates, exclude, spec_template)
+              if expected_preview_token is not None and expected_preview_token != preview_token:
+                  return _preview_mismatch_result(changed_paths, preview_token)
+
+              if not write:
+                  return ApplyResult(
+                      changed_paths=tuple(sorted(changed_paths)), preview_token=preview_token
+                  ).to_dict()
+
+              touched_hashes = {rel: content_hashes[rel] for rel in candidates}
+              write_result = _stage_validate_write(
+                  root,
+                  exclude,
+                  candidates,
+                  baseline_keys,
+                  changed_paths,
+                  touched_hashes,
+                  snapshot.manifest,
+                  conflict_error="the bundle changed since apply validated it",
+                  temp_prefix="okf-apply-",
+              )
+              write_result["preview_token"] = preview_token
+              return write_result
+          ''')
+          new_tail = "\n".join(("    " + line if line else line) for line in new_tail.splitlines()) + "\n"
+          text = once(text, old_tail, new_tail, "preview/write tail")
           path.write_text(text, encoding="utf-8")
 
           service_path = Path("src/okf_parser/service.py")
@@ -227,18 +218,18 @@ jobs:
               service,
               "    write: bool = False,\n    exclude: Sequence[str] = (),\n    spec_template: str | None = None,\n",
               "    write: bool = False,\n    expected_preview_token: str | None = None,\n    exclude: Sequence[str] = (),\n    spec_template: str | None = None,\n",
-              "service preview token argument",
+              "service signature",
           )
           service = once(
               service,
               "        write=write,\n        exclude=exclude,\n        spec_template=spec_template,\n",
               "        write=write,\n        expected_preview_token=expected_preview_token,\n        exclude=exclude,\n        spec_template=spec_template,\n",
-              "service preview token forwarding",
+              "service forwarding",
           )
           service_path.write_text(service, encoding="utf-8")
           PY
 
-      - name: Canonicalize and test contract
+      - name: Canonicalize and test token contract
         run: |
           uv sync --frozen --all-groups
           uv run ruff format src/okf_parser/apply.py src/okf_parser/service.py tests/test_apply_preview_token.py tests/test_apply_preview_token_noop.py
@@ -252,7 +243,6 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-
           replacements = {
               Path("pyproject.toml"): [("version = \"0.24.0\"", "version = \"0.24.1\"")],
               Path("typescript/package.json"): [("\"version\": \"0.24.0\"", "\"version\": \"0.24.1\"")],
@@ -266,10 +256,9 @@ jobs:
           for path, pairs in replacements.items():
               text = path.read_text(encoding="utf-8")
               for old, new in pairs:
-                  count = text.count(old)
-                  if count != 1:
-                      raise SystemExit(f"{path}: expected one {old!r}, found {count}")
-                  text = text.replace(old, new)
+                  if text.count(old) != 1:
+                      raise SystemExit(f"{path}: expected exactly one {old!r}")
+                  text = text.replace(old, new, 1)
               path.write_text(text, encoding="utf-8")
           PY
           uv lock
@@ -300,6 +289,7 @@ jobs:
         run: |
           set -euo pipefail
           git rm -f .github/workflows/temporary-finalize-apply-token.yml
+          git rm -f .github/workflows/temporary-fix-finalizer.yml 2>/dev/null || true
           git fetch origin feat/single-concept-edit-0.24.0
           git reset --soft origin/feat/single-concept-edit-0.24.0
           git config user.name github-actions[bot]
