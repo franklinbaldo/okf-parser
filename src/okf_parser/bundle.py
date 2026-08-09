@@ -15,6 +15,7 @@ from okf_parser.exclusion import ExclusionRules
 from okf_parser.models import (
     ConceptRecord,
     LinkRecord,
+    ParsedDocument,
     ReservedRecord,
     Severity,
     ValidationReport,
@@ -31,6 +32,7 @@ from okf_parser.parser import (
     resolve_local_target,
     split_optional_frontmatter,
 )
+from okf_parser.rust_core import rust_markdown_facts_batch
 from okf_parser.type_specs import missing_type_specs
 from okf_parser.typed_relations import TypedRelations, compile_bundle_types
 
@@ -153,10 +155,12 @@ def _load_concept(
     root: Path,
     path: Path,
     known_paths: set[Path],
+    parsed: ParsedDocument | None = None,
+    facts: MarkdownFacts | None = None,
 ) -> tuple[ConceptRecord | None, list[LinkRecord], list[Violation]]:
     relative = path.relative_to(root).as_posix()
     try:
-        parsed = parse_document(path)
+        parsed = parsed or parse_document(path)
     except (DocumentParseError, OSError) as exc:
         return (
             None,
@@ -177,7 +181,7 @@ def _load_concept(
 
     doc_id = concept_id(root, path)
     links: list[LinkRecord] = []
-    raw_links = [(target, "body") for target in markdown_facts(parsed.body).links]
+    raw_links = [(target, "body") for target in (facts or markdown_facts(parsed.body)).links]
     resolved_targets: dict[str, Path | None] = {}
     for raw_target, origin in raw_links:
         if raw_target not in resolved_targets:
@@ -334,7 +338,12 @@ def _validate_log(root: Path, path: Path, text: str) -> tuple[str, list[Violatio
     return body, diagnostics
 
 
-def load_bundle(root: Path, exclude: Sequence[str] = ()) -> Bundle:
+def load_bundle(  # noqa: C901
+    root: Path,
+    exclude: Sequence[str] = (),
+    *,
+    rust_core: Path | None = None,
+) -> Bundle:
     """Scan a directory and compile its OKF documents into Ibis tables.
 
     Exclusions come from the bundle's ``.okfignore`` and from ``exclude``,
@@ -351,6 +360,7 @@ def load_bundle(root: Path, exclude: Sequence[str] = ()) -> Bundle:
     reserved: list[ReservedRecord] = []
     links: list[LinkRecord] = []
     diagnostics: list[Violation] = []
+    pending_rust: list[tuple[Path, ParsedDocument]] = []
 
     for path in paths:
         relative = path.relative_to(root).as_posix()
@@ -375,11 +385,38 @@ def load_bundle(root: Path, exclude: Sequence[str] = ()) -> Bundle:
             reserved.append(ReservedRecord(path=relative, filename=path.name, body=body))
             continue
 
+        if rust_core is not None:
+            try:
+                pending_rust.append((path, parse_document(path)))
+            except (DocumentParseError, OSError) as exc:
+                diagnostics.append(
+                    Violation(
+                        code="OKF001",
+                        severity=Severity.ERROR,
+                        path=relative,
+                        message=str(exc),
+                    )
+                )
+            continue
+
         record, document_links, document_diagnostics = _load_concept(root, path, known_paths)
         if record is not None:
             concepts.append(record)
         links.extend(document_links)
         diagnostics.extend(document_diagnostics)
+
+    if rust_core is not None and pending_rust:
+        rust_facts = rust_markdown_facts_batch(
+            [parsed.body for _, parsed in pending_rust], rust_core
+        )
+        for (path, parsed), facts in zip(pending_rust, rust_facts, strict=True):
+            record, document_links, document_diagnostics = _load_concept(
+                root, path, known_paths, parsed, facts
+            )
+            if record is not None:
+                concepts.append(record)
+            links.extend(document_links)
+            diagnostics.extend(document_diagnostics)
 
     return Bundle(
         root=root,

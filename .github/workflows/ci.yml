@@ -13,6 +13,47 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  rust-core:
+    name: Rust core
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path rust-core/Cargo.toml --check
+
+      - name: Run tests
+        run: cargo test --locked --manifest-path rust-core/Cargo.toml
+
+      - name: Build release MVP
+        run: cargo build --release --locked --manifest-path rust-core/Cargo.toml
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: uv sync --frozen
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: typescript/package-lock.json
+
+      - name: Install and build TypeScript
+        run: npm ci --prefix typescript && npm run build --prefix typescript
+
+      - name: Prove native and Rust full bundles equivalent
+        shell: bash
+        run: |
+          uv run python benchmarks/python_parser.py --sizes 10 --rounds 1 --rust-core rust-core/target/release/okf-core > "$RUNNER_TEMP/python-rust-benchmark.json"
+          node benchmarks/typescript-parser.mjs --sizes=10 --rounds=1 --rust-core=rust-core/target/release/okf-core > "$RUNNER_TEMP/typescript-rust-benchmark.json"
+
   version-bump:
     name: Version bump and changelog
     if: github.event_name == 'pull_request'

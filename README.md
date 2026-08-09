@@ -208,10 +208,26 @@ Add the repository as a CI check:
 ```yaml
 steps:
   - uses: actions/checkout@v7
-  - uses: franklinbaldo/okf-parser@v0.31.0
+  - uses: franklinbaldo/okf-parser@v0.32.0
     with:
       path: knowledge
 ```
+
+### Experimental Rust Markdown core
+
+The default Python and TypeScript implementations remain fully native and require no
+Rust binary. For large batches, build the optional experimental core and pass its path
+explicitly:
+
+```bash
+cargo build --release --manifest-path rust-core/Cargo.toml
+```
+
+Python accepts `load_bundle(root, rust_core=Path(".../okf-core"))`; TypeScript accepts
+`loadBundle(root, { rustCore: ".../okf-core" })`. Each load makes one coarse batch
+call for Markdown links and headings. Discovery, reads, YAML, cancellation, validation,
+link resolution, and relational materialization remain language-native. Omitting the
+option is the portable fallback.
 
 The composite action installs a pinned uv version and executes the same
 `validate_path()` function used by the Python API, CLI, and MCP server.

@@ -1,6 +1,7 @@
 import { readFile, readdir, lstat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { rustMarkdownFactsBatch } from "./rust-core.js";
 
 import MarkdownIt from "markdown-it";
 
@@ -80,6 +81,7 @@ export interface LoadOptions {
   readonly exclude?: readonly string[];
   readonly readConcurrency?: number;
   readonly signal?: AbortSignal;
+  readonly rustCore?: string;
 }
 
 function compareDiagnostics(left: Diagnostic, right: Diagnostic): number {
@@ -823,6 +825,50 @@ export async function loadBundle(
   const reserved: ReservedRecord[] = [];
   const links: LinkRecord[] = [];
   const diagnostics: Diagnostic[] = [];
+  const pendingRust: Array<{
+    readonly filePath: string;
+    readonly relative: string;
+    readonly parsed: ParsedDocument;
+  }> = [];
+
+  const appendConcept = (
+    filePath: string,
+    relative: string,
+    parsed: ParsedDocument,
+    facts: MarkdownFacts,
+  ): void => {
+    if (parsed.conceptType === "") {
+      diagnostics.push(
+        diagnostic("OKF002", "error", relative, "frontmatter must contain a non-empty string type"),
+      );
+    }
+    const sourceId = conceptId(root, filePath);
+    for (const rawTarget of facts.links) {
+      const origin = "body";
+      const resolved = resolveLocalTarget(root, filePath, rawTarget);
+      if (resolved === null || !hasMarkdownSuffix(rawTarget)) continue;
+      const exists = knownPaths.has(resolved);
+      const targetId = exists && !isReservedDocument(resolved) ? conceptId(root, resolved) : null;
+      links.push(Object.freeze({ sourceId, rawTarget, targetId, exists, origin }));
+      if (!exists) {
+        diagnostics.push(
+          diagnostic("OKF101", "warning", relative, `local Markdown link does not resolve: ${rawTarget}`),
+        );
+      }
+    }
+    concepts.push(
+      Object.freeze({
+        conceptId: sourceId,
+        logicalKey: sourceId,
+        path: relative,
+        conceptType: parsed.conceptType,
+        title: parsed.title,
+        description: parsed.description,
+        frontmatterJson: parsed.frontmatterJson,
+        body: parsed.body,
+      }),
+    );
+  };
 
   for await (const loaded of readUtf8Ordered(paths, readConcurrency, options.signal)) {
     options.signal?.throwIfAborted();
@@ -862,39 +908,24 @@ export async function loadBundle(
       diagnostics.push(diagnostic("OKF001", "error", relative, messageOf(error)));
       continue;
     }
-    if (parsed.conceptType === "") {
-      diagnostics.push(
-        diagnostic("OKF002", "error", relative, "frontmatter must contain a non-empty string type"),
-      );
+    if (options.rustCore === undefined) {
+      appendConcept(filePath, relative, parsed, markdownFacts(parsed.body));
+    } else {
+      pendingRust.push({ filePath, relative, parsed });
     }
-    const sourceId = conceptId(root, filePath);
-    const rawLinks: Array<readonly [string, string]> = markdownFacts(parsed.body).links.map(
-      (target) => [target, "body"],
+  }
+
+  if (options.rustCore !== undefined && pendingRust.length > 0) {
+    const facts = await rustMarkdownFactsBatch(
+      pendingRust.map((item) => item.parsed.body),
+      options.rustCore,
+      options.signal,
     );
-    for (const [rawTarget, origin] of rawLinks) {
-      const resolved = resolveLocalTarget(root, filePath, rawTarget);
-      if (resolved === null || !hasMarkdownSuffix(rawTarget)) continue;
-      const exists = knownPaths.has(resolved);
-      const targetId = exists && !isReservedDocument(resolved) ? conceptId(root, resolved) : null;
-      links.push(Object.freeze({ sourceId, rawTarget, targetId, exists, origin }));
-      if (!exists) {
-        diagnostics.push(
-          diagnostic("OKF101", "warning", relative, `local Markdown link does not resolve: ${rawTarget}`),
-        );
-      }
-    }
-    concepts.push(
-      Object.freeze({
-        conceptId: sourceId,
-        logicalKey: sourceId,
-        path: relative,
-        conceptType: parsed.conceptType,
-        title: parsed.title,
-        description: parsed.description,
-        frontmatterJson: parsed.frontmatterJson,
-        body: parsed.body,
-      }),
-    );
+    pendingRust.forEach((item, index) => {
+      const documentFacts = facts[index];
+      if (documentFacts === undefined) throw new Error("Rust facts response cardinality mismatch");
+      appendConcept(item.filePath, item.relative, item.parsed, documentFacts);
+    });
   }
 
   diagnostics.sort(compareDiagnostics);
