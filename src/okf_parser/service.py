@@ -13,6 +13,8 @@ from okf_parser.bundle import load_bundle, validate_path
 from okf_parser.bundle_import import import_bundle as _import_bundle
 from okf_parser.classification import classify_path
 from okf_parser.duckdb import attach_okf
+from okf_parser.edit import preview_concept_edit as _preview_concept_edit
+from okf_parser.edit import write_concept_edit as _write_concept_edit
 from okf_parser.formatting import FormatReport, format_path
 from okf_parser.schema_export import documents_by_type as _documents_by_type
 from okf_parser.schema_export import export_json_schema, export_pydantic_source, export_zod_schema
@@ -212,6 +214,28 @@ def apply_bundle(  # each argument is an independent public CLI flag.
         exclude=exclude,
         spec_template=spec_template,
     )
+
+
+def preview_concept_edit(
+    path: str,
+    concept_id: str,
+    body: str,
+    expected_source_digest: str,
+    exclude: Sequence[str] = (),
+) -> dict[str, object]:
+    """Preview one conflict-safe Markdown body replacement."""
+    return _preview_concept_edit(path, concept_id, body, expected_source_digest, exclude=exclude)
+
+
+def write_concept_edit(
+    path: str,
+    concept_id: str,
+    body: str,
+    expected_source_digest: str,
+    exclude: Sequence[str] = (),
+) -> dict[str, object]:
+    """Commit one conflict-safe Markdown body replacement."""
+    return _write_concept_edit(path, concept_id, body, expected_source_digest, exclude=exclude)
 
 
 def export_duckdb(
