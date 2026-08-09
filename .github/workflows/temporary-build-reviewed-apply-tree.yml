@@ -1,0 +1,67 @@
+name: Temporary build reviewed apply tree
+
+on:
+  pull_request:
+    branches:
+      - feat/single-concept-edit-0.24.0
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    if: github.head_ref == 'feat/apply-reviewed-preview-token'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/apply-reviewed-preview-token
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Execute finalizer contract without workflow mutation
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          source = Path('.github/workflows/temporary-finalize-apply-token.yml').read_text(encoding='utf-8')
+          names = [
+              'Materialize reviewed-preview contract',
+              'Canonicalize and test token contract',
+              'Synchronize 0.24.1 release metadata',
+              'Validate complete release tree',
+          ]
+          blocks = []
+          for name in names:
+              marker = f'      - name: {name}\n        run: |\n'
+              start = source.index(marker) + len(marker)
+              end = source.find('\n      - name:', start)
+              if end < 0:
+                  end = len(source)
+              raw = source[start:end]
+              lines = []
+              for line in raw.splitlines():
+                  if line.startswith('          '):
+                      line = line[10:]
+                  lines.append(line)
+              blocks.append('\n'.join(lines))
+          script = 'set -euo pipefail\n' + '\n'.join(blocks) + '\n'
+          Path('/tmp/finalize-reviewed-apply.sh').write_text(script, encoding='utf-8')
+          PY
+          bash /tmp/finalize-reviewed-apply.sh
+      - name: Commit validated non-workflow tree
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add README.md pyproject.toml uv.lock changelog/0.24.1.md \
+            src/okf_parser/apply.py src/okf_parser/service.py \
+            tests/test_apply_preview_token.py tests/test_apply_preview_token_noop.py \
+            typescript/package.json typescript/package-lock.json typescript/src/version.ts \
+            typescript-duckdb/package.json typescript-duckdb/package-lock.json
+          git commit -m 'feat(apply): bind commit to reviewed preview candidate'
+          git push
