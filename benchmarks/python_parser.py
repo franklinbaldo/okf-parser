@@ -88,6 +88,7 @@ def _measure(
     body_paragraphs: int,
     rounds: int,
     read_concurrencies: list[int],
+    rust_core: Path | None,
 ) -> dict[str, object]:
     documents = [_document(index, body_paragraphs) for index in range(size)]
     bodies = [source.split("---\n", 2)[2] for source in documents]
@@ -127,9 +128,26 @@ def _measure(
                 )
             concurrent_read_ns[str(concurrency)] = elapsed // len(paths)
         load_ns = _median_ns(lambda: load_bundle(root), rounds)
+        if rust_core is not None:
+            native_bundle = load_bundle(root)
+            rust_bundle = load_bundle(root, rust_core=rust_core)
+            for field in ("concepts", "reserved", "links"):
+                native_rows = getattr(native_bundle, field).execute().to_dict(orient="records")
+                rust_rows = getattr(rust_bundle, field).execute().to_dict(orient="records")
+                if native_rows != rust_rows:
+                    msg = f"native and Rust bundle {field} differ"
+                    raise RuntimeError(msg)
+            if native_bundle.diagnostics != rust_bundle.diagnostics:
+                msg = "native and Rust bundle diagnostics differ"
+                raise RuntimeError(msg)
+        rust_load_ns = (
+            _median_ns(lambda: load_bundle(root, rust_core=rust_core), rounds)
+            if rust_core is not None
+            else None
+        )
 
     markdown_files = len(paths)
-    return {
+    result: dict[str, object] = {
         "documents": size,
         "markdown_files": markdown_files,
         "source_bytes": sum(len(source.encode()) for source in documents),
@@ -143,6 +161,11 @@ def _measure(
         "bundle_load_ns_per_document": load_ns // size,
         "bundle_load_ms": load_ns // 1_000_000,
     }
+    if rust_load_ns is not None:
+        result["rust_bundle_load_ns_per_document"] = rust_load_ns // size
+        result["rust_bundle_load_ms"] = rust_load_ns // 1_000_000
+        result["rust_bundle_speedup"] = load_ns / rust_load_ns
+    return result
 
 
 def main() -> None:
@@ -152,6 +175,7 @@ def main() -> None:
     parser.add_argument("--body-paragraphs", type=int, default=4)
     parser.add_argument("--rounds", type=int, default=5)
     parser.add_argument("--read-concurrencies", default="32")
+    parser.add_argument("--rust-core", type=Path)
     args = parser.parse_args()
     sizes = [int(value) for value in args.sizes.split(",") if value]
     read_concurrencies = [int(value) for value in args.read_concurrencies.split(",") if value]
@@ -165,7 +189,14 @@ def main() -> None:
         "body_paragraphs": args.body_paragraphs,
         "read_concurrencies": read_concurrencies,
         "results": [
-            _measure(size, args.body_paragraphs, args.rounds, read_concurrencies) for size in sizes
+            _measure(
+                size,
+                args.body_paragraphs,
+                args.rounds,
+                read_concurrencies,
+                args.rust_core,
+            )
+            for size in sizes
         ],
     }
     print(json.dumps(report, indent=2, sort_keys=True))  # noqa: T201

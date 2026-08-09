@@ -131,7 +131,17 @@ async function measure(size, bodyParagraphs, rounds) {
       concurrentReadNs[String(concurrency)] = Math.trunc(elapsed / paths.length);
     }
     const loadNs = await medianAsyncNs(() => loadBundle(root), rounds);
-    return {
+    if (rustCore !== undefined) {
+      const nativeBundle = await loadBundle(root);
+      const rustBundle = await loadBundle(root, { rustCore });
+      if (JSON.stringify(nativeBundle) !== JSON.stringify(rustBundle)) {
+        throw new Error("native and Rust bundles differ");
+      }
+    }
+    const rustLoadNs = rustCore === undefined
+      ? undefined
+      : await medianAsyncNs(() => loadBundle(root, { rustCore }), rounds);
+    const result = {
       documents: size,
       markdown_files: paths.length,
       source_bytes: documents.reduce((total, source) => total + Buffer.byteLength(source), 0),
@@ -145,6 +155,12 @@ async function measure(size, bodyParagraphs, rounds) {
       bundle_load_ns_per_document: Math.trunc(loadNs / size),
       bundle_load_ms: Math.trunc(loadNs / 1_000_000),
     };
+    if (rustLoadNs !== undefined) {
+      result.rust_bundle_load_ns_per_document = Math.trunc(rustLoadNs / size);
+      result.rust_bundle_load_ms = Math.trunc(rustLoadNs / 1_000_000);
+      result.rust_bundle_speedup = loadNs / rustLoadNs;
+    }
+    return result;
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -159,6 +175,7 @@ const values = new Map(
 const sizes = (values.get("sizes") ?? "100,1000,5000").split(",").filter(Boolean).map(Number);
 const bodyParagraphs = Number(values.get("body-paragraphs") ?? 4);
 const rounds = Number(values.get("rounds") ?? 5);
+const rustCore = values.get("rust-core") || undefined;
 const readConcurrencies = (values.get("read-concurrencies") ?? "32")
   .split(",")
   .filter(Boolean)
