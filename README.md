@@ -208,26 +208,26 @@ Add the repository as a CI check:
 ```yaml
 steps:
   - uses: actions/checkout@v7
-  - uses: franklinbaldo/okf-parser@v0.37.0
+  - uses: franklinbaldo/okf-parser@v0.38.0
     with:
       path: knowledge
 ```
 
-### Experimental Rust Markdown core
+### Rust end-to-end engine
 
-The default Python and TypeScript implementations remain fully native and require no
-Rust binary. For large batches, build the optional experimental core and pass its path
-explicitly:
+The default Python and TypeScript implementations remain portable and require no Rust
+binary. For large bundles, build the native engine and pass its path explicitly:
 
 ```bash
 cargo build --release --manifest-path rust-core/Cargo.toml
 ```
 
 Python accepts `load_bundle(root, rust_core=Path(".../okf-core"))`; TypeScript accepts
-`loadBundle(root, { rustCore: ".../okf-core" })`. Each load makes one coarse batch
-call for Markdown links and headings. Discovery, reads, YAML, cancellation, validation,
-link resolution, and relational materialization remain language-native. Omitting the
-option is the portable fallback.
+`loadBundle(root, { rustCore: ".../okf-core" })`. The native process owns discovery,
+bounded parallel reads, YAML/frontmatter, Markdown facts, validation, link resolution,
+and content digests. `okf-core duckdb ROOT DATABASE` additionally materializes the four
+relational tables directly with embedded DuckDB. Omitting the option keeps the portable
+language-native fallback.
 
 The composite action installs a pinned uv version and executes the same
 `validate_path()` function used by the Python API, CLI, and MCP server.
