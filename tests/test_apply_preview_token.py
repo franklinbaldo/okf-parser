@@ -1,6 +1,11 @@
+"""Reviewed-preview token tests for RFC 0005 apply."""
+
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from okf_parser.apply import apply_bundle
 

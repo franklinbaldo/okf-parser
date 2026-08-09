@@ -907,7 +907,7 @@ def _build_sugar_sql(type_name: str, field_name: str, from_value: str, to_value:
     )
 
 
-def apply_bundle(  # each argument is an independent public CLI flag.
+def apply_bundle(  # noqa: C901, PLR0911 - snapshot-coherent RFC 0005 orchestration
     path: str,
     *,
     sql: str | None = None,
