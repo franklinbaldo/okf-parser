@@ -23,10 +23,11 @@ jobs:
           from pathlib import Path
           path = Path('.github/workflows/prepare-content-digests-0.34.0.yml')
           text = path.read_text(encoding='utf-8')
-          old = '''              ''' + "'''" + '''def mcp_inventory(\\n    path: str, exclude: RepeatableStrings = None\\n) -> dict[str, object]:\\n    \\\"\\\"\\\"Count concepts by type.\\\"\\\"\\\"\\n    return inventory_bundle(path, exclude or ())\\n''' + "'''" + ''',\n'''
-          new = '''              ''' + "'''" + '''def mcp_inventory(path: str, exclude: RepeatableStrings = None) -> dict[str, object]:\\n    \\\"\\\"\\\"Count concepts by type.\\\"\\\"\\\"\\n    return inventory_bundle(path, exclude or ())\\n''' + "'''" + ''',\n'''
-          if old not in text:
-              raise SystemExit('old mcp_inventory marker not found')
+          old = r'''def mcp_inventory(\n    path: str, exclude: RepeatableStrings = None\n) -> dict[str, object]:\n'''
+          new = r'''def mcp_inventory(path: str, exclude: RepeatableStrings = None) -> dict[str, object]:\n'''
+          count = text.count(old)
+          if count != 1:
+              raise SystemExit(f'expected one mcp_inventory signature marker, found {count}')
           path.write_text(text.replace(old, new, 1), encoding='utf-8')
           PY
           git rm -f .github/workflows/fix-content-digest-preparer.yml
