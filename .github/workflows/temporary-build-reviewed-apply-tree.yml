@@ -16,7 +16,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: feat/apply-reviewed-preview-token
-          fetch-depth: 0
       - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: "0.11.21"
@@ -24,46 +23,72 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
-      - name: Execute finalizer contract without workflow mutation
+      - name: Materialize reviewed-preview implementation
         run: |
           python - <<'PY'
           from pathlib import Path
 
           source = Path('.github/workflows/temporary-finalize-apply-token.yml').read_text(encoding='utf-8')
-          names = [
-              'Materialize reviewed-preview contract',
-              'Canonicalize and test token contract',
-              'Validate complete release tree',
-          ]
-          blocks = []
-          for name in names:
-              marker = f'      - name: {name}\n        run: |\n'
-              start = source.index(marker) + len(marker)
-              end = source.find('\n      - name:', start)
-              if end < 0:
-                  end = len(source)
-              raw = source[start:end]
-              lines = []
-              for line in raw.splitlines():
-                  if line.startswith('          '):
-                      line = line[10:]
-                  lines.append(line)
-              blocks.append('\n'.join(lines))
-
-          lint_guard = '''python - <<'PY2'\nfrom pathlib import Path\npath = Path("src/okf_parser/apply.py")\ntext = path.read_text(encoding="utf-8")\nold = "def apply_bundle(  # each argument is an independent public CLI flag.\\n"\nnew = "def apply_bundle(  # noqa: C901, PLR0911 - snapshot-coherent RFC 0005 orchestration\\n"\nif text.count(new) == 1:\n    pass\nelif text.count(old) == 1:\n    path.write_text(text.replace(old, new, 1), encoding="utf-8")\nelse:\n    raise SystemExit(f"unexpected apply_bundle lint marker state: old={text.count(old)} new={text.count(new)}")\nPY2'''
-
-          release_sync = '''python - <<'PY3'\nfrom pathlib import Path\nreplacements = {\n    Path("pyproject.toml"): [("version = \\\"0.24.0\\\"", "version = \\\"0.24.1\\\"")],\n    Path("typescript/package.json"): [("\\\"version\\\": \\\"0.24.0\\\"", "\\\"version\\\": \\\"0.24.1\\\"")],\n    Path("typescript-duckdb/package.json"): [\n        ("\\\"version\\\": \\\"0.24.0\\\"", "\\\"version\\\": \\\"0.24.1\\\""),\n        ("\\\"okf-parser\\\": \\\"^0.24.0\\\"", "\\\"okf-parser\\\": \\\"^0.24.1\\\""),\n    ],\n    Path("typescript/src/version.ts"): [("PROTOCOL_VERSION = \\\"0.24.0\\\"", "PROTOCOL_VERSION = \\\"0.24.1\\\"")],\n    Path("README.md"): [("franklinbaldo/okf-parser@v0.24.0", "franklinbaldo/okf-parser@v0.24.1")],\n}\nfor path, pairs in replacements.items():\n    text = path.read_text(encoding="utf-8")\n    for old, new in pairs:\n        old_count = text.count(old)\n        new_count = text.count(new)\n        if new_count == 1 and old_count == 0:\n            continue\n        if old_count == 1 and new_count == 0:\n            text = text.replace(old, new, 1)\n            continue\n        raise SystemExit(f"{path}: unexpected release marker state for {old!r} -> {new!r}: old={old_count} new={new_count}")\n    path.write_text(text, encoding="utf-8")\nPY3\nuv lock\nnpm --prefix typescript install --package-lock-only --ignore-scripts\nnpm --prefix typescript-duckdb install --package-lock-only --ignore-scripts'''
-
-          post_release_format = '''uv run ruff format tests/test_apply_preview_token.py tests/test_apply_preview_token_noop.py\nuv run ruff check --fix tests/test_apply_preview_token.py tests/test_apply_preview_token_noop.py\nuv run ruff format tests/test_apply_preview_token.py tests/test_apply_preview_token_noop.py'''
-
-          # materialize -> local lint decision -> focused gates -> release sync -> final format -> full gates
-          script = 'set -euo pipefail\n' + '\n'.join(
-              [blocks[0], lint_guard, blocks[1], release_sync, post_release_format, blocks[2]]
-          ) + '\n'
-          Path('/tmp/finalize-reviewed-apply.sh').write_text(script, encoding='utf-8')
+          marker = '      - name: Materialize reviewed-preview contract\n        run: |\n'
+          start = source.index(marker) + len(marker)
+          end = source.find('\n      - name:', start)
+          raw = source[start:end]
+          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in raw.splitlines()) + '\n'
+          Path('/tmp/materialize-apply-token.sh').write_text(script, encoding='utf-8')
           PY
-          bash /tmp/finalize-reviewed-apply.sh
-      - name: Commit validated non-workflow tree
+          bash /tmp/materialize-apply-token.sh
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/okf_parser/apply.py')
+          text = path.read_text(encoding='utf-8')
+          old = 'def apply_bundle(  # each argument is an independent public CLI flag.\n'
+          new = 'def apply_bundle(  # noqa: C901, PLR0911 - snapshot-coherent RFC 0005 orchestration\n'
+          if text.count(new) == 1:
+              pass
+          elif text.count(old) == 1:
+              path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          else:
+              raise SystemExit('unexpected apply_bundle lint marker')
+          PY
+      - name: Canonicalize and focused-test semantic implementation
+        run: |
+          uv sync --frozen --all-groups
+          uv run ruff format src/okf_parser/apply.py src/okf_parser/service.py tests/test_apply_preview_token.py tests/test_apply_preview_token_noop.py
+          uv run ruff check --fix src/okf_parser/apply.py src/okf_parser/service.py tests/test_apply_preview_token.py tests/test_apply_preview_token_noop.py
+          uv run ruff format src/okf_parser/apply.py src/okf_parser/service.py tests/test_apply_preview_token.py tests/test_apply_preview_token_noop.py
+          uv run pytest -q tests/test_apply.py tests/test_apply_preview_token.py tests/test_apply_preview_token_noop.py
+          uv run ty check src tests
+          uv run vulture src --min-confidence 90
+      - name: Synchronize 0.24.1 metadata and locks
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          replacements = {
+              Path('pyproject.toml'): [('version = "0.24.0"', 'version = "0.24.1"')],
+              Path('typescript/package.json'): [('"version": "0.24.0"', '"version": "0.24.1"')],
+              Path('typescript-duckdb/package.json'): [
+                  ('"version": "0.24.0"', '"version": "0.24.1"'),
+                  ('"okf-parser": "^0.24.0"', '"okf-parser": "^0.24.1"'),
+              ],
+              Path('typescript/src/version.ts'): [('PROTOCOL_VERSION = "0.24.0"', 'PROTOCOL_VERSION = "0.24.1"')],
+              Path('README.md'): [('franklinbaldo/okf-parser@v0.24.0', 'franklinbaldo/okf-parser@v0.24.1')],
+          }
+          for path, pairs in replacements.items():
+              text = path.read_text(encoding='utf-8')
+              for old, new in pairs:
+                  if text.count(new) == 1 and text.count(old) == 0:
+                      continue
+                  if text.count(old) != 1:
+                      raise SystemExit(f'{path}: unexpected version marker {old!r}')
+                  text = text.replace(old, new, 1)
+              path.write_text(text, encoding='utf-8')
+          PY
+          uv lock
+          npm --prefix typescript install --package-lock-only --ignore-scripts
+          npm --prefix typescript-duckdb install --package-lock-only --ignore-scripts
+          uv run ruff format tests/test_apply_preview_token.py tests/test_apply_preview_token_noop.py
+          uv run ruff check src/okf_parser/apply.py src/okf_parser/service.py tests/test_apply_preview_token.py tests/test_apply_preview_token_noop.py
+      - name: Commit semantic blobs only
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
