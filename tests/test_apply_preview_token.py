@@ -32,7 +32,7 @@ Other body
 
 
 def _status_sql() -> str:
-    return 'UPDATE "Note" SET status = \'done\' WHERE __okf_concept_id = \'note\''
+    return "UPDATE \"Note\" SET status = 'done' WHERE __okf_concept_id = 'note'"
 
 
 def test_preview_returns_a_deterministic_candidate_token(tmp_path: Path) -> None:

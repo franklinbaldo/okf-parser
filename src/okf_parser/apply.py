@@ -24,6 +24,9 @@ ones, produced it.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import re
 from dataclasses import dataclass
 from io import StringIO
@@ -47,10 +50,23 @@ from okf_parser.typed_tables import (
 )
 from okf_parser.write_support import (
     ConceptSnapshot as _Concept,
+)
+from okf_parser.write_support import (
     RawDocument as _RawDocument,
+)
+from okf_parser.write_support import (
     WriteResult as ApplyResult,
+)
+from okf_parser.write_support import (
     WriteSupportError,
+)
+from okf_parser.write_support import (
+    render_raw as _render_raw,
+)
+from okf_parser.write_support import (
     snapshot_bundle as _snapshot_bundle,
+)
+from okf_parser.write_support import (
     stage_validate_write as _stage_validate_write,
 )
 
@@ -907,6 +923,52 @@ def _build_sugar_sql(type_name: str, field_name: str, from_value: str, to_value:
     )
 
 
+_APPLY_PREVIEW_PREFIX = "okf-apply-preview-v1-sha256:"
+_APPLY_PREVIEW_CONFLICT = "apply candidate no longer matches the reviewed preview"
+
+
+def _apply_preview_token(
+    snapshot: object,
+    sql: str,
+    exclude: Sequence[str],
+    spec_template: str | None,
+    candidates: dict[str, tuple[_RawDocument, str, Path]],
+) -> str:
+    """Fingerprint the exact baseline, operation and physical candidate bytes."""
+    manifest = snapshot.manifest
+    concepts = snapshot.concepts
+    payload = {
+        "version": 1,
+        "sql": sql,
+        "exclude": list(exclude),
+        "spec_template": spec_template,
+        "manifest": [
+            [relative, signature[0], signature[1]]
+            for relative, signature in sorted(manifest.items())
+        ],
+        "concepts": [
+            [concept.relative, concept.content_hash]
+            for concept in sorted(concepts, key=lambda item: item.relative)
+        ],
+        "candidates": [
+            [relative, hashlib.sha256(_render_raw(raw, frontmatter_text)).hexdigest()]
+            for relative, (raw, frontmatter_text, _real_path) in sorted(candidates.items())
+        ],
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return _APPLY_PREVIEW_PREFIX + hashlib.sha256(encoded).hexdigest()
+
+
+def _with_preview_token(payload: dict[str, object], preview_token: str) -> dict[str, object]:
+    payload["preview_token"] = preview_token
+    return payload
+
+
 def apply_bundle(  # noqa: C901, PLR0911 - snapshot-coherent RFC 0005 orchestration
     path: str,
     *,
@@ -918,6 +980,7 @@ def apply_bundle(  # noqa: C901, PLR0911 - snapshot-coherent RFC 0005 orchestrat
     write: bool = False,
     exclude: Sequence[str] = (),
     spec_template: str | None = None,
+    expected_preview_token: str | None = None,
 ) -> dict[str, object]:
     """Mutate frontmatter fields across a bundle, per RFC 0005."""
     root = Path(path).resolve()
@@ -962,7 +1025,15 @@ def apply_bundle(  # noqa: C901, PLR0911 - snapshot-coherent RFC 0005 orchestrat
         return ApplyResult(succeeded=False, error=str(exc)).to_dict()
 
     if outcome.touched_type is None or not outcome.row_diffs:
-        return ApplyResult().to_dict()
+        preview_token = _apply_preview_token(snapshot, sql, exclude, spec_template, {})
+        if expected_preview_token is not None and not hmac.compare_digest(
+            expected_preview_token, preview_token
+        ):
+            return _with_preview_token(
+                ApplyResult(succeeded=False, error=_APPLY_PREVIEW_CONFLICT).to_dict(),
+                preview_token,
+            )
+        return _with_preview_token(ApplyResult().to_dict(), preview_token)
 
     concepts_by_id = {c.concept_id: c for c in concepts}
     content_hashes = {c.relative: c.content_hash for c in concepts}
@@ -995,11 +1066,28 @@ def apply_bundle(  # noqa: C901, PLR0911 - snapshot-coherent RFC 0005 orchestrat
             error="one or more matched documents cannot round-trip losslessly",
         ).to_dict()
 
+    preview_token = _apply_preview_token(snapshot, sql, exclude, spec_template, candidates)
+    if expected_preview_token is not None and not hmac.compare_digest(
+        expected_preview_token, preview_token
+    ):
+        return _with_preview_token(
+            ApplyResult(
+                changed_paths=tuple(sorted(changed_paths)),
+                succeeded=False,
+                conflict_paths=tuple(sorted(changed_paths)),
+                error=_APPLY_PREVIEW_CONFLICT,
+            ).to_dict(),
+            preview_token,
+        )
+
     if not write:
-        return ApplyResult(changed_paths=tuple(sorted(changed_paths))).to_dict()
+        return _with_preview_token(
+            ApplyResult(changed_paths=tuple(sorted(changed_paths))).to_dict(),
+            preview_token,
+        )
 
     touched_hashes = {rel: content_hashes[rel] for rel in candidates}
-    return _stage_validate_write(
+    result = _stage_validate_write(
         root,
         exclude,
         candidates,
@@ -1010,3 +1098,4 @@ def apply_bundle(  # noqa: C901, PLR0911 - snapshot-coherent RFC 0005 orchestrat
         conflict_error="the bundle changed since apply validated it",
         temp_prefix="okf-apply-",
     )
+    return _with_preview_token(result, preview_token)

@@ -21,7 +21,7 @@ Body
 """,
         encoding="utf-8",
     )
-    sql = 'UPDATE "Note" SET status = \'done\' WHERE __okf_concept_id = \'note\''
+    sql = "UPDATE \"Note\" SET status = 'done' WHERE __okf_concept_id = 'note'"
     preview = apply_bundle(str(tmp_path), sql=sql)
     token = preview["preview_token"]
     assert isinstance(token, str)

@@ -220,7 +220,8 @@ def snapshot_bundle(root: Path, exclude: Sequence[str]) -> BundleSnapshot:
             raw = source.read_bytes()
             after_stat = _file_signature(source)
             if before_stat != after_stat:
-                raise WriteSupportError(f"file changed while it was being read: {posix}")
+                message = f"file changed while it was being read: {posix}"
+                raise WriteSupportError(message)
             manifest[posix] = after_stat
             concept = _parse_concept(root, source, raw)
             if concept is not None:
@@ -275,7 +276,7 @@ def build_candidate_tree(
                 shutil.copy2(source, destination)
 
 
-def stage_validate_write(
+def stage_validate_write(  # noqa: PLR0913 - shared write gate has explicit inputs
     root: Path,
     exclude: Sequence[str],
     candidates: CandidateDocuments,
