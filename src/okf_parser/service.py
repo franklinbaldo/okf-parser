@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import duckdb
 import networkx as nx
@@ -56,10 +56,17 @@ def import_bundle(  # each argument is an independent public CLI flag.
     id_column: str | None = None,
     write: bool = False,
     overwrite: bool = False,
+    on_conflict: Literal["skip", "verify-identical"] = "skip",
 ) -> dict[str, object]:
     """Materialize every row of a DuckDB-readable source as one concept document."""
     return _import_bundle(
-        source, path, concept_type, id_column=id_column, write=write, overwrite=overwrite
+        source,
+        path,
+        concept_type,
+        id_column=id_column,
+        write=write,
+        overwrite=overwrite,
+        on_conflict=on_conflict,
     )
 
 
