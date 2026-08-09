@@ -33,7 +33,6 @@ jobs:
           names = [
               'Materialize reviewed-preview contract',
               'Canonicalize and test token contract',
-              'Synchronize 0.24.1 release metadata',
               'Validate complete release tree',
           ]
           blocks = []
@@ -52,8 +51,13 @@ jobs:
               blocks.append('\n'.join(lines))
 
           lint_guard = '''python - <<'PY2'\nfrom pathlib import Path\npath = Path("src/okf_parser/apply.py")\ntext = path.read_text(encoding="utf-8")\nold = "def apply_bundle(  # each argument is an independent public CLI flag.\\n"\nnew = "def apply_bundle(  # noqa: C901, PLR0911 - snapshot-coherent RFC 0005 orchestration\\n"\nif text.count(new) == 1:\n    pass\nelif text.count(old) == 1:\n    path.write_text(text.replace(old, new, 1), encoding="utf-8")\nelse:\n    raise SystemExit(f"unexpected apply_bundle lint marker state: old={text.count(old)} new={text.count(new)}")\nPY2'''
-          blocks.insert(1, lint_guard)
-          script = 'set -euo pipefail\n' + '\n'.join(blocks) + '\n'
+
+          release_sync = '''python - <<'PY3'\nfrom pathlib import Path\nreplacements = {\n    Path("pyproject.toml"): [("version = \\\"0.24.0\\\"", "version = \\\"0.24.1\\\"")],\n    Path("typescript/package.json"): [("\\\"version\\\": \\\"0.24.0\\\"", "\\\"version\\\": \\\"0.24.1\\\"")],\n    Path("typescript-duckdb/package.json"): [\n        ("\\\"version\\\": \\\"0.24.0\\\"", "\\\"version\\\": \\\"0.24.1\\\""),\n        ("\\\"okf-parser\\\": \\\"^0.24.0\\\"", "\\\"okf-parser\\\": \\\"^0.24.1\\\""),\n    ],\n    Path("typescript/src/version.ts"): [("PROTOCOL_VERSION = \\\"0.24.0\\\"", "PROTOCOL_VERSION = \\\"0.24.1\\\"")],\n    Path("README.md"): [("franklinbaldo/okf-parser@v0.24.0", "franklinbaldo/okf-parser@v0.24.1")],\n}\nfor path, pairs in replacements.items():\n    text = path.read_text(encoding="utf-8")\n    for old, new in pairs:\n        old_count = text.count(old)\n        new_count = text.count(new)\n        if new_count == 1 and old_count == 0:\n            continue\n        if old_count == 1 and new_count == 0:\n            text = text.replace(old, new, 1)\n            continue\n        raise SystemExit(f"{path}: unexpected release marker state for {old!r} -> {new!r}: old={old_count} new={new_count}")\n    path.write_text(text, encoding="utf-8")\nPY3\nuv lock\nnpm --prefix typescript install --package-lock-only --ignore-scripts\nnpm --prefix typescript-duckdb install --package-lock-only --ignore-scripts'''
+
+          # materialize -> local lint decision -> focused gates -> release sync -> full gates
+          script = 'set -euo pipefail\n' + '\n'.join(
+              [blocks[0], lint_guard, blocks[1], release_sync, blocks[2]]
+          ) + '\n'
           Path('/tmp/finalize-reviewed-apply.sh').write_text(script, encoding='utf-8')
           PY
           bash /tmp/finalize-reviewed-apply.sh
@@ -66,5 +70,6 @@ jobs:
             tests/test_apply_preview_token.py tests/test_apply_preview_token_noop.py \
             typescript/package.json typescript/package-lock.json typescript/src/version.ts \
             typescript-duckdb/package.json typescript-duckdb/package-lock.json
+          git diff --cached --quiet && exit 0
           git commit -m 'feat(apply): bind commit to reviewed preview candidate'
           git push
