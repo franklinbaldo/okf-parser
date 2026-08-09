@@ -2,7 +2,7 @@ import { readFile, readdir, lstat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parsedDigest, sourceDigest } from "./digests.js";
-import { rustMarkdownFactsBatch } from "./rust-core.js";
+import { rustLoadBundle } from "./rust-core.js";
 
 import MarkdownIt from "markdown-it";
 
@@ -839,17 +839,19 @@ export async function loadBundle(
       `read concurrency must be an integer from 1 through ${MAX_READ_CONCURRENCY}`,
     );
   }
+  if (options.rustCore !== undefined) {
+    return rustLoadBundle(root, options.rustCore, {
+      readConcurrency,
+      ...(options.exclude === undefined ? {} : { exclude: options.exclude }),
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    });
+  }
   const paths = await discoverMarkdown(root, options);
   const knownPaths = new Set(paths.map((item) => path.resolve(item)));
   const concepts: ConceptRecord[] = [];
   const reserved: ReservedRecord[] = [];
   const links: LinkRecord[] = [];
   const diagnostics: Diagnostic[] = [];
-  const pendingRust: Array<{
-    readonly filePath: string;
-    readonly relative: string;
-    readonly parsed: ParsedDocument;
-  }> = [];
 
   const appendConcept = (
     filePath: string,
@@ -930,24 +932,7 @@ export async function loadBundle(
       diagnostics.push(diagnostic("OKF001", "error", relative, messageOf(error)));
       continue;
     }
-    if (options.rustCore === undefined) {
-      appendConcept(filePath, relative, parsed, markdownFacts(parsed.body));
-    } else {
-      pendingRust.push({ filePath, relative, parsed });
-    }
-  }
-
-  if (options.rustCore !== undefined && pendingRust.length > 0) {
-    const facts = await rustMarkdownFactsBatch(
-      pendingRust.map((item) => item.parsed.body),
-      options.rustCore,
-      options.signal,
-    );
-    pendingRust.forEach((item, index) => {
-      const documentFacts = facts[index];
-      if (documentFacts === undefined) throw new Error("Rust facts response cardinality mismatch");
-      appendConcept(item.filePath, item.relative, item.parsed, documentFacts);
-    });
+    appendConcept(filePath, relative, parsed, markdownFacts(parsed.body));
   }
 
   diagnostics.sort(compareDiagnostics);

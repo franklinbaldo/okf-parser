@@ -97,6 +97,23 @@ async function readAllBounded(paths, concurrency) {
   );
 }
 
+async function writeCorpusBounded(root, documents, concurrency = 32) {
+  let next = 0;
+  async function worker() {
+    while (next < documents.length) {
+      const index = next;
+      next += 1;
+      const source = documents[index];
+      if (source !== undefined) {
+        await writeFile(path.join(root, `concept-${index}.md`), source, "utf8");
+      }
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(concurrency, documents.length) }, () => worker()),
+  );
+}
+
 async function measure(size, bodyParagraphs, rounds) {
   const documents = Array.from({ length: size }, (_, index) => documentSource(index, bodyParagraphs));
   const bodies = documents.map((source) => splitFrontmatterSource(source)[1]);
@@ -112,11 +129,7 @@ async function measure(size, bodyParagraphs, rounds) {
   const root = await mkdtemp(path.join(tmpdir(), "okf-parser-benchmark-"));
   try {
     await writeFile(path.join(root, "index.md"), "# Benchmark bundle\n", "utf8");
-    await Promise.all(
-      documents.map((source, index) =>
-        writeFile(path.join(root, `concept-${index}.md`), source, "utf8"),
-      ),
-    );
+    await writeCorpusBounded(root, documents);
     const paths = await discoverMarkdown(root);
     const discoveryNs = await medianAsyncNs(() => discoverMarkdown(root), rounds);
     const sequentialReadNs = await medianAsyncNs(async () => {

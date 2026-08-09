@@ -95,7 +95,7 @@ export {
   typeSlug,
 } from "./type-specs.js";
 export { PROTOCOL_VERSION } from "./version.js";
-export { RustCoreError, rustMarkdownFactsBatch } from "./rust-core.js";
+export { RustCoreError, rustLoadBundle, rustMarkdownFactsBatch } from "./rust-core.js";
 import { PROTOCOL_VERSION } from "./version.js";
 
 export const capabilityManifest = Object.freeze({

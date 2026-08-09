@@ -13,6 +13,24 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+def rust_load_bundle(
+    root: Path, executable: Path, exclude: Sequence[str] = (), *, read_concurrency: int = 32
+) -> object:
+    """Run the end-to-end native engine and return its relational payload."""
+    command = [str(executable), "load", str(root), "--read-concurrency", str(read_concurrency)]
+    for pattern in exclude:
+        command.extend(("--exclude", pattern))
+    completed = subprocess.run(command, capture_output=True, check=False, text=True)  # noqa: S603
+    if completed.returncode != 0:
+        message = completed.stderr.strip() or f"okf exited with {completed.returncode}"
+        raise RustCoreError(message)
+    try:
+        return json.loads(completed.stdout)
+    except json.JSONDecodeError as exc:
+        message = f"invalid okf load response: {exc}"
+        raise RustCoreError(message) from exc
+
+
 class RustCoreError(RuntimeError):
     """The optional Rust core failed or returned an invalid response."""
 

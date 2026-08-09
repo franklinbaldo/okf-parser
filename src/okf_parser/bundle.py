@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import date
-from typing import TYPE_CHECKING, cast
+from pathlib import Path
+from typing import TYPE_CHECKING, TypedDict, cast
 
 import ibis
 import networkx as nx
@@ -32,13 +34,12 @@ from okf_parser.parser import (
     resolve_local_target,
     split_optional_frontmatter,
 )
-from okf_parser.rust_core import rust_markdown_facts_batch
+from okf_parser.rust_core import rust_load_bundle
 from okf_parser.type_specs import missing_type_specs
 from okf_parser.typed_relations import TypedRelations, compile_bundle_types
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
-    from pathlib import Path
 
     from ibis.expr.types import Table
 
@@ -70,6 +71,28 @@ _ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 _TITLE_LEVEL = 1
 _DATE_LEVEL = 2
 type TableRecord = ConceptRecord | ReservedRecord | LinkRecord
+
+
+class _RustBundlePayload(TypedDict):
+    root: str
+    concepts: list[object]
+    reserved: list[object]
+    links: list[object]
+    diagnostics: list[object]
+    markdown_count: int
+
+
+def _python_concept_payload(item: object) -> object:
+    if not isinstance(item, dict):
+        return item
+    frontmatter_json = item.get("frontmatter_json")
+    if not isinstance(frontmatter_json, str):
+        return item
+    normalized = dict(item)
+    normalized["frontmatter_json"] = json.dumps(
+        json.loads(frontmatter_json), ensure_ascii=False, sort_keys=True
+    )
+    return normalized
 
 
 def _ordered(diagnostics: Iterable[Violation]) -> list[Violation]:
@@ -342,7 +365,7 @@ def _validate_log(root: Path, path: Path, text: str) -> tuple[str, list[Violatio
     return body, diagnostics
 
 
-def load_bundle(  # noqa: C901
+def load_bundle(
     root: Path,
     exclude: Sequence[str] = (),
     *,
@@ -358,13 +381,38 @@ def load_bundle(  # noqa: C901
         msg = f"bundle root is not a directory: {root}"
         raise NotADirectoryError(msg)
 
+    if rust_core is not None:
+        payload = rust_load_bundle(root, rust_core, exclude)
+        if not isinstance(payload, dict):
+            message = "invalid okf load response: expected an object"
+            raise ValueError(message)
+        native = cast("_RustBundlePayload", payload)
+        return Bundle(
+            root=Path(native["root"]),
+            concepts=_table(
+                [
+                    ConceptRecord.model_validate(_python_concept_payload(value))
+                    for value in native["concepts"]
+                ],
+                _CONCEPT_SCHEMA,
+            ),
+            reserved=_table(
+                [ReservedRecord.model_validate(value) for value in native["reserved"]],
+                _RESERVED_SCHEMA,
+            ),
+            links=_table(
+                [LinkRecord.model_validate(value) for value in native["links"]], _LINK_SCHEMA
+            ),
+            diagnostics=tuple(Violation.model_validate(value) for value in native["diagnostics"]),
+            markdown_count=native["markdown_count"],
+        )
+
     paths = discover_markdown(root, ExclusionRules.read(root, exclude))
     known_paths = {path.resolve() for path in paths}
     concepts: list[ConceptRecord] = []
     reserved: list[ReservedRecord] = []
     links: list[LinkRecord] = []
     diagnostics: list[Violation] = []
-    pending_rust: list[tuple[Path, ParsedDocument]] = []
 
     for path in paths:
         relative = path.relative_to(root).as_posix()
@@ -389,38 +437,11 @@ def load_bundle(  # noqa: C901
             reserved.append(ReservedRecord(path=relative, filename=path.name, body=body))
             continue
 
-        if rust_core is not None:
-            try:
-                pending_rust.append((path, parse_document(path)))
-            except (DocumentParseError, OSError) as exc:
-                diagnostics.append(
-                    Violation(
-                        code="OKF001",
-                        severity=Severity.ERROR,
-                        path=relative,
-                        message=str(exc),
-                    )
-                )
-            continue
-
         record, document_links, document_diagnostics = _load_concept(root, path, known_paths)
         if record is not None:
             concepts.append(record)
         links.extend(document_links)
         diagnostics.extend(document_diagnostics)
-
-    if rust_core is not None and pending_rust:
-        rust_facts = rust_markdown_facts_batch(
-            [parsed.body for _, parsed in pending_rust], rust_core
-        )
-        for (path, parsed), facts in zip(pending_rust, rust_facts, strict=True):
-            record, document_links, document_diagnostics = _load_concept(
-                root, path, known_paths, parsed, facts
-            )
-            if record is not None:
-                concepts.append(record)
-            links.extend(document_links)
-            diagnostics.extend(document_diagnostics)
 
     return Bundle(
         root=root,
