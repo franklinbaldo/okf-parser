@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from okf_parser.apply import apply_bundle
+
 if TYPE_CHECKING:
     from pathlib import Path
-
-from okf_parser.apply import apply_bundle
 
 
 def _write_bundle(root: Path) -> None:
@@ -46,7 +46,8 @@ def test_preview_returns_a_deterministic_candidate_token(tmp_path: Path) -> None
     assert token.startswith("okf-apply-preview-v1-sha256:")
     assert second["preview_token"] == token
     assert first["changed_paths"] == ["note.md"]
-    assert (tmp_path / "note.md").read_text(encoding="utf-8").find("status: todo") >= 0
+    note = (tmp_path / "note.md").read_text(encoding="utf-8")
+    assert "status: todo" in note
 
 
 def test_write_accepts_the_exact_reviewed_preview(tmp_path: Path) -> None:
@@ -93,7 +94,10 @@ def test_bundle_change_after_preview_invalidates_commit(tmp_path: Path) -> None:
     assert isinstance(token, str)
 
     other = tmp_path / "other.md"
-    other.write_text(other.read_text(encoding="utf-8") + "External change\n", encoding="utf-8")
+    other.write_text(
+        other.read_text(encoding="utf-8") + "External change\n",
+        encoding="utf-8",
+    )
     note_before = (tmp_path / "note.md").read_text(encoding="utf-8")
 
     result = apply_bundle(
