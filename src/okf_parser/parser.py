@@ -10,6 +10,7 @@ import yaml
 from markdown_it import MarkdownIt
 from pydantic import ValidationError
 
+from okf_parser.digests import normalize_newlines, parsed_digest, source_digest
 from okf_parser.discovery import is_markdown_filename
 from okf_parser.models import FRONTMATTER_ADAPTER, ParsedDocument, YamlValue
 
@@ -135,7 +136,7 @@ def _load_frontmatter(block: str) -> dict[str, YamlValue] | None:
 def parse_document(path: Path) -> ParsedDocument:
     """Parse YAML frontmatter and preserve the Markdown body."""
     try:
-        text = path.read_text(encoding="utf-8")
+        text = path.read_bytes().decode("utf-8")
     except UnicodeDecodeError as exc:
         msg = "document must be valid UTF-8"
         raise DocumentParseError(msg) from exc
@@ -149,16 +150,20 @@ def parse_document_text(path: Path, text: str) -> ParsedDocument:
     (hashing, a freshness check) should read once and call this directly,
     rather than `parse_document`, which reads the file itself.
     """
-    split = _split_frontmatter_source(text)
+    source_identity = source_digest(text)
+    split = _split_frontmatter_source(normalize_newlines(text))
     if split is None:
         msg = "concept must start with YAML frontmatter delimited by ---"
         raise DocumentParseError(msg)
-    frontmatter, body = split
+    frontmatter_block, body = split
+    frontmatter = _load_frontmatter(frontmatter_block) or {}
 
     return ParsedDocument(
         path=path,
-        frontmatter=_load_frontmatter(frontmatter) or {},
+        frontmatter=frontmatter,
         body=body,
+        source_digest=source_identity,
+        parsed_digest=parsed_digest(frontmatter, body),
     )
 
 

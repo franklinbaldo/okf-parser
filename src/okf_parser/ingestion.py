@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
+from okf_parser.digests import normalize_newlines, parsed_digest, source_digest
 from okf_parser.discovery import discover_markdown
 from okf_parser.exclusion import ExclusionRules
 from okf_parser.parser import (
@@ -30,6 +31,7 @@ class IngestionCapability(StrEnum):
     BODY = "body"
     FRONTMATTER = "frontmatter"
     MARKDOWN_FACTS = "markdown_facts"
+    DIGESTS = "digests"
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +45,8 @@ class DocumentEnvelope:
     body: str | None = None
     frontmatter: dict[str, YamlValue] | None = None
     facts: MarkdownFacts | None = None
+    source_digest: str | None = None
+    parsed_digest: str | None = None
     error: str | None = None
 
 
@@ -75,8 +79,8 @@ def ingest_documents(
                 yield DocumentEnvelope(ordinal, relative, size, classification)
                 continue
 
-            text = path.read_text(encoding="utf-8")
-            frontmatter, body = split_optional_frontmatter(text)
+            text = path.read_bytes().decode("utf-8")
+            frontmatter, body = split_optional_frontmatter(normalize_newlines(text))
             if classification != "reserved":
                 concept_type = None if frontmatter is None else frontmatter.get("type")
                 classification = (
@@ -87,6 +91,13 @@ def ingest_documents(
             facts = (
                 markdown_facts(body) if IngestionCapability.MARKDOWN_FACTS in requested else None
             )
+            wants_digests = IngestionCapability.DIGESTS in requested
+            source_identity = source_digest(text) if wants_digests else None
+            parsed_identity = (
+                parsed_digest(frontmatter, body)
+                if wants_digests and frontmatter is not None
+                else None
+            )
             yield DocumentEnvelope(
                 ordinal=ordinal,
                 path=relative,
@@ -95,6 +106,8 @@ def ingest_documents(
                 body=body if IngestionCapability.BODY in requested else None,
                 frontmatter=(frontmatter if IngestionCapability.FRONTMATTER in requested else None),
                 facts=facts,
+                source_digest=source_identity,
+                parsed_digest=parsed_identity,
             )
         except (DocumentParseError, OSError, UnicodeDecodeError) as exc:
             yield DocumentEnvelope(

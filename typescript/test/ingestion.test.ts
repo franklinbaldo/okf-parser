@@ -40,3 +40,16 @@ test("projects frontmatter and Markdown facts without retaining body", async () 
   });
   expect(envelopes[0]?.body).toBeUndefined();
 });
+
+
+test("digest capability composes with projection pushdown", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "okf-ingest-digest-"));
+  await writeFile(path.join(root, "note.md"), "\uFEFF---\r\ntype: Note\r\n---\r\nBody\r\n");
+  const rows = [];
+  for await (const row of ingestDocuments(root, { capabilities: ["digests"] })) rows.push(row);
+  expect(rows).toHaveLength(1);
+  expect(rows[0]?.sourceDigest).toMatch(/^sha256:[0-9a-f]{64}$/u);
+  expect(rows[0]?.parsedDigest).toMatch(/^okf-parsed-v1-jcs-sha256:[0-9a-f]{64}$/u);
+  expect(rows[0]?.body).toBeUndefined();
+  expect(rows[0]?.frontmatter).toBeUndefined();
+});

@@ -38,3 +38,15 @@ def test_projected_ingestion_reads_once_and_reuses_document_facts(tmp_path: Path
     assert item.facts is not None
     assert item.facts.links == ("two.md",)
     assert item.facts.headings == ((1, "Heading"),)
+
+
+def test_digest_capability_reuses_one_content_read_and_exposes_exact_source(tmp_path: Path) -> None:
+    source = b"\xef\xbb\xbf---\r\ntype: Note\r\n---\r\nBody\r\n"
+    (tmp_path / "note.md").write_bytes(source)
+
+    [item] = ingest_documents(tmp_path, (IngestionCapability.DIGESTS,))
+
+    assert item.source_digest == "sha256:" + __import__("hashlib").sha256(source).hexdigest()
+    assert item.parsed_digest is not None
+    assert item.body is None
+    assert item.frontmatter is None
