@@ -1,0 +1,82 @@
+name: Temporary release 0.24.1
+
+on:
+  pull_request:
+    branches:
+      - feat/single-concept-edit-0.24.0
+
+permissions:
+  contents: write
+
+jobs:
+  release-metadata:
+    if: github.head_ref == 'feat/apply-reviewed-preview-token'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/apply-reviewed-preview-token
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+      - name: Require implementation and bump manifests
+        shell: bash
+        run: |
+          grep -q 'expected_preview_token' src/okf_parser/apply.py
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          py = Path('pyproject.toml')
+          text = py.read_text()
+          assert 'version = "0.24.0"' in text
+          py.write_text(text.replace('version = "0.24.0"', 'version = "0.24.1"', 1))
+
+          for name in ('typescript/package.json', 'typescript-duckdb/package.json'):
+              path = Path(name)
+              data = json.loads(path.read_text())
+              assert data['version'] == '0.24.0'
+              data['version'] = '0.24.1'
+              path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + '\n')
+          PY
+          cat > changelog/0.24.1.md <<'EOF'
+          ---
+          type: Release
+          title: okf-parser 0.24.1
+          description: bind relational apply commits to the exact reviewed preview candidate
+          ---
+
+          # okf-parser 0.24.1
+
+          - return a deterministic opaque `preview_token` from successful RFC 0005 `apply` previews;
+          - bind the token to the exact baseline snapshot, SQL operation, parser configuration, and physical candidate bytes;
+          - allow writes to require `expected_preview_token` and fail closed when the recomputed candidate differs;
+          - detect intervening unrelated bundle changes, candidates that become no-ops, and nondeterministic DuckDB expressions between preview and commit;
+          - retain the existing in-invocation whole-bundle freshness check after reviewed-preview verification;
+          - share exact physical rendering between candidate hashing and filesystem writes so the reviewed bytes are the bytes committed.
+          EOF
+      - name: Regenerate reproducible locks
+        run: |
+          uv lock
+          npm install --package-lock-only --ignore-scripts --prefix typescript
+          npm install --package-lock-only --ignore-scripts --prefix typescript-duckdb
+      - name: Validate version synchronization
+        run: |
+          grep -q 'version = "0.24.1"' pyproject.toml
+          node -e "if (require('./typescript/package.json').version !== '0.24.1') process.exit(1)"
+          node -e "if (require('./typescript-duckdb/package.json').version !== '0.24.1') process.exit(1)"
+          uv lock --check
+      - name: Remove temporary workflow and commit
+        shell: bash
+        run: |
+          rm -f .github/workflows/temporary-release-0241.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m 'chore(release): prepare 0.24.1'
+          git push
