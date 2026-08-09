@@ -135,17 +135,43 @@ function isRecord(value: FrontmatterValue): value is Readonly<Record<string, Fro
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function freezeDeclaredLogicalType(value: DeclaredLogicalType): DeclaredLogicalType {
+  return Object.freeze({
+    ...value,
+    ...(value.element === undefined ? {} : { element: freezeDeclaredLogicalType(value.element) }),
+  });
+}
+
+function freezeContractNode<T extends ContractNode>(node: T): T {
+  if (node.kind === "object") {
+    for (const field of node.fields) {
+      freezeContractNode(field.value);
+      Object.freeze(field);
+    }
+    Object.freeze(node.fields);
+  } else if (node.kind === "list") {
+    freezeContractNode(node.item);
+  }
+  return Object.freeze(node);
+}
+
 function declaredNode(declaredType: DeclaredLogicalType): ContractNode {
-  if (declaredType.family === "list" && declaredType.element !== undefined) {
-    return { kind: "list", item: declaredNode(declaredType.element), itemNullable: false, declaredType };
+  const immutableDeclaredType = freezeDeclaredLogicalType(declaredType);
+  if (immutableDeclaredType.family === "list" && immutableDeclaredType.element !== undefined) {
+    return {
+      kind: "list",
+      item: declaredNode(immutableDeclaredType.element),
+      itemNullable: false,
+      declaredType: immutableDeclaredType,
+    };
   }
   const scalar: ScalarKind =
-    declaredType.family === "boolean" ? "boolean" :
-    declaredType.family === "integer" ? "integer" :
-    declaredType.family === "float" || declaredType.family === "decimal" ? "number" :
-    declaredType.family === "date" ? "date" :
-    declaredType.family === "timestamptz" ? "datetime" : "string";
-  return { kind: "scalar", scalar, declaredType };
+    immutableDeclaredType.family === "boolean" ? "boolean" :
+    immutableDeclaredType.family === "integer" ? "integer" :
+    immutableDeclaredType.family === "float" || immutableDeclaredType.family === "decimal" ? "number" :
+    immutableDeclaredType.family === "date" ? "date" :
+    immutableDeclaredType.family === "timestamp" || immutableDeclaredType.family === "timestamptz" ? "datetime" : "string";
+  return { kind: "scalar", scalar, declaredType: immutableDeclaredType };
 }
 
 function scalarContract(values: readonly string[], fieldPath: string, options: CompileOptions, conceptType?: string): ContractNode {
@@ -302,7 +328,7 @@ export function compileBundleTypeContracts(bundle: Bundle, schemaOptions: Schema
       Object.freeze({
         conceptType,
         modelName: names.get(conceptType) ?? identifierName(conceptType, "Concept"),
-        root: compileObject(documents, "", options, conceptType),
+        root: freezeContractNode(compileObject(documents, "", options, conceptType)),
       }),
     );
   const unused = [...options.casts.keys()].filter((field) => !options.usedCasts.has(field));
@@ -377,11 +403,10 @@ function nodeSchema(node: ContractNode): JsonSchema {
   };
 }
 
-export async function exportJsonSchema(
-  root: string | URL,
+export function exportBundleJsonSchema(
+  bundle: Bundle,
   options: SchemaOptions = {},
-): Promise<SchemaReport> {
-  const bundle = await loadBundle(root, options);
+): SchemaReport {
   const contracts = compileBundleTypeContracts(bundle, options);
   const schemas = Object.fromEntries(
     contracts.map((contract) => [
@@ -396,6 +421,14 @@ export async function exportJsonSchema(
     casts: Object.freeze([...(options.casts ?? [])]),
     schemas: Object.freeze(schemas),
   });
+}
+
+export async function exportJsonSchema(
+  root: string | URL,
+  options: SchemaOptions = {},
+): Promise<SchemaReport> {
+  const bundle = await loadBundle(root, options);
+  return exportBundleJsonSchema(bundle, options);
 }
 
 function declaredScalarZod(declaredType: DeclaredLogicalType): string {
