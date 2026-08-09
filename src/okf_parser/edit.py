@@ -12,7 +12,7 @@ from __future__ import annotations
 import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from okf_parser.bundle import load_bundle, validate_path
 from okf_parser.digests import normalize_newlines
@@ -188,10 +188,11 @@ def _edit_concept(
         }
         new_diagnostics = candidate_keys - baseline_keys
         if new_diagnostics:
-            validation = tuple(
+            validation_items: list[dict[str, object]] = [
                 {"code": code, "path": diagnostic_path, "message": message}
                 for code, diagnostic_path, message in sorted(new_diagnostics)
-            )
+            ]
+            validation = tuple(validation_items)
             return EditResult(
                 concept_id=concept.concept_id,
                 path=concept.relative,
@@ -227,6 +228,20 @@ def _edit_concept(
     )
     succeeded = bool(write_result.get("succeeded", False))
     written = bool(write_result.get("written", False))
+    validation_value = write_result.get("validation", ())
+    validation = (
+        cast("tuple[dict[str, object], ...]", tuple(validation_value))
+        if isinstance(validation_value, (list, tuple))
+        else ()
+    )
+    conflict_value = write_result.get("conflict_paths", ())
+    conflict_paths = (
+        tuple(item for item in conflict_value if isinstance(item, str))
+        if isinstance(conflict_value, (list, tuple))
+        else ()
+    )
+    error_value = write_result.get("error")
+    error = error_value if isinstance(error_value, str) else None
     return EditResult(
         concept_id=concept.concept_id,
         path=concept.relative,
@@ -236,9 +251,9 @@ def _edit_concept(
         changed=True,
         succeeded=succeeded,
         written=written,
-        validation=tuple(write_result.get("validation", ())),
-        conflict_paths=tuple(write_result.get("conflict_paths", ())),
-        error=write_result.get("error") if isinstance(write_result.get("error"), str) else None,
+        validation=validation,
+        conflict_paths=conflict_paths,
+        error=error,
     ).to_dict()
 
 
