@@ -1,0 +1,224 @@
+name: Temporary implement reviewed preview
+
+on:
+  pull_request:
+    branches:
+      - feat/single-concept-edit-0.24.0
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    if: github.head_ref == 'feat/apply-reviewed-preview-token'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/apply-reviewed-preview-token
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+      - name: Install locked environment
+        run: uv sync --frozen --all-groups
+      - name: Apply reviewed-preview implementation
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/okf_parser/apply.py')
+          text = path.read_text()
+
+          old_imports = '''import re
+          from dataclasses import dataclass
+          from io import StringIO
+          from pathlib import Path
+          from typing import TYPE_CHECKING, cast
+          '''
+          new_imports = '''import hashlib
+          import hmac
+          import json
+          import re
+          from dataclasses import dataclass
+          from io import StringIO
+          from pathlib import Path
+          from typing import TYPE_CHECKING, cast
+          '''
+          assert old_imports in text
+          text = text.replace(old_imports, new_imports, 1)
+
+          old_write_import = '''    RawDocument as _RawDocument,
+              WriteResult as ApplyResult,
+              WriteSupportError,
+              snapshot_bundle as _snapshot_bundle,
+              stage_validate_write as _stage_validate_write,
+          )'''
+          new_write_import = '''    RawDocument as _RawDocument,
+              WriteResult as ApplyResult,
+              WriteSupportError,
+              render_raw as _render_raw,
+              snapshot_bundle as _snapshot_bundle,
+              stage_validate_write as _stage_validate_write,
+          )'''
+          assert old_write_import in text
+          text = text.replace(old_write_import, new_write_import, 1)
+
+          marker = '''def apply_bundle(  # noqa: C901, PLR0911 - snapshot-coherent RFC 0005 orchestration
+          '''
+          assert marker in text
+          helper = '''_APPLY_PREVIEW_TOKEN_PREFIX = "okf-apply-preview-v1-sha256:"
+          _APPLY_PREVIEW_CONFLICT = "apply candidate no longer matches the reviewed preview"
+          
+          
+          def _apply_preview_token(
+              snapshot: object,
+              sql: str,
+              exclude: Sequence[str],
+              spec_template: str | None,
+              candidates: dict[str, tuple[_RawDocument, str, Path]],
+          ) -> str:
+              """Fingerprint the exact baseline, operation and physical candidate bytes."""
+              manifest = getattr(snapshot, "manifest")
+              concepts = getattr(snapshot, "concepts")
+              payload = {
+                  "version": 1,
+                  "sql": sql,
+                  "exclude": list(exclude),
+                  "spec_template": spec_template,
+                  "manifest": [
+                      [relative, signature[0], signature[1]]
+                      for relative, signature in sorted(manifest.items())
+                  ],
+                  "concepts": [
+                      [concept.relative, concept.content_hash]
+                      for concept in sorted(concepts, key=lambda item: item.relative)
+                  ],
+                  "candidates": [
+                      [
+                          relative,
+                          hashlib.sha256(_render_raw(raw, frontmatter_text)).hexdigest(),
+                      ]
+                      for relative, (raw, frontmatter_text, _real_path) in sorted(candidates.items())
+                  ],
+              }
+              encoded = json.dumps(
+                  payload,
+                  ensure_ascii=False,
+                  sort_keys=True,
+                  separators=(",", ":"),
+              ).encode("utf-8")
+              return _APPLY_PREVIEW_TOKEN_PREFIX + hashlib.sha256(encoded).hexdigest()
+          
+          
+          def _with_preview_token(payload: dict[str, object], preview_token: str) -> dict[str, object]:
+              payload["preview_token"] = preview_token
+              return payload
+          
+          
+          '''
+          text = text.replace(marker, helper + marker, 1)
+
+          old_signature = '''    write: bool = False,
+              exclude: Sequence[str] = (),
+              spec_template: str | None = None,
+          ) -> dict[str, object]:'''
+          new_signature = '''    write: bool = False,
+              exclude: Sequence[str] = (),
+              spec_template: str | None = None,
+              expected_preview_token: str | None = None,
+          ) -> dict[str, object]:'''
+          assert old_signature in text
+          text = text.replace(old_signature, new_signature, 1)
+
+          old_noop = '''    if outcome.touched_type is None or not outcome.row_diffs:
+              return ApplyResult().to_dict()
+          
+              concepts_by_id = {c.concept_id: c for c in concepts}
+          '''
+          new_noop = '''    if outcome.touched_type is None or not outcome.row_diffs:
+              preview_token = _apply_preview_token(snapshot, sql, exclude, spec_template, {})
+              if expected_preview_token is not None and not hmac.compare_digest(
+                  expected_preview_token, preview_token
+              ):
+                  return _with_preview_token(
+                      ApplyResult(succeeded=False, error=_APPLY_PREVIEW_CONFLICT).to_dict(),
+                      preview_token,
+                  )
+              return _with_preview_token(ApplyResult().to_dict(), preview_token)
+          
+              concepts_by_id = {c.concept_id: c for c in concepts}
+          '''
+          assert old_noop in text
+          text = text.replace(old_noop, new_noop, 1)
+
+          old_tail = '''    if not write:
+              return ApplyResult(changed_paths=tuple(sorted(changed_paths))).to_dict()
+          
+              touched_hashes = {rel: content_hashes[rel] for rel in candidates}
+              return _stage_validate_write(
+                  root,
+                  exclude,
+                  candidates,
+                  baseline_keys,
+                  changed_paths,
+                  touched_hashes,
+                  snapshot.manifest,
+                  conflict_error="the bundle changed since apply validated it",
+                  temp_prefix="okf-apply-",
+              )'''
+          new_tail = '''    preview_token = _apply_preview_token(snapshot, sql, exclude, spec_template, candidates)
+              if expected_preview_token is not None and not hmac.compare_digest(
+                  expected_preview_token, preview_token
+              ):
+                  return _with_preview_token(
+                      ApplyResult(
+                          changed_paths=tuple(sorted(changed_paths)),
+                          succeeded=False,
+                          conflict_paths=tuple(sorted(changed_paths)),
+                          error=_APPLY_PREVIEW_CONFLICT,
+                      ).to_dict(),
+                      preview_token,
+                  )
+          
+              if not write:
+                  return _with_preview_token(
+                      ApplyResult(changed_paths=tuple(sorted(changed_paths))).to_dict(), preview_token
+                  )
+          
+              touched_hashes = {rel: content_hashes[rel] for rel in candidates}
+              result = _stage_validate_write(
+                  root,
+                  exclude,
+                  candidates,
+                  baseline_keys,
+                  changed_paths,
+                  touched_hashes,
+                  snapshot.manifest,
+                  conflict_error="the bundle changed since apply validated it",
+                  temp_prefix="okf-apply-",
+              )
+              return _with_preview_token(result, preview_token)'''
+          assert old_tail in text
+          text = text.replace(old_tail, new_tail, 1)
+
+          path.write_text(text)
+          PY
+      - name: Format and validate implementation
+        run: |
+          uv run ruff format src/okf_parser/apply.py src/okf_parser/write_support.py tests/test_apply_preview_token.py tests/test_apply_preview_token_noop.py
+          uv run ruff check --fix src/okf_parser/apply.py src/okf_parser/write_support.py tests/test_apply_preview_token.py tests/test_apply_preview_token_noop.py
+          uv run ruff format --check src/okf_parser/apply.py src/okf_parser/write_support.py tests/test_apply_preview_token.py tests/test_apply_preview_token_noop.py
+          uv run ruff check src/okf_parser/apply.py src/okf_parser/write_support.py tests/test_apply_preview_token.py tests/test_apply_preview_token_noop.py
+          uv run pytest -q tests/test_apply_preview_token.py tests/test_apply_preview_token_noop.py
+      - name: Remove temporary workflows and commit
+        shell: bash
+        run: |
+          rm -f .github/workflows/temporary-*.yml .github/workflows/temporary-*.yaml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m 'feat(apply): bind writes to reviewed preview candidates'
+          git push
