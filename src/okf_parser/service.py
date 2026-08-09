@@ -201,6 +201,7 @@ def apply_bundle(  # each argument is an independent public CLI flag.
     write: bool = False,
     exclude: Sequence[str] = (),
     spec_template: str | None = None,
+    expected_preview_token: str | None = None,
 ) -> dict[str, object]:
     """Mutate frontmatter fields across a bundle via a bounded SQL script."""
     return _apply_bundle(
@@ -213,6 +214,7 @@ def apply_bundle(  # each argument is an independent public CLI flag.
         write=write,
         exclude=exclude,
         spec_template=spec_template,
+        expected_preview_token=expected_preview_token,
     )
 
 
