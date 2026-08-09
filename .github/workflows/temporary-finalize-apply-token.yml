@@ -1,0 +1,309 @@
+name: Temporary finalize apply token
+
+on:
+  pull_request:
+    branches:
+      - feat/single-concept-edit-0.24.0
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.head_ref == 'feat/apply-reviewed-preview-token'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/apply-reviewed-preview-token
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+
+      - name: Materialize reviewed-preview contract
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected one marker, found {count}")
+              return text.replace(old, new, 1)
+
+          path = Path("src/okf_parser/apply.py")
+          text = path.read_text(encoding="utf-8")
+
+          text = once(
+              text,
+              "from __future__ import annotations\n\nimport re\n",
+              "from __future__ import annotations\n\nimport hashlib\nimport re\n",
+              "hashlib import",
+          )
+          text = once(
+              text,
+              "from okf_parser.write_support import (\n"
+              "    ConceptSnapshot as _Concept,\n"
+              "    RawDocument as _RawDocument,\n"
+              "    WriteResult as ApplyResult,\n"
+              "    WriteSupportError,\n"
+              "    snapshot_bundle as _snapshot_bundle,\n"
+              "    stage_validate_write as _stage_validate_write,\n"
+              ")\n",
+              "from okf_parser.write_support import (\n"
+              "    BundleSnapshot,\n"
+              "    CandidateDocuments,\n"
+              "    ConceptSnapshot as _Concept,\n"
+              "    RawDocument as _RawDocument,\n"
+              "    WriteResult,\n"
+              "    WriteSupportError,\n"
+              "    snapshot_bundle as _snapshot_bundle,\n"
+              "    stage_validate_write as _stage_validate_write,\n"
+              ")\n",
+              "write-support imports",
+          )
+
+          apply_error = (
+              "class ApplyError(ValueError):\n"
+              "    \"\"\"Raised when `--sql` is malformed or a script violates the v1 contract.\"\"\"\n\n\n"
+          )
+          helpers = apply_error + '''@dataclass(frozen=True, slots=True)
+          class ApplyResult(WriteResult):
+              """RFC 0005 result plus an opaque identity for the exact reviewed candidate."""
+
+              preview_token: str | None = None
+
+              def to_dict(self) -> dict[str, object]:
+                  """Return the stable JSON-ready result, including preview identity when present."""
+                  payload = super().to_dict()
+                  if self.preview_token is not None:
+                      payload["preview_token"] = self.preview_token
+                  return payload
+
+
+          def _feed_preview_token(hasher: object, value: bytes) -> None:
+              """Length-frame one byte string so concatenated fields cannot collide structurally."""
+              update = getattr(hasher, "update")
+              update(len(value).to_bytes(8, "big"))
+              update(value)
+
+
+          def _candidate_bytes(raw: _RawDocument, frontmatter_text: str) -> bytes:
+              """Reconstruct the exact bytes the shared writer will put on disk."""
+              text = "---\\n" + frontmatter_text
+              if not text.endswith("\\n"):
+                  text += "\\n"
+              text += "---\\n" + raw.body_text
+              if raw.crlf:
+                  text = text.replace("\\n", "\\r\\n")
+              return raw.bom + text.encode("utf-8")
+
+
+          def _apply_preview_token(
+              snapshot: BundleSnapshot,
+              sql: str,
+              candidates: CandidateDocuments,
+              exclude: Sequence[str],
+              spec_template: str | None,
+          ) -> str:
+              """Commit to the exact baseline, operation, and candidate bytes reviewed by a caller."""
+              hasher = hashlib.sha256()
+              _feed_preview_token(hasher, b"okf-apply-preview-v1")
+              _feed_preview_token(hasher, sql.encode("utf-8"))
+              _feed_preview_token(hasher, (spec_template or "").encode("utf-8"))
+              for rule in exclude:
+                  _feed_preview_token(hasher, rule.encode("utf-8"))
+              for relative, (size, mtime_ns) in sorted(snapshot.manifest.items()):
+                  _feed_preview_token(hasher, relative.encode("utf-8"))
+                  _feed_preview_token(hasher, str(size).encode("ascii"))
+                  _feed_preview_token(hasher, str(mtime_ns).encode("ascii"))
+              for concept in sorted(snapshot.concepts, key=lambda item: item.relative):
+                  _feed_preview_token(hasher, concept.relative.encode("utf-8"))
+                  _feed_preview_token(hasher, concept.content_hash.encode("ascii"))
+              for relative, (raw, frontmatter_text, _) in sorted(candidates.items()):
+                  _feed_preview_token(hasher, relative.encode("utf-8"))
+                  _feed_preview_token(hasher, _candidate_bytes(raw, frontmatter_text))
+              return f"okf-apply-preview-v1-sha256:{hasher.hexdigest()}"
+
+
+          def _preview_mismatch_result(
+              changed_paths: Sequence[str], preview_token: str
+          ) -> dict[str, object]:
+              """Return a conflict-shaped failure when commit no longer reproduces its preview."""
+              return ApplyResult(
+                  changed_paths=tuple(sorted(changed_paths)),
+                  succeeded=False,
+                  written=False,
+                  conflict_paths=tuple(sorted(changed_paths)),
+                  error="apply candidate no longer matches the reviewed preview",
+                  preview_token=preview_token,
+              ).to_dict()
+
+
+          '''
+          # The triple-quoted helper text above is intentionally indented in this
+          # workflow source; remove that transport indentation before insertion.
+          helpers = "\n".join(line[10:] if line.startswith("          ") else line for line in helpers.splitlines()) + "\n"
+          text = once(text, apply_error, helpers, "ApplyResult/token helpers")
+
+          signature_old = (
+              "    write: bool = False,\n"
+              "    exclude: Sequence[str] = (),\n"
+              "    spec_template: str | None = None,\n"
+          )
+          signature_new = (
+              "    write: bool = False,\n"
+              "    expected_preview_token: str | None = None,\n"
+              "    exclude: Sequence[str] = (),\n"
+              "    spec_template: str | None = None,\n"
+          )
+          text = once(text, signature_old, signature_new, "apply_bundle preview token argument")
+
+          noop_old = (
+              "    if outcome.touched_type is None or not outcome.row_diffs:\n"
+              "        return ApplyResult().to_dict()\n\n"
+          )
+          noop_new = (
+              "    if outcome.touched_type is None or not outcome.row_diffs:\n"
+              "        preview_token = _apply_preview_token(snapshot, sql, {}, exclude, spec_template)\n"
+              "        if expected_preview_token is not None and expected_preview_token != preview_token:\n"
+              "            return _preview_mismatch_result((), preview_token)\n"
+              "        return ApplyResult(preview_token=preview_token).to_dict()\n\n"
+          )
+          text = once(text, noop_old, noop_new, "no-op preview token")
+
+          tail_old = (
+              "    if not write:\n"
+              "        return ApplyResult(changed_paths=tuple(sorted(changed_paths))).to_dict()\n\n"
+              "    touched_hashes = {rel: content_hashes[rel] for rel in candidates}\n"
+              "    return _stage_validate_write(\n"
+              "        root,\n"
+              "        exclude,\n"
+              "        candidates,\n"
+              "        baseline_keys,\n"
+              "        changed_paths,\n"
+              "        touched_hashes,\n"
+              "        snapshot.manifest,\n"
+              "        conflict_error=\"the bundle changed since apply validated it\",\n"
+              "        temp_prefix=\"okf-apply-\",\n"
+              "    )\n"
+          )
+          tail_new = (
+              "    preview_token = _apply_preview_token(\n"
+              "        snapshot, sql, candidates, exclude, spec_template\n"
+              "    )\n"
+              "    if expected_preview_token is not None and expected_preview_token != preview_token:\n"
+              "        return _preview_mismatch_result(changed_paths, preview_token)\n\n"
+              "    if not write:\n"
+              "        return ApplyResult(\n"
+              "            changed_paths=tuple(sorted(changed_paths)), preview_token=preview_token\n"
+              "        ).to_dict()\n\n"
+              "    touched_hashes = {rel: content_hashes[rel] for rel in candidates}\n"
+              "    write_result = _stage_validate_write(\n"
+              "        root,\n"
+              "        exclude,\n"
+              "        candidates,\n"
+              "        baseline_keys,\n"
+              "        changed_paths,\n"
+              "        touched_hashes,\n"
+              "        snapshot.manifest,\n"
+              "        conflict_error=\"the bundle changed since apply validated it\",\n"
+              "        temp_prefix=\"okf-apply-\",\n"
+              "    )\n"
+              "    write_result[\"preview_token\"] = preview_token\n"
+              "    return write_result\n"
+          )
+          text = once(text, tail_old, tail_new, "preview/write token path")
+          path.write_text(text, encoding="utf-8")
+
+          service_path = Path("src/okf_parser/service.py")
+          service = service_path.read_text(encoding="utf-8")
+          service = once(
+              service,
+              "    write: bool = False,\n    exclude: Sequence[str] = (),\n    spec_template: str | None = None,\n",
+              "    write: bool = False,\n    expected_preview_token: str | None = None,\n    exclude: Sequence[str] = (),\n    spec_template: str | None = None,\n",
+              "service preview token argument",
+          )
+          service = once(
+              service,
+              "        write=write,\n        exclude=exclude,\n        spec_template=spec_template,\n",
+              "        write=write,\n        expected_preview_token=expected_preview_token,\n        exclude=exclude,\n        spec_template=spec_template,\n",
+              "service preview token forwarding",
+          )
+          service_path.write_text(service, encoding="utf-8")
+          PY
+
+      - name: Canonicalize and test contract
+        run: |
+          uv sync --frozen --all-groups
+          uv run ruff format src/okf_parser/apply.py src/okf_parser/service.py tests/test_apply_preview_token.py tests/test_apply_preview_token_noop.py
+          uv run ruff check --fix src/okf_parser/apply.py src/okf_parser/service.py tests/test_apply_preview_token.py tests/test_apply_preview_token_noop.py
+          uv run ruff format src/okf_parser/apply.py src/okf_parser/service.py tests/test_apply_preview_token.py tests/test_apply_preview_token_noop.py
+          uv run pytest -q tests/test_apply.py tests/test_apply_preview_token.py tests/test_apply_preview_token_noop.py
+          uv run ty check src tests
+          uv run vulture src --min-confidence 90
+
+      - name: Synchronize 0.24.1 release metadata
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          replacements = {
+              Path("pyproject.toml"): [("version = \"0.24.0\"", "version = \"0.24.1\"")],
+              Path("typescript/package.json"): [("\"version\": \"0.24.0\"", "\"version\": \"0.24.1\"")],
+              Path("typescript-duckdb/package.json"): [
+                  ("\"version\": \"0.24.0\"", "\"version\": \"0.24.1\""),
+                  ("\"okf-parser\": \"^0.24.0\"", "\"okf-parser\": \"^0.24.1\""),
+              ],
+              Path("typescript/src/version.ts"): [("PROTOCOL_VERSION = \"0.24.0\"", "PROTOCOL_VERSION = \"0.24.1\"")],
+              Path("README.md"): [("franklinbaldo/okf-parser@v0.24.0", "franklinbaldo/okf-parser@v0.24.1")],
+          }
+          for path, pairs in replacements.items():
+              text = path.read_text(encoding="utf-8")
+              for old, new in pairs:
+                  count = text.count(old)
+                  if count != 1:
+                      raise SystemExit(f"{path}: expected one {old!r}, found {count}")
+                  text = text.replace(old, new)
+              path.write_text(text, encoding="utf-8")
+          PY
+          uv lock
+          npm --prefix typescript install --package-lock-only --ignore-scripts
+          npm --prefix typescript-duckdb install --package-lock-only --ignore-scripts
+
+      - name: Validate complete release tree
+        run: |
+          uv sync --frozen --all-groups
+          uv lock --check
+          uv run ruff format --check .
+          uv run ruff check .
+          uv run ty check src tests
+          uv run vulture src --min-confidence 90
+          uv run pytest --cov --cov-report=term-missing --cov-fail-under=85
+          uv run okf-parser check .
+          uv build
+          npm --prefix typescript ci
+          npm --prefix typescript run check
+          npm --prefix typescript test
+          npm --prefix typescript run build
+          npm --prefix typescript-duckdb ci
+          npm --prefix typescript-duckdb run check
+          npm --prefix typescript-duckdb test
+          npm --prefix typescript-duckdb run build
+
+      - name: Rebuild one semantic commit and remove helper
+        run: |
+          set -euo pipefail
+          git rm -f .github/workflows/temporary-finalize-apply-token.yml
+          git fetch origin feat/single-concept-edit-0.24.0
+          git reset --soft origin/feat/single-concept-edit-0.24.0
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'feat(apply): bind commit to reviewed preview candidate'
+          git push --force-with-lease origin HEAD:feat/apply-reviewed-preview-token
