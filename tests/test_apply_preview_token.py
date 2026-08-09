@@ -1,5 +1,7 @@
 """Reviewed-preview token tests for RFC 0005 apply."""
 
+# ruff: noqa: PLC0415
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
