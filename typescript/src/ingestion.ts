@@ -11,8 +11,9 @@ import {
   splitOptionalFrontmatter,
 } from "./core.js";
 import type { FrontmatterValue, LoadOptions, MarkdownFacts } from "./core.js";
+import { parsedDigest, sourceDigest } from "./digests.js";
 
-export type IngestionCapability = "identity" | "body" | "frontmatter" | "markdown_facts";
+export type IngestionCapability = "identity" | "body" | "frontmatter" | "markdown_facts" | "digests";
 
 export interface DocumentEnvelope {
   readonly ordinal: number;
@@ -22,6 +23,8 @@ export interface DocumentEnvelope {
   readonly body?: string;
   readonly frontmatter?: Readonly<Record<string, FrontmatterValue>> | null;
   readonly facts?: MarkdownFacts;
+  readonly sourceDigest?: string;
+  readonly parsedDigest?: string | null;
   readonly error?: string;
 }
 
@@ -103,6 +106,12 @@ export async function* ingestDocuments(
         ...(requested.has("body") ? { body } : {}),
         ...(requested.has("frontmatter") ? { frontmatter } : {}),
         ...(requested.has("markdown_facts") ? { facts: markdownFacts(body) } : {}),
+        ...(requested.has("digests")
+          ? {
+              sourceDigest: sourceDigest(loaded.text),
+              parsedDigest: frontmatter === null ? null : parsedDigest(frontmatter, body),
+            }
+          : {}),
       });
     } catch (error) {
       yield Object.freeze({

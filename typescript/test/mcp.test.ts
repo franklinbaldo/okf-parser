@@ -61,6 +61,21 @@ test("returns structured validation and schema results", async () => {
     },
   });
 
+  const inventory = await client.callTool({
+    name: "inventory",
+    arguments: { path: root, digests: true },
+  });
+  expect(inventory.structuredContent).toMatchObject({
+    digests: [
+      {
+        concept_id: "sample",
+        path: "sample.md",
+        source_digest: expect.stringMatching(/^sha256:/u),
+        parsed_digest: expect.stringMatching(/^okf-parsed-v1-jcs-sha256:/u),
+      },
+    ],
+  });
+
   const schema = await client.callTool({
     name: "schema",
     arguments: { path: root, infer_types: true },

@@ -50,6 +50,8 @@ _CONCEPT_SCHEMA = ibis.schema(
         "concept_type": "string",
         "title": "string",
         "description": "string",
+        "source_digest": "string",
+        "parsed_digest": "string",
         "frontmatter_json": "string",
         "body": "string",
     }
@@ -219,6 +221,8 @@ def _load_concept(
         concept_type=parsed.concept_type,
         title=parsed.title,
         description=parsed.description,
+        source_digest=parsed.source_digest,
+        parsed_digest=parsed.parsed_digest,
         frontmatter_json=parsed.frontmatter_json,
         body=parsed.body,
     )

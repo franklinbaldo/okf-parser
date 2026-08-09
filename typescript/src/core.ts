@@ -1,6 +1,7 @@
 import { readFile, readdir, lstat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { parsedDigest, sourceDigest } from "./digests.js";
 import { rustMarkdownFactsBatch } from "./rust-core.js";
 
 import MarkdownIt from "markdown-it";
@@ -41,6 +42,8 @@ export interface ParsedDocument {
   readonly conceptType: string;
   readonly title: string | null;
   readonly description: string | null;
+  readonly sourceDigest: string;
+  readonly parsedDigest: string;
 }
 
 export interface ConceptRecord {
@@ -50,6 +53,8 @@ export interface ConceptRecord {
   readonly conceptType: string;
   readonly title: string | null;
   readonly description: string | null;
+  readonly sourceDigest: string;
+  readonly parsedDigest: string;
   readonly frontmatterJson: string;
   readonly body: string;
 }
@@ -113,12 +118,24 @@ export interface CheckReport {
   readonly classification?: BundleClassification;
 }
 
+export interface InventoryOptions extends LoadOptions {
+  readonly digests?: boolean;
+}
+
+export interface DigestRecord {
+  readonly concept_id: string;
+  readonly path: string;
+  readonly source_digest: string;
+  readonly parsed_digest: string;
+}
+
 export interface InventoryReport {
   readonly root: string;
   readonly types: readonly {
     readonly concept_type: string;
     readonly concept_count: number;
   }[];
+  readonly digests?: readonly DigestRecord[];
 }
 
 export interface GraphReport {
@@ -230,7 +247,7 @@ function errorCode(error: unknown): string | null {
 async function readUtf8(filePath: string): Promise<string> {
   const bytes = await readFile(filePath);
   try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
   } catch (error) {
     throw new DocumentParseError("document must be valid UTF-8", { path: filePath, cause: error });
   }
@@ -350,6 +367,7 @@ function optionalText(frontmatter: Readonly<Record<string, FrontmatterValue>>, k
 }
 
 export function parseDocumentContent(content: string, documentPath = "<memory>"): ParsedDocument {
+  const sourceIdentity = sourceDigest(content);
   const split = splitFrontmatterSource(content);
   if (split === null) {
     throw new DocumentParseError("concept must start with YAML frontmatter delimited by ---", {
@@ -376,6 +394,8 @@ export function parseDocumentContent(content: string, documentPath = "<memory>")
     conceptType,
     title: optionalText(frontmatter, "title"),
     description: optionalText(frontmatter, "description"),
+    sourceDigest: sourceIdentity,
+    parsedDigest: parsedDigest(frontmatter, body),
   });
 }
 
@@ -864,6 +884,8 @@ export async function loadBundle(
         conceptType: parsed.conceptType,
         title: parsed.title,
         description: parsed.description,
+        sourceDigest: parsed.sourceDigest,
+        parsedDigest: parsed.parsedDigest,
         frontmatterJson: parsed.frontmatterJson,
         body: parsed.body,
       }),
@@ -1008,13 +1030,25 @@ export async function checkBundle(
 
 export async function inventoryBundle(
   root: string | URL,
-  options: LoadOptions = {},
+  options: InventoryOptions = {},
 ): Promise<InventoryReport> {
   const bundle = await loadBundle(root, options);
   const counts = new Map<string, number>();
   for (const concept of bundle.concepts) {
     counts.set(concept.conceptType, (counts.get(concept.conceptType) ?? 0) + 1);
   }
+  const digests = options.digests === true
+    ? Object.freeze(
+        bundle.concepts
+          .map((concept) => Object.freeze({
+            concept_id: concept.conceptId,
+            path: concept.path,
+            source_digest: concept.sourceDigest,
+            parsed_digest: concept.parsedDigest,
+          }))
+          .sort((left, right) => left.path.localeCompare(right.path, "en")),
+      )
+    : undefined;
   return Object.freeze({
     root: bundle.root,
     types: Object.freeze(
@@ -1022,6 +1056,7 @@ export async function inventoryBundle(
         .sort(([left], [right]) => left.localeCompare(right, "en"))
         .map(([concept_type, concept_count]) => Object.freeze({ concept_type, concept_count })),
     ),
+    ...(digests === undefined ? {} : { digests }),
   });
 }
 

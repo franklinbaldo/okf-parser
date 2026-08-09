@@ -93,13 +93,17 @@ MCP tools: `init_preview`; `init_write` with `--allow-write`.
 ## `inventory`
 
 ```bash
-uv run okf-parser inventory path/to/bundle [--exclude PATTERN]...
+uv run okf-parser inventory path/to/bundle [--exclude PATTERN]... [--digests]
 ```
 
-Counts concepts by type using an Ibis relation over the parsed bundle. Always
-exits `0`.
+Counts concepts by producer-defined `type`. `--digests` also returns one row
+per concept with `concept_id`, `path`, `source_digest`, and `parsed_digest`.
+`source_digest` identifies the exact valid UTF-8 source. `parsed_digest` fingerprints
+the parsed frontmatter/body value using RFC 8785/JCS ordering and string rules with
+LF-normalized body content. It is not a historical Revision id and does not claim
+Markdown/editorial semantic equivalence.
 
-MCP tool: `inventory`.
+MCP tool: `inventory` with the same optional `digests` argument.
 
 ## `graph`
 

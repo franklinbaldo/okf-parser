@@ -121,9 +121,11 @@ def init(
 
 
 @app.command
-def inventory(path: str, *, exclude: RepeatableStrings = None) -> CliResult[JsonPayload]:
-    """Count concepts by type using an Ibis relation."""
-    return CliResult(inventory_bundle(path, exclude or ()))
+def inventory(
+    path: str, *, exclude: RepeatableStrings = None, digests: bool = False
+) -> CliResult[JsonPayload]:
+    """Count concepts by type and optionally expose deterministic content digests."""
+    return CliResult(inventory_bundle(path, exclude or (), digests=digests))
 
 
 @app.command
@@ -281,9 +283,11 @@ def mcp_check(
     )
 
 
-def mcp_inventory(path: str, exclude: RepeatableStrings = None) -> dict[str, object]:
-    """Count concepts by type."""
-    return inventory_bundle(path, exclude or ())
+def mcp_inventory(
+    path: str, exclude: RepeatableStrings = None, *, digests: bool = False
+) -> dict[str, object]:
+    """Count concepts by type and optionally expose deterministic content digests."""
+    return inventory_bundle(path, exclude or (), digests=digests)
 
 
 def mcp_graph(path: str, exclude: RepeatableStrings = None) -> dict[str, object]:
