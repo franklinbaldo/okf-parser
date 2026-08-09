@@ -1,15 +1,17 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { DuckDBConnection } from "@duckdb/node-api";
 import {
+  type Bundle,
   type DeclaredLogicalType,
   type DeclaredTypesByType,
   type SchemaOptions,
   type SchemaReport,
   type TypeContract,
-  compileTypeContracts,
-  exportJsonSchema,
+  compileBundleTypeContracts,
+  exportBundleJsonSchema,
   loadBundle,
   specRelativePath,
 } from "okf-parser";
@@ -24,6 +26,15 @@ export class DeclaredSchemaError extends Error {
 export interface DeclaredSchemaOptions extends SchemaOptions {
   readonly specTemplate: string;
 }
+
+export interface DeclaredCatalogSchema {
+  readonly tableName: string;
+  readonly columns: Readonly<Record<string, DeclaredLogicalType>>;
+  readonly tableComment: string | null;
+  readonly columnComments: Readonly<Record<string, string>>;
+}
+
+const DECIMAL_RE = /^DECIMAL\((\d+),\s*(\d+)\)$/u;
 
 function identifierKey(value: string): string {
   return [...value].map((character) =>
@@ -46,12 +57,15 @@ function logicalType(dataType: string, precision?: number, scale?: number): Decl
   if (key.endsWith("[]")) {
     return Object.freeze({ sql, family: "list", element: logicalType(sql.slice(0, -2)) });
   }
-  if (key.startsWith("DECIMAL(")) {
+  const decimal = DECIMAL_RE.exec(key);
+  if (decimal !== null) {
+    const parsedPrecision = Number(decimal[1]);
+    const parsedScale = Number(decimal[2]);
     return Object.freeze({
       sql,
       family: "decimal",
-      ...(precision === undefined ? {} : { precision }),
-      ...(scale === undefined ? {} : { scale }),
+      precision: precision ?? parsedPrecision,
+      scale: scale ?? parsedScale,
     });
   }
   const integers = new Set(["TINYINT", "SMALLINT", "INTEGER", "BIGINT", "HUGEINT", "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT"]);
@@ -84,7 +98,10 @@ async function isFile(candidate: string): Promise<boolean> {
   }
 }
 
-async function parseDeclaredSchema(sqlText: string, conceptType: string): Promise<Readonly<Record<string, DeclaredLogicalType>>> {
+export async function parseDeclaredSchema(
+  sqlText: string,
+  conceptType: string,
+): Promise<DeclaredCatalogSchema> {
   const connection = await DuckDBConnection.create();
   try {
     await connection.run("SET TimeZone = 'UTC'");
@@ -94,7 +111,7 @@ async function parseDeclaredSchema(sqlText: string, conceptType: string): Promis
       throw new DeclaredSchemaError(`declared schema script failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     const tableReader = await connection.runAndReadAll(
-      "SELECT database_oid, schema_oid, table_oid, table_name FROM duckdb_tables() WHERE NOT temporary"
+      "SELECT database_oid, schema_oid, table_oid, table_name, comment FROM duckdb_tables() WHERE NOT temporary"
     );
     const matches = tableReader.getRowsJS().filter((row) =>
       typeof row[3] === "string" && identifierKey(row[3]) === identifierKey(conceptType)
@@ -105,44 +122,61 @@ async function parseDeclaredSchema(sqlText: string, conceptType: string): Promis
     if (matches.length > 1) {
       throw new DeclaredSchemaError(`declared schema script left more than one table named ${JSON.stringify(conceptType)}`);
     }
-    const [databaseOid, schemaOid, tableOid] = matches[0] ?? [];
+    const [databaseOid, schemaOid, tableOid, tableName, tableComment] = matches[0] ?? [];
     if (!((typeof databaseOid === "number" || typeof databaseOid === "bigint") &&
       (typeof schemaOid === "number" || typeof schemaOid === "bigint") &&
       (typeof tableOid === "number" || typeof tableOid === "bigint"))) {
       throw new DeclaredSchemaError("DuckDB catalog returned non-numeric table identity");
     }
+    if (typeof tableName !== "string") {
+      throw new DeclaredSchemaError("DuckDB catalog returned a non-string table name");
+    }
+    if (tableComment !== null && typeof tableComment !== "string") {
+      throw new DeclaredSchemaError("DuckDB catalog returned a non-string table comment");
+    }
     const columnsReader = await connection.runAndReadAll(
-      "SELECT column_name, data_type, numeric_precision, numeric_scale FROM duckdb_columns() " +
+      "SELECT column_name, data_type, comment, numeric_precision, numeric_scale FROM duckdb_columns() " +
       "WHERE database_oid = $databaseOid AND schema_oid = $schemaOid AND table_oid = $tableOid ORDER BY column_index",
       { databaseOid, schemaOid, tableOid },
     );
     const columns: Record<string, DeclaredLogicalType> = {};
+    const columnComments: Record<string, string> = {};
     for (const row of columnsReader.getRowsJS()) {
       if (typeof row[0] !== "string" || typeof row[1] !== "string") continue;
       columns[row[0]] = logicalType(
         row[1],
-        typeof row[2] === "number" ? row[2] : undefined,
         typeof row[3] === "number" ? row[3] : undefined,
+        typeof row[4] === "number" ? row[4] : undefined,
       );
+      if (typeof row[2] === "string") columnComments[row[0]] = row[2];
     }
-    return Object.freeze(columns);
+    return Object.freeze({
+      tableName,
+      columns: Object.freeze(columns),
+      tableComment,
+      columnComments: Object.freeze(columnComments),
+    });
   } finally {
     connection.closeSync();
   }
 }
 
-export async function loadDeclaredTypes(
+function resolveRoot(rootInput: string | URL): string {
+  return path.resolve(rootInput instanceof URL ? fileURLToPath(rootInput) : rootInput);
+}
+
+export async function loadDeclaredSchemas(
   rootInput: string | URL,
   conceptTypes: readonly string[],
   specTemplate: string,
-): Promise<DeclaredTypesByType> {
-  const root = path.resolve(rootInput instanceof URL ? rootInput.pathname : rootInput);
+): Promise<Readonly<Record<string, DeclaredCatalogSchema>>> {
+  const root = resolveRoot(rootInput);
   const ownersByPath = new Map<string, string[]>();
   for (const conceptType of conceptTypes) {
     const relative = declaredSchemaRelativePath(specTemplate, conceptType);
     if (relative !== null) ownersByPath.set(relative, [...(ownersByPath.get(relative) ?? []), conceptType]);
   }
-  const declarations: Record<string, Readonly<Record<string, DeclaredLogicalType>>> = {};
+  const declarations: Record<string, DeclaredCatalogSchema> = {};
   for (const [relative, owners] of [...ownersByPath].sort(([left], [right]) => left.localeCompare(right, "en"))) {
     const declarationPath = path.join(root, relative);
     if (!(await isFile(declarationPath))) continue;
@@ -158,26 +192,65 @@ export async function loadDeclaredTypes(
   return Object.freeze(declarations);
 }
 
-async function declaredOptions(
-  root: string | URL,
+export async function loadDeclaredTypes(
+  rootInput: string | URL,
+  conceptTypes: readonly string[],
+  specTemplate: string,
+): Promise<DeclaredTypesByType> {
+  const schemas = await loadDeclaredSchemas(rootInput, conceptTypes, specTemplate);
+  return Object.freeze(Object.fromEntries(
+    Object.entries(schemas).map(([conceptType, schema]) => [conceptType, schema.columns]),
+  ));
+}
+
+function schemaOptions(
+  options: DeclaredSchemaOptions,
+  declaredTypesByType: DeclaredTypesByType,
+): SchemaOptions {
+  return {
+    ...(options.exclude === undefined ? {} : { exclude: options.exclude }),
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+    ...(options.inferTypes === undefined ? {} : { inferTypes: options.inferTypes }),
+    ...(options.casts === undefined ? {} : { casts: options.casts }),
+    declaredTypesByType,
+  };
+}
+
+async function declaredOptionsForBundle(
+  bundle: Bundle,
   options: DeclaredSchemaOptions,
 ): Promise<SchemaOptions> {
-  const bundle = await loadBundle(root, options);
   const conceptTypes = [...new Set(bundle.concepts.map((concept) => concept.conceptType))];
-  const declaredTypesByType = await loadDeclaredTypes(root, conceptTypes, options.specTemplate);
-  return { ...options, declaredTypesByType };
+  const declaredTypesByType = await loadDeclaredTypes(bundle.root, conceptTypes, options.specTemplate);
+  return schemaOptions(options, declaredTypesByType);
+}
+
+export async function compileDeclaredBundleTypeContracts(
+  bundle: Bundle,
+  options: DeclaredSchemaOptions,
+): Promise<readonly TypeContract[]> {
+  return compileBundleTypeContracts(bundle, await declaredOptionsForBundle(bundle, options));
 }
 
 export async function compileDeclaredTypeContracts(
   root: string | URL,
   options: DeclaredSchemaOptions,
 ): Promise<readonly TypeContract[]> {
-  return compileTypeContracts(root, await declaredOptions(root, options));
+  const bundle = await loadBundle(root, options);
+  return compileDeclaredBundleTypeContracts(bundle, options);
+}
+
+export async function exportDeclaredBundleJsonSchema(
+  bundle: Bundle,
+  options: DeclaredSchemaOptions,
+): Promise<SchemaReport> {
+  return exportBundleJsonSchema(bundle, await declaredOptionsForBundle(bundle, options));
 }
 
 export async function exportDeclaredJsonSchema(
   root: string | URL,
   options: DeclaredSchemaOptions,
 ): Promise<SchemaReport> {
-  return exportJsonSchema(root, await declaredOptions(root, options));
+  const bundle = await loadBundle(root, options);
+  return exportDeclaredBundleJsonSchema(bundle, options);
 }
