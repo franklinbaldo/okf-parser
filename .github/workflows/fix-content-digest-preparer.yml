@@ -1,0 +1,37 @@
+name: Fix content digest preparer
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    if: github.head_ref == 'restack/content-digests-0.34.0'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: restack/content-digests-0.34.0
+      - name: Patch current mcp_inventory spelling
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/workflows/prepare-content-digests-0.34.0.yml')
+          text = path.read_text(encoding='utf-8')
+          old = '''              ''' + "'''" + '''def mcp_inventory(\\n    path: str, exclude: RepeatableStrings = None\\n) -> dict[str, object]:\\n    \\\"\\\"\\\"Count concepts by type.\\\"\\\"\\\"\\n    return inventory_bundle(path, exclude or ())\\n''' + "'''" + ''',\n'''
+          new = '''              ''' + "'''" + '''def mcp_inventory(path: str, exclude: RepeatableStrings = None) -> dict[str, object]:\\n    \\\"\\\"\\\"Count concepts by type.\\\"\\\"\\\"\\n    return inventory_bundle(path, exclude or ())\\n''' + "'''" + ''',\n'''
+          if old not in text:
+              raise SystemExit('old mcp_inventory marker not found')
+          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+          PY
+          git rm -f .github/workflows/fix-content-digest-preparer.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .github/workflows/prepare-content-digests-0.34.0.yml
+          git commit -m 'chore: align digest preparer with current MCP inventory'
+          git push origin HEAD:restack/content-digests-0.34.0
