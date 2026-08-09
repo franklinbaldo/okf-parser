@@ -27,6 +27,7 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          from textwrap import dedent, indent
 
           path = Path('src/okf_parser/apply.py')
           text = path.read_text()
@@ -37,8 +38,6 @@ jobs:
               'import hashlib\nimport hmac\nimport json\nimport re\nfrom dataclasses import dataclass\n',
               1,
           )
-          assert 'import hashlib\nimport hmac\nimport json\nimport re\n' in text
-
           text = text.replace(
               '    WriteSupportError,\n    snapshot_bundle as _snapshot_bundle,\n',
               '    WriteSupportError,\n    render_raw as _render_raw,\n    snapshot_bundle as _snapshot_bundle,\n',
@@ -48,10 +47,11 @@ jobs:
 
           marker = 'def apply_bundle(  # noqa: C901, PLR0911 - snapshot-coherent RFC 0005 orchestration\n'
           assert marker in text
-          helper = '''_APPLY_PREVIEW_TOKEN_PREFIX = "okf-apply-preview-v1-sha256:"
+          helper = dedent('''\
+          _APPLY_PREVIEW_TOKEN_PREFIX = "okf-apply-preview-v1-sha256:"
           _APPLY_PREVIEW_CONFLICT = "apply candidate no longer matches the reviewed preview"
-          
-          
+
+
           def _apply_preview_token(
               snapshot: object,
               sql: str,
@@ -87,14 +87,14 @@ jobs:
                   separators=(",", ":"),
               ).encode("utf-8")
               return _APPLY_PREVIEW_TOKEN_PREFIX + hashlib.sha256(encoded).hexdigest()
-          
-          
+
+
           def _with_preview_token(payload: dict[str, object], preview_token: str) -> dict[str, object]:
               payload["preview_token"] = preview_token
               return payload
-          
-          
-          '''
+
+
+          ''')
           text = text.replace(marker, helper + marker, 1)
 
           signature = '    spec_template: str | None = None,\n) -> dict[str, object]:\n'
@@ -107,58 +107,58 @@ jobs:
 
           noop_start = text.index('    if outcome.touched_type is None or not outcome.row_diffs:\n')
           concepts_start = text.index('    concepts_by_id = {c.concept_id: c for c in concepts}\n', noop_start)
-          noop = '''    if outcome.touched_type is None or not outcome.row_diffs:
-              preview_token = _apply_preview_token(snapshot, sql, exclude, spec_template, {})
-              if expected_preview_token is not None and not hmac.compare_digest(
-                  expected_preview_token, preview_token
-              ):
-                  return _with_preview_token(
-                      ApplyResult(succeeded=False, error=_APPLY_PREVIEW_CONFLICT).to_dict(),
-                      preview_token,
-                  )
-              return _with_preview_token(ApplyResult().to_dict(), preview_token)
-          
-          '''
+          noop_body = dedent('''\
+          preview_token = _apply_preview_token(snapshot, sql, exclude, spec_template, {})
+          if expected_preview_token is not None and not hmac.compare_digest(
+              expected_preview_token, preview_token
+          ):
+              return _with_preview_token(
+                  ApplyResult(succeeded=False, error=_APPLY_PREVIEW_CONFLICT).to_dict(),
+                  preview_token,
+              )
+          return _with_preview_token(ApplyResult().to_dict(), preview_token)
+          ''')
+          noop = '    if outcome.touched_type is None or not outcome.row_diffs:\n' + indent(noop_body, '        ') + '\n'
           text = text[:noop_start] + noop + text[concepts_start:]
 
           tail_start = text.index('    if not write:\n', text.index('def apply_bundle('))
-          tail = '''    preview_token = _apply_preview_token(snapshot, sql, exclude, spec_template, candidates)
-              if expected_preview_token is not None and not hmac.compare_digest(
-                  expected_preview_token, preview_token
-              ):
-                  return _with_preview_token(
-                      ApplyResult(
-                          changed_paths=tuple(sorted(changed_paths)),
-                          succeeded=False,
-                          conflict_paths=tuple(sorted(changed_paths)),
-                          error=_APPLY_PREVIEW_CONFLICT,
-                      ).to_dict(),
-                      preview_token,
-                  )
-          
-              if not write:
-                  return _with_preview_token(
-                      ApplyResult(changed_paths=tuple(sorted(changed_paths))).to_dict(),
-                      preview_token,
-                  )
-          
-              touched_hashes = {rel: content_hashes[rel] for rel in candidates}
-              result = _stage_validate_write(
-                  root,
-                  exclude,
-                  candidates,
-                  baseline_keys,
-                  changed_paths,
-                  touched_hashes,
-                  snapshot.manifest,
-                  conflict_error="the bundle changed since apply validated it",
-                  temp_prefix="okf-apply-",
+          tail_body = dedent('''\
+          preview_token = _apply_preview_token(snapshot, sql, exclude, spec_template, candidates)
+          if expected_preview_token is not None and not hmac.compare_digest(
+              expected_preview_token, preview_token
+          ):
+              return _with_preview_token(
+                  ApplyResult(
+                      changed_paths=tuple(sorted(changed_paths)),
+                      succeeded=False,
+                      conflict_paths=tuple(sorted(changed_paths)),
+                      error=_APPLY_PREVIEW_CONFLICT,
+                  ).to_dict(),
+                  preview_token,
               )
-              return _with_preview_token(result, preview_token)
-          '''
-          text = text[:tail_start] + tail
-          assert 'expected_preview_token' in text
-          assert 'okf-apply-preview-v1-sha256:' in text
+
+          if not write:
+              return _with_preview_token(
+                  ApplyResult(changed_paths=tuple(sorted(changed_paths))).to_dict(),
+                  preview_token,
+              )
+
+          touched_hashes = {rel: content_hashes[rel] for rel in candidates}
+          result = _stage_validate_write(
+              root,
+              exclude,
+              candidates,
+              baseline_keys,
+              changed_paths,
+              touched_hashes,
+              snapshot.manifest,
+              conflict_error="the bundle changed since apply validated it",
+              temp_prefix="okf-apply-",
+          )
+          return _with_preview_token(result, preview_token)
+          ''')
+          text = text[:tail_start] + indent(tail_body, '    ')
+          compile(text, str(path), 'exec')
           path.write_text(text)
           PY
       - name: Format and validate implementation
