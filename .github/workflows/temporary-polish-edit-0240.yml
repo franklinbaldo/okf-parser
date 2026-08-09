@@ -32,59 +32,49 @@ jobs:
 
           edit = Path('src/okf_parser/edit.py')
           text = edit.read_text()
+          text = text.replace('from typing import TYPE_CHECKING\n', 'from typing import TYPE_CHECKING, cast\n', 1)
           text = text.replace('def _edit_concept(\n', 'def _edit_concept(  # noqa: PLR0913 - explicit bounded edit inputs\n', 1)
           text = text.replace(
               '            validation = tuple(\n',
               '            validation: tuple[dict[str, object], ...] = tuple(\n',
               1,
           )
-          old = '''    succeeded = bool(write_result.get("succeeded", False))
-          written = bool(write_result.get("written", False))
-          return EditResult(
-              concept_id=concept.concept_id,
-              path=concept.relative,
-              source_digest=current_source_digest,
-              candidate_source_digest=candidate_source_digest,
-              candidate_parsed_digest=candidate_parsed_digest,
-              changed=True,
-              succeeded=succeeded,
-              written=written,
-              validation=tuple(write_result.get("validation", ())),
-              conflict_paths=tuple(write_result.get("conflict_paths", ())),
-              error=write_result.get("error") if isinstance(write_result.get("error"), str) else None,
-          ).to_dict()
-          '''
-          new = '''    succeeded = bool(write_result.get("succeeded", False))
-          written = bool(write_result.get("written", False))
-          validation_value = write_result.get("validation", ())
-          validation = (
-              tuple(item for item in validation_value if isinstance(item, dict))
+          marker = '    written = bool(write_result.get("written", False))\n'
+          assert marker in text
+          insertion = '''    validation_value = write_result.get("validation", ())
+          validation_result: tuple[dict[str, object], ...] = (
+              tuple(
+                  cast("dict[str, object]", item)
+                  for item in validation_value
+                  if isinstance(item, dict)
+              )
               if isinstance(validation_value, (list, tuple))
               else ()
           )
           conflict_value = write_result.get("conflict_paths", ())
-          conflict_paths = (
+          conflict_result = (
               tuple(str(item) for item in conflict_value)
               if isinstance(conflict_value, (list, tuple))
               else ()
           )
           error_value = write_result.get("error")
-          return EditResult(
-              concept_id=concept.concept_id,
-              path=concept.relative,
-              source_digest=current_source_digest,
-              candidate_source_digest=candidate_source_digest,
-              candidate_parsed_digest=candidate_parsed_digest,
-              changed=True,
-              succeeded=succeeded,
-              written=written,
-              validation=validation,
-              conflict_paths=conflict_paths,
-              error=error_value if isinstance(error_value, str) else None,
-          ).to_dict()
           '''
-          assert old in text
-          text = text.replace(old, new, 1)
+          text = text.replace(marker, marker + insertion, 1)
+          text = text.replace(
+              '        validation=tuple(write_result.get("validation", ())),\n',
+              '        validation=validation_result,\n',
+              1,
+          )
+          text = text.replace(
+              '        conflict_paths=tuple(write_result.get("conflict_paths", ())),\n',
+              '        conflict_paths=conflict_result,\n',
+              1,
+          )
+          text = text.replace(
+              '        error=write_result.get("error") if isinstance(write_result.get("error"), str) else None,\n',
+              '        error=error_value if isinstance(error_value, str) else None,\n',
+              1,
+          )
           edit.write_text(text)
 
           support = Path('src/okf_parser/write_support.py')
