@@ -1,0 +1,131 @@
+name: Prepare RFC 0006 parity restoration
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    if: github.head_ref == 'fix/restore-ts-rfc0006-parity-0.32.1'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: fix/restore-ts-rfc0006-parity-0.32.1
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          version: '0.11.21'
+          python-version: '3.12'
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24'
+      - name: Restore contracts lost by PR 75
+        shell: bash
+        run: |
+          set -euo pipefail
+          authority=5ed48124cdd39988a368a308d3a759056de82b9e
+          git checkout "$authority" -- \
+            tests/fixtures/declared_parity.expected.json \
+            tests/fixtures/declared_parity.schema.sql \
+            tests/test_declared_schema.py \
+            typescript/src/schema.ts \
+            typescript/test/schema.test.ts \
+            typescript-duckdb/src/declared.ts \
+            typescript-duckdb/test/duckdb.test.ts
+
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one marker, found {count}')
+              target.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          replace_once(
+              'typescript/src/index.ts',
+              '  compileTypeContracts,\n  exportJsonSchema,\n',
+              '  compileTypeContracts,\n  exportBundleJsonSchema,\n  exportJsonSchema,\n',
+          )
+
+          replace_once(
+              'typescript-duckdb/src/index.ts',
+              '''export {\n  DeclaredSchemaError,\n  compileDeclaredTypeContracts,\n  exportDeclaredJsonSchema,\n  loadDeclaredTypes,\n} from "./declared.js";\nexport type { DeclaredSchemaOptions } from "./declared.js";\n''',
+              '''export {\n  DeclaredSchemaError,\n  compileDeclaredBundleTypeContracts,\n  compileDeclaredTypeContracts,\n  exportDeclaredBundleJsonSchema,\n  exportDeclaredJsonSchema,\n  loadDeclaredSchemas,\n  loadDeclaredTypes,\n  parseDeclaredSchema,\n} from "./declared.js";\nexport type { DeclaredCatalogSchema, DeclaredSchemaOptions } from "./declared.js";\n''',
+          )
+
+          # Patch release only; all package/protocol metadata remains synchronized.
+          replacements = {
+              'pyproject.toml': [('version = "0.32.0"', 'version = "0.32.1"')],
+              'typescript/package.json': [('"version": "0.32.0"', '"version": "0.32.1"')],
+              'typescript-duckdb/package.json': [
+                  ('"version": "0.32.0"', '"version": "0.32.1"'),
+                  ('"okf-parser": "^0.32.0"', '"okf-parser": "^0.32.1"'),
+              ],
+              'typescript/src/version.ts': [
+                  ('PROTOCOL_VERSION = "0.32.0"', 'PROTOCOL_VERSION = "0.32.1"'),
+              ],
+              'README.md': [
+                  ('franklinbaldo/okf-parser@v0.32.0', 'franklinbaldo/okf-parser@v0.32.1'),
+              ],
+          }
+          for name, pairs in replacements.items():
+              path = Path(name)
+              text = path.read_text(encoding='utf-8')
+              for old, new in pairs:
+                  count = text.count(old)
+                  if count != 1:
+                      raise SystemExit(f'{name}: expected one {old!r}, found {count}')
+                  text = text.replace(old, new)
+              path.write_text(text, encoding='utf-8')
+
+          Path('changelog/0.32.1.md').write_text('''---\ntype: Release\ntitle: okf-parser 0.32.1\ndescription: restore TypeScript RFC 0006 parity contracts accidentally rolled back by 0.26.0\n---\n\n# okf-parser 0.32.1\n\n- restore the deeply immutable public TypeScript `TypeContract` graph from #71/#72;\n- restore plain DuckDB `TIMESTAMP` -> canonical `datetime` projection while retaining exact physical type identity;\n- restore `exportBundleJsonSchema` and Bundle-based RFC 0006 declaration projection so applications can load once;\n- restore correct `file:` URL decoding for declaration discovery;\n- restore recursive DECIMAL precision/scale, table/column comments and public declared-catalog inspection in the DuckDB adapter;\n- restore the shared Python/TypeScript RFC 0006 parity fixture and regressions removed accidentally by #75;\n- preserve all later 0.26-0.32 parser, benchmark, ingestion and optional Rust-core work unchanged.\n''', encoding='utf-8')
+          PY
+
+      - name: Refresh locks
+        run: |
+          uv lock
+          npm install --package-lock-only --ignore-scripts --prefix typescript
+          npm install --package-lock-only --ignore-scripts --prefix typescript-duckdb
+
+      - name: Validate complete repaired tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv sync --frozen --all-groups
+          npm ci --prefix typescript
+          npm run build --prefix typescript
+          npm ci --prefix typescript-duckdb
+          uv run ruff format src tests
+          uv run ruff check --fix src tests
+          uv run ruff check src tests
+          uv run ty check src tests
+          uv run vulture src tests --min-confidence 100
+          uv run pytest -q
+          uv run python scripts/release_contract.py verify-source --root .
+          npm run check --prefix typescript
+          npm test --prefix typescript
+          npm run build --prefix typescript
+          npm run check --prefix typescript-duckdb
+          npm test --prefix typescript-duckdb
+          npm run build --prefix typescript-duckdb
+          cargo fmt --manifest-path rust-core/Cargo.toml --check
+          cargo test --locked --manifest-path rust-core/Cargo.toml
+
+      - name: Publish clean review head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm -f .github/workflows/prepare-restore-ts-rfc0006-0.32.1.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(ts): restore RFC 0006 parity contracts'
+          git push origin HEAD:fix/restore-ts-rfc0006-parity-0.32.1
