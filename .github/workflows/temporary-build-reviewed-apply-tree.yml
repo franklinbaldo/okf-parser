@@ -51,7 +51,7 @@ jobs:
                   lines.append(line)
               blocks.append('\n'.join(lines))
 
-          lint_guard = '''python - <<'PY2'\nfrom pathlib import Path\npath = Path("src/okf_parser/apply.py")\ntext = path.read_text(encoding="utf-8")\nold = "def apply_bundle(  # each argument is an independent public CLI flag.\\n"\nnew = "def apply_bundle(  # noqa: C901, PLR0911 - snapshot-coherent RFC 0005 orchestration\\n"\nif text.count(old) != 1:\n    raise SystemExit(f"expected one apply_bundle marker, found {text.count(old)}")\npath.write_text(text.replace(old, new, 1), encoding="utf-8")\nPY2'''
+          lint_guard = '''python - <<'PY2'\nfrom pathlib import Path\npath = Path("src/okf_parser/apply.py")\ntext = path.read_text(encoding="utf-8")\nold = "def apply_bundle(  # each argument is an independent public CLI flag.\\n"\nnew = "def apply_bundle(  # noqa: C901, PLR0911 - snapshot-coherent RFC 0005 orchestration\\n"\nif text.count(new) == 1:\n    pass\nelif text.count(old) == 1:\n    path.write_text(text.replace(old, new, 1), encoding="utf-8")\nelse:\n    raise SystemExit(f"unexpected apply_bundle lint marker state: old={text.count(old)} new={text.count(new)}")\nPY2'''
           blocks.insert(1, lint_guard)
           script = 'set -euo pipefail\n' + '\n'.join(blocks) + '\n'
           Path('/tmp/finalize-reviewed-apply.sh').write_text(script, encoding='utf-8')
