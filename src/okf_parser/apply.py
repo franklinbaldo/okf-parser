@@ -46,6 +46,7 @@ from okf_parser.typed_tables import (
     field_input_value,
 )
 from okf_parser.write_support import (
+    BundleSnapshot as _BundleSnapshot,
     ConceptSnapshot as _Concept,
     RawDocument as _RawDocument,
     WriteResult as ApplyResult,
@@ -907,6 +908,18 @@ def _build_sugar_sql(type_name: str, field_name: str, from_value: str, to_value:
     )
 
 
+def _snapshot_for_apply(root: Path, exclude: Sequence[str]) -> _BundleSnapshot:
+    """Capture apply's coherent snapshot while preserving its public conflict wording."""
+    try:
+        return _snapshot_bundle(root, exclude)
+    except WriteSupportError as exc:
+        message = str(exc).replace(
+            "file changed while it was being read",
+            "file changed while apply was reading it",
+        )
+        raise ApplyError(message) from exc
+
+
 def apply_bundle(  # each argument is an independent public CLI flag.
     path: str,
     *,
@@ -940,14 +953,7 @@ def apply_bundle(  # each argument is an independent public CLI flag.
         # write-time conflict check comes from the exact same walk, and for
         # concept files the exact same bytes, that fed the SQL diff below -
         # not a second, later, independent filesystem visit.
-        try:
-            snapshot = _snapshot_bundle(root, exclude)
-        except WriteSupportError as exc:
-            message = str(exc).replace(
-                "file changed while it was being read",
-                "file changed while apply was reading it",
-            )
-            raise ApplyError(message) from exc
+        snapshot = _snapshot_for_apply(root, exclude)
         concepts = snapshot.concepts
 
         baseline = validate_path(root, exclude)

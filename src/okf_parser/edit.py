@@ -87,6 +87,33 @@ def _snapshot_parsed_digest(concept: _Concept) -> str:
     return parse_document_text(concept.path, text).parsed_digest
 
 
+def _decode_write_outcome(
+    payload: dict[str, object],
+) -> tuple[bool, bool, tuple[dict[str, object], ...], tuple[str, ...], str | None]:
+    """Narrow the generic shared-write payload at the edit boundary."""
+    validation_value = payload.get("validation", ())
+    validation = (
+        cast("tuple[dict[str, object], ...]", tuple(validation_value))
+        if isinstance(validation_value, (list, tuple))
+        else ()
+    )
+    conflict_value = payload.get("conflict_paths", ())
+    conflict_paths = (
+        tuple(item for item in conflict_value if isinstance(item, str))
+        if isinstance(conflict_value, (list, tuple))
+        else ()
+    )
+    error_value = payload.get("error")
+    error = error_value if isinstance(error_value, str) else None
+    return (
+        bool(payload.get("succeeded", False)),
+        bool(payload.get("written", False)),
+        validation,
+        conflict_paths,
+        error,
+    )
+
+
 def _edit_concept(
     path: str,
     concept_id: str,
@@ -230,22 +257,9 @@ def _edit_concept(
         conflict_error="the bundle changed since edit validated it",
         temp_prefix="okf-edit-write-",
     )
-    succeeded = bool(write_result.get("succeeded", False))
-    written = bool(write_result.get("written", False))
-    validation_value = write_result.get("validation", ())
-    validation = (
-        cast("tuple[dict[str, object], ...]", tuple(validation_value))
-        if isinstance(validation_value, (list, tuple))
-        else ()
+    succeeded, written, validation, conflict_paths, error = _decode_write_outcome(
+        write_result
     )
-    conflict_value = write_result.get("conflict_paths", ())
-    conflict_paths = (
-        tuple(item for item in conflict_value if isinstance(item, str))
-        if isinstance(conflict_value, (list, tuple))
-        else ()
-    )
-    error_value = write_result.get("error")
-    error = error_value if isinstance(error_value, str) else None
     return EditResult(
         concept_id=concept.concept_id,
         path=concept.relative,
