@@ -32,7 +32,6 @@ jobs:
           path = Path('src/okf_parser/apply.py')
           text = path.read_text()
           assert 'expected_preview_token' not in text
-
           text = text.replace(
               'import re\nfrom dataclasses import dataclass\n',
               'import hashlib\nimport hmac\nimport json\nimport re\nfrom dataclasses import dataclass\n',
@@ -48,7 +47,7 @@ jobs:
           marker = 'def apply_bundle(  # noqa: C901, PLR0911 - snapshot-coherent RFC 0005 orchestration\n'
           assert marker in text
           helper = dedent('''\
-          _APPLY_PREVIEW_TOKEN_PREFIX = "okf-apply-preview-v1-sha256:"
+          _APPLY_PREVIEW_PREFIX = "okf-apply-preview-v1-sha256:"
           _APPLY_PREVIEW_CONFLICT = "apply candidate no longer matches the reviewed preview"
 
 
@@ -86,7 +85,7 @@ jobs:
                   sort_keys=True,
                   separators=(",", ":"),
               ).encode("utf-8")
-              return _APPLY_PREVIEW_TOKEN_PREFIX + hashlib.sha256(encoded).hexdigest()
+              return _APPLY_PREVIEW_PREFIX + hashlib.sha256(encoded).hexdigest()
 
 
           def _with_preview_token(payload: dict[str, object], preview_token: str) -> dict[str, object]:
@@ -160,6 +159,20 @@ jobs:
           text = text[:tail_start] + indent(tail_body, '    ')
           compile(text, str(path), 'exec')
           path.write_text(text)
+
+          support_path = Path('src/okf_parser/write_support.py')
+          support = support_path.read_text()
+          support = support.replace(
+              '                raise WriteSupportError(f"file changed while it was being read: {posix}")',
+              '                message = f"file changed while it was being read: {posix}"\n                raise WriteSupportError(message)',
+              1,
+          )
+          support = support.replace(
+              'def stage_validate_write(\n',
+              'def stage_validate_write(  # noqa: PLR0913 - shared write gate has explicit inputs\n',
+              1,
+          )
+          support_path.write_text(support)
           PY
       - name: Format and validate implementation
         run: |
