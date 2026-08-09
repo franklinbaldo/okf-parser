@@ -281,7 +281,9 @@ def mcp_check(
     )
 
 
-def mcp_inventory(path: str, exclude: RepeatableStrings = None) -> dict[str, object]:
+def mcp_inventory(
+    path: str, exclude: RepeatableStrings = None
+) -> dict[str, object]:
     """Count concepts by type."""
     return inventory_bundle(path, exclude or ())
 
