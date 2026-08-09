@@ -29,6 +29,7 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          from textwrap import dedent, indent
 
           edit = Path('src/okf_parser/edit.py')
           text = edit.read_text()
@@ -41,7 +42,8 @@ jobs:
           )
           marker = '    written = bool(write_result.get("written", False))\n'
           assert marker in text
-          insertion = '''    validation_value = write_result.get("validation", ())
+          insertion = dedent('''\
+          validation_value = write_result.get("validation", ())
           validation_result: tuple[dict[str, object], ...] = (
               tuple(
                   cast("dict[str, object]", item)
@@ -58,8 +60,8 @@ jobs:
               else ()
           )
           error_value = write_result.get("error")
-          '''
-          text = text.replace(marker, marker + insertion, 1)
+          ''')
+          text = text.replace(marker, marker + indent(insertion, '    '), 1)
           text = text.replace(
               '        validation=tuple(write_result.get("validation", ())),\n',
               '        validation=validation_result,\n',
@@ -75,6 +77,7 @@ jobs:
               '        error=error_value if isinstance(error_value, str) else None,\n',
               1,
           )
+          compile(text, str(edit), 'exec')
           edit.write_text(text)
 
           support = Path('src/okf_parser/write_support.py')
@@ -89,6 +92,7 @@ jobs:
               'def stage_validate_write(  # noqa: PLR0913 - shared write gate has explicit inputs\n',
               1,
           )
+          compile(text, str(support), 'exec')
           support.write_text(text)
 
           test = Path('tests/test_edit.py')
@@ -100,6 +104,7 @@ jobs:
               'from typing import TYPE_CHECKING\n\nimport pytest\n\nif TYPE_CHECKING:\n    from pathlib import Path\n',
               1,
           )
+          compile(text, str(test), 'exec')
           test.write_text(text)
           PY
           uv sync --frozen --all-groups
