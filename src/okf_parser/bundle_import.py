@@ -14,11 +14,12 @@ from __future__ import annotations
 
 from io import StringIO
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import duckdb
 from ruamel.yaml import YAML
 
+from okf_parser.parser import DocumentParseError, parse_document, parse_document_text
 from okf_parser.type_specs import type_slug
 
 if TYPE_CHECKING:
@@ -27,6 +28,9 @@ if TYPE_CHECKING:
 
 class BundleImportError(ValueError):
     """Raised when a source cannot be read or conflicts with import identity."""
+
+
+type ImportConflictPolicy = Literal["skip", "verify-identical"]
 
 
 def _read_rows(source: str) -> tuple[list[str], list[dict[str, object]]]:
@@ -96,6 +100,22 @@ def _plan(
     return plan, duplicates
 
 
+def _matches_candidate(destination: Path, candidate: str) -> bool:
+    """Compare the parser value, not incidental YAML spelling."""
+    try:
+        existing = parse_document(destination)
+        intended = parse_document_text(destination, candidate)
+    except DocumentParseError:
+        return False
+    return existing.parsed_digest == intended.parsed_digest
+
+
+def _validate_options(*, overwrite: bool, on_conflict: ImportConflictPolicy) -> None:
+    if overwrite and on_conflict == "verify-identical":
+        message = "overwrite and on_conflict='verify-identical' are mutually exclusive"
+        raise BundleImportError(message)
+
+
 def import_bundle(  # each argument is an independent public CLI flag.
     source: str,
     path: str,
@@ -104,17 +124,18 @@ def import_bundle(  # each argument is an independent public CLI flag.
     id_column: str | None = None,
     write: bool = False,
     overwrite: bool = False,
+    on_conflict: ImportConflictPolicy = "skip",
 ) -> dict[str, object]:
     """Materialize every row of a DuckDB-readable source as one concept document.
 
     Dry-run by default (`write=False` only reports what would be created).
-    `overwrite=False` (the default) never touches a file that already
-    exists at its destination - a matched destination is reported as
-    skipped, not silently replaced. A non-unique id-column slug blocks the
-    whole call before anything is written. Source data may not define the
-    reserved `type` key because `--type` is the import's canonical concept
-    identity.
+    Existing destinations use the requested conflict policy: `skip` preserves
+    the historical behavior, while `verify-identical` treats the same parsed
+    concept value as an idempotent match and any divergence as an atomic
+    conflict. `overwrite` remains an explicit replacement policy and cannot be
+    combined with `verify-identical`.
     """
+    _validate_options(overwrite=overwrite, on_conflict=on_conflict)
     root = Path(path).resolve()
     columns, rows = _read_rows(source)
     if "type" in columns:
@@ -126,6 +147,8 @@ def import_bundle(  # each argument is an independent public CLI flag.
             "created": [],
             "would_create": [],
             "skipped_existing": [],
+            "matched_existing": [],
+            "conflicting_existing": [],
             "duplicate_ids": list(duplicate_ids),
             "written": False,
         }
@@ -136,17 +159,40 @@ def import_bundle(  # each argument is an independent public CLI flag.
 
     to_write: dict[str, str] = {}
     skipped_existing: list[str] = []
+    matched_existing: list[str] = []
+    conflicting_existing: list[str] = []
     for relative, (_, row) in plan.items():
-        if (root / relative).is_file() and not overwrite:
-            skipped_existing.append(relative)
+        destination = root / relative
+        candidate = "---\n" + _frontmatter_text(yaml, concept_type, row) + "---\n"
+        if destination.is_file() and not overwrite:
+            if on_conflict == "skip":
+                skipped_existing.append(relative)
+                continue
+            if _matches_candidate(destination, candidate):
+                matched_existing.append(relative)
+            else:
+                conflicting_existing.append(relative)
             continue
-        to_write[relative] = "---\n" + _frontmatter_text(yaml, concept_type, row) + "---\n"
+        to_write[relative] = candidate
+
+    if conflicting_existing:
+        return {
+            "created": [],
+            "would_create": sorted(to_write),
+            "skipped_existing": sorted(skipped_existing),
+            "matched_existing": sorted(matched_existing),
+            "conflicting_existing": sorted(conflicting_existing),
+            "duplicate_ids": [],
+            "written": False,
+        }
 
     if not write:
         return {
             "created": [],
             "would_create": sorted(to_write),
             "skipped_existing": sorted(skipped_existing),
+            "matched_existing": sorted(matched_existing),
+            "conflicting_existing": [],
             "duplicate_ids": [],
             "written": False,
         }
@@ -161,6 +207,8 @@ def import_bundle(  # each argument is an independent public CLI flag.
         "created": sorted(created),
         "would_create": [],
         "skipped_existing": sorted(skipped_existing),
+        "matched_existing": sorted(matched_existing),
+        "conflicting_existing": [],
         "duplicate_ids": [],
         "written": True,
     }

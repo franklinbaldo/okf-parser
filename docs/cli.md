@@ -51,7 +51,7 @@ MCP tool: `check` with the same optional `classify` argument.
 ## `import`
 
 ```bash
-uv run okf-parser import SOURCE path/to/bundle --type TYPE [--id-column COLUMN] [--write] [--overwrite]
+uv run okf-parser import SOURCE path/to/bundle --type TYPE [--id-column COLUMN] [--write] [--overwrite] [--on-conflict skip|verify-identical]
 ```
 
 Materializes every row of a DuckDB-readable source such as CSV, Parquet or JSON
@@ -64,12 +64,19 @@ as one concept document of `TYPE`.
   otherwise row position is used.
 - `--write` — actually create files. Without it the command is a dry run.
 - `--overwrite` — permit replacement of an existing destination; without it,
-  collisions are reported rather than silently replaced.
+  collisions use the selected conflict policy rather than being replaced.
+- `--on-conflict skip|verify-identical` — default `skip` preserves the existing
+  behavior. `verify-identical` parses the destination and candidate through the
+  official parser and compares canonical `parsed_digest`; matching parsed values
+  are idempotent `matched_existing` rows, while any divergence is
+  `conflicting_existing` and aborts the batch before writes. It cannot be
+  combined with `--overwrite`.
 
-Exits `1` when the import plan contains duplicate ids. Other invalid inputs are
-reported as command errors.
+Exits `1` when the import plan contains duplicate ids or conflicting existing
+identities. Other invalid inputs are reported as command errors.
 
-MCP tools: `import_preview`; `import_write` with `--allow-write`.
+MCP tools: `import_preview`; `import_write` with `--allow-write`. Both expose the
+same optional `on_conflict` policy through FastMCP.
 
 ## `init`
 
