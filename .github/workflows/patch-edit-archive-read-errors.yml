@@ -1,0 +1,49 @@
+name: Patch archived edit read-conflict boundaries
+
+on:
+  pull_request:
+    types: [synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.head_ref == 'feat/single-concept-edit-0.24.0'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: archive/single-concept-edit-0.24.0
+          fetch-depth: 0
+      - name: Preserve caller-specific conflict wording
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one marker, found {count}')
+              target.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          replace_once(
+              'src/okf_parser/apply.py',
+              '''        snapshot = _snapshot_bundle(root, exclude)\n        concepts = snapshot.concepts\n''',
+              '''        try:\n            snapshot = _snapshot_bundle(root, exclude)\n        except WriteSupportError as exc:\n            message = str(exc).replace(\n                "file changed while it was being read",\n                "file changed while apply was reading it",\n            )\n            raise ApplyError(message) from exc\n        concepts = snapshot.concepts\n''',
+          )
+          replace_once(
+              'src/okf_parser/edit.py',
+              '''    except WriteSupportError as exc:\n        raise EditError(str(exc)) from exc\n''',
+              '''    except WriteSupportError as exc:\n        message = str(exc).replace(\n            "file changed while it was being read",\n            "file changed while edit was reading it",\n        )\n        raise EditError(message) from exc\n''',
+          )
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/okf_parser/apply.py src/okf_parser/edit.py
+          git commit -m 'fix(write): preserve caller-specific read conflict errors'
+          git push origin HEAD:archive/single-concept-edit-0.24.0
