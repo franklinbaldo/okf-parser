@@ -15,25 +15,32 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: restack/content-digests-0.34.0
-      - name: Align current source with preparer marker
+      - name: Align current inventory docs with preparer marker
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
-          path = Path('src/okf_parser/cli.py')
+          path = Path('docs/cli.md')
           text = path.read_text(encoding='utf-8')
-          old = 'def mcp_inventory(path: str, exclude: RepeatableStrings = None) -> dict[str, object]:\n'
-          new = 'def mcp_inventory(\n    path: str, exclude: RepeatableStrings = None\n) -> dict[str, object]:\n'
+          old = '''Counts concepts by type using an Ibis relation over the parsed bundle. Always
+exits `0`.
+
+MCP tool: `inventory`.
+'''
+          new = '''Counts concepts by producer-defined `type`.
+
+MCP tool: `inventory`.
+'''
           count = text.count(old)
           if count != 1:
-              raise SystemExit(f'expected one current mcp_inventory signature, found {count}')
+              raise SystemExit(f'expected one current inventory docs block, found {count}')
           path.write_text(text.replace(old, new, 1), encoding='utf-8')
           PY
-          rm -f .digest-fixer-trigger
+          rm -f .digest-preparer-trigger
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add src/okf_parser/cli.py
-          git add -u .digest-fixer-trigger
-          git commit -m 'chore: reconcile digest preparer with current MCP inventory'
+          git add docs/cli.md
+          git add -u .digest-preparer-trigger
+          git commit -m 'chore: reconcile digest preparer with current inventory docs'
           git push origin HEAD:restack/content-digests-0.34.0
