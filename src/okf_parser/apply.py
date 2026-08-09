@@ -24,6 +24,9 @@ ones, produced it.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import re
 from dataclasses import dataclass
 from io import StringIO
@@ -59,6 +62,9 @@ from okf_parser.write_support import (
 )
 from okf_parser.write_support import (
     WriteSupportError,
+)
+from okf_parser.write_support import (
+    render_raw as _render_raw,
 )
 from okf_parser.write_support import (
     snapshot_bundle as _snapshot_bundle,
@@ -932,6 +938,100 @@ def _snapshot_for_apply(root: Path, exclude: Sequence[str]) -> _BundleSnapshot:
         raise ApplyError(message) from exc
 
 
+_APPLY_PREVIEW_PREFIX = "okf-apply-preview-v1-sha256:"
+_APPLY_PREVIEW_CONFLICT = "apply candidate no longer matches the reviewed preview"
+
+
+def _apply_preview_token(
+    snapshot: _BundleSnapshot,
+    sql: str,
+    exclude: Sequence[str],
+    spec_template: str | None,
+    candidates: dict[str, tuple[_RawDocument, str, Path]],
+) -> str:
+    """Fingerprint the exact baseline, operation and physical candidate bytes."""
+    payload = {
+        "version": 1,
+        "sql": sql,
+        "exclude": list(exclude),
+        "spec_template": spec_template,
+        "manifest": [
+            [relative, signature[0], signature[1]]
+            for relative, signature in sorted(snapshot.manifest.items())
+        ],
+        "concepts": [
+            [concept.relative, concept.content_hash]
+            for concept in sorted(snapshot.concepts, key=lambda item: item.relative)
+        ],
+        "candidates": [
+            [relative, hashlib.sha256(_render_raw(raw, frontmatter_text)).hexdigest()]
+            for relative, (raw, frontmatter_text, _real_path) in sorted(candidates.items())
+        ],
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return _APPLY_PREVIEW_PREFIX + hashlib.sha256(encoded).hexdigest()
+
+
+def _with_preview_token(payload: dict[str, object], preview_token: str) -> dict[str, object]:
+    payload["preview_token"] = preview_token
+    return payload
+
+
+def _preview_token_conflict(
+    expected_preview_token: str | None,
+    preview_token: str,
+    changed_paths: Sequence[str] = (),
+) -> dict[str, object] | None:
+    if expected_preview_token is None or hmac.compare_digest(expected_preview_token, preview_token):
+        return None
+    return _with_preview_token(
+        ApplyResult(
+            changed_paths=tuple(sorted(changed_paths)),
+            succeeded=False,
+            conflict_paths=tuple(sorted(changed_paths)),
+            error=_APPLY_PREVIEW_CONFLICT,
+        ).to_dict(),
+        preview_token,
+    )
+
+
+def _no_op_preview_result(
+    snapshot: _BundleSnapshot,
+    sql: str,
+    exclude: Sequence[str],
+    spec_template: str | None,
+    expected_preview_token: str | None,
+) -> dict[str, object]:
+    preview_token = _apply_preview_token(snapshot, sql, exclude, spec_template, {})
+    conflict = _preview_token_conflict(expected_preview_token, preview_token)
+    if conflict is not None:
+        return conflict
+    return _with_preview_token(ApplyResult().to_dict(), preview_token)
+
+
+def _candidate_review_result(
+    expected_preview_token: str | None,
+    preview_token: str,
+    changed_paths: Sequence[str],
+    *,
+    write: bool,
+) -> dict[str, object] | None:
+    conflict = _preview_token_conflict(expected_preview_token, preview_token, changed_paths)
+    if conflict is not None:
+        return conflict
+    if not write:
+        return _with_preview_token(
+            ApplyResult(changed_paths=tuple(sorted(changed_paths))).to_dict(),
+            preview_token,
+        )
+    return None
+
+
 def apply_bundle(  # each argument is an independent public CLI flag.
     path: str,
     *,
@@ -943,6 +1043,7 @@ def apply_bundle(  # each argument is an independent public CLI flag.
     write: bool = False,
     exclude: Sequence[str] = (),
     spec_template: str | None = None,
+    expected_preview_token: str | None = None,
 ) -> dict[str, object]:
     """Mutate frontmatter fields across a bundle, per RFC 0005."""
     root = Path(path).resolve()
@@ -987,7 +1088,7 @@ def apply_bundle(  # each argument is an independent public CLI flag.
         return ApplyResult(succeeded=False, error=str(exc)).to_dict()
 
     if outcome.touched_type is None or not outcome.row_diffs:
-        return ApplyResult().to_dict()
+        return _no_op_preview_result(snapshot, sql, exclude, spec_template, expected_preview_token)
 
     concepts_by_id = {c.concept_id: c for c in concepts}
     content_hashes = {c.relative: c.content_hash for c in concepts}
@@ -1020,11 +1121,15 @@ def apply_bundle(  # each argument is an independent public CLI flag.
             error="one or more matched documents cannot round-trip losslessly",
         ).to_dict()
 
-    if not write:
-        return ApplyResult(changed_paths=tuple(sorted(changed_paths))).to_dict()
+    preview_token = _apply_preview_token(snapshot, sql, exclude, spec_template, candidates)
+    reviewed = _candidate_review_result(
+        expected_preview_token, preview_token, changed_paths, write=write
+    )
+    if reviewed is not None:
+        return reviewed
 
     touched_hashes = {rel: content_hashes[rel] for rel in candidates}
-    return _stage_validate_write(
+    result = _stage_validate_write(
         root,
         exclude,
         candidates,
@@ -1035,3 +1140,4 @@ def apply_bundle(  # each argument is an independent public CLI flag.
         conflict_error="the bundle changed since apply validated it",
         temp_prefix="okf-apply-",
     )
+    return _with_preview_token(result, preview_token)

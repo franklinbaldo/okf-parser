@@ -121,15 +121,20 @@ def parse_raw(data: bytes) -> RawDocument | None:
     )
 
 
-def write_raw(path: Path, raw: RawDocument, frontmatter_text: str) -> None:
-    """Atomically replace one staged/live document preserving physical style."""
+def render_raw(raw: RawDocument, frontmatter_text: str) -> bytes:
+    """Render exactly the bytes the physical writer would commit."""
     text = "---\n" + frontmatter_text
     if not text.endswith("\n"):
         text += "\n"
     text += "---\n" + raw.body_text
     if raw.crlf:
         text = text.replace("\n", "\r\n")
-    data = raw.bom + text.encode("utf-8")
+    return raw.bom + text.encode("utf-8")
+
+
+def write_raw(path: Path, raw: RawDocument, frontmatter_text: str) -> None:
+    """Atomically replace one staged/live document preserving physical style."""
+    data = render_raw(raw, frontmatter_text)
     tmp = path.with_name(f".{path.name}.okf-write.tmp")
     tmp.write_bytes(data)
     tmp.replace(path)
