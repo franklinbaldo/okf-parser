@@ -62,16 +62,8 @@ jobs:
           error_value = write_result.get("error")
           ''')
           text = text.replace(marker, marker + indent(insertion, '    '), 1)
-          text = text.replace(
-              '        validation=tuple(write_result.get("validation", ())),\n',
-              '        validation=validation_result,\n',
-              1,
-          )
-          text = text.replace(
-              '        conflict_paths=tuple(write_result.get("conflict_paths", ())),\n',
-              '        conflict_paths=conflict_result,\n',
-              1,
-          )
+          text = text.replace('        validation=tuple(write_result.get("validation", ())),\n', '        validation=validation_result,\n', 1)
+          text = text.replace('        conflict_paths=tuple(write_result.get("conflict_paths", ())),\n', '        conflict_paths=conflict_result,\n', 1)
           text = text.replace(
               '        error=write_result.get("error") if isinstance(write_result.get("error"), str) else None,\n',
               '        error=error_value if isinstance(error_value, str) else None,\n',
@@ -97,18 +89,17 @@ jobs:
 
           apply = Path('src/okf_parser/apply.py')
           text = apply.read_text()
-          old = '''    except (ApplyError, DeclaredSchemaError, TypedTableError, WriteSupportError) as exc:
-              return ApplyResult(succeeded=False, error=str(exc)).to_dict()
-          '''
-          new = '''    except WriteSupportError as exc:
-              detail = str(exc).removeprefix("file changed while it was being read: ")
-              return ApplyResult(
-                  succeeded=False,
-                  error=f"file changed while apply was reading it: {detail}",
-              ).to_dict()
-              except (ApplyError, DeclaredSchemaError, TypedTableError) as exc:
-                  return ApplyResult(succeeded=False, error=str(exc)).to_dict()
-          '''
+          old = '    except (ApplyError, DeclaredSchemaError, TypedTableError, WriteSupportError) as exc:\n        return ApplyResult(succeeded=False, error=str(exc)).to_dict()\n'
+          new = (
+              '    except WriteSupportError as exc:\n'
+              '        detail = str(exc).removeprefix("file changed while it was being read: ")\n'
+              '        return ApplyResult(\n'
+              '            succeeded=False,\n'
+              '            error=f"file changed while apply was reading it: {detail}",\n'
+              '        ).to_dict()\n'
+              '    except (ApplyError, DeclaredSchemaError, TypedTableError) as exc:\n'
+              '        return ApplyResult(succeeded=False, error=str(exc)).to_dict()\n'
+          )
           assert old in text
           text = text.replace(old, new, 1)
           compile(text, str(apply), 'exec')
@@ -116,7 +107,7 @@ jobs:
 
           test = Path('tests/test_edit.py')
           text = test.read_text()
-          if not text.startswith('"""Tests for conflict-safe single-concept body editing.'): 
+          if not text.startswith('"""Tests for conflict-safe single-concept body editing.'):
               text = '"""Tests for conflict-safe single-concept body editing."""\n\n' + text
           text = text.replace(
               'from pathlib import Path\n\nimport pytest\n',
