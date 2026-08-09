@@ -1,0 +1,174 @@
+name: Prepare reviewed apply token 0.37.0
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    if: github.head_ref == 'feat/apply-reviewed-preview-token'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/apply-reviewed-preview-token
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          version: '0.11.21'
+          python-version: '3.12'
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: '24'
+      - name: Apply reviewed-preview token delta to current write stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin archive/apply-reviewed-preview-token-final
+          git checkout origin/archive/apply-reviewed-preview-token-final -- \
+            tests/test_apply_preview_token.py \
+            tests/test_apply_preview_token_noop.py
+
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one marker, found {count}: {old[:120]!r}')
+              target.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          # The preview token must hash the exact bytes the physical writer would
+          # commit. Expose that rendering once in shared write_support and make
+          # write_raw itself consume it, so there is one serialization authority.
+          replace_once(
+              'src/okf_parser/write_support.py',
+              '''def write_raw(path: Path, raw: RawDocument, frontmatter_text: str) -> None:\n    """Atomically replace one staged/live document preserving physical style."""\n    text = "---\\n" + frontmatter_text\n    if not text.endswith("\\n"):\n        text += "\\n"\n    text += "---\\n" + raw.body_text\n    if raw.crlf:\n        text = text.replace("\\n", "\\r\\n")\n    data = raw.bom + text.encode("utf-8")\n    tmp = path.with_name(f".{path.name}.okf-write.tmp")\n    tmp.write_bytes(data)\n    tmp.replace(path)\n''',
+              '''def render_raw(raw: RawDocument, frontmatter_text: str) -> bytes:\n    """Render exactly the bytes the physical writer would commit."""\n    text = "---\\n" + frontmatter_text\n    if not text.endswith("\\n"):\n        text += "\\n"\n    text += "---\\n" + raw.body_text\n    if raw.crlf:\n        text = text.replace("\\n", "\\r\\n")\n    return raw.bom + text.encode("utf-8")\n\n\ndef write_raw(path: Path, raw: RawDocument, frontmatter_text: str) -> None:\n    """Atomically replace one staged/live document preserving physical style."""\n    data = render_raw(raw, frontmatter_text)\n    tmp = path.with_name(f".{path.name}.okf-write.tmp")\n    tmp.write_bytes(data)\n    tmp.replace(path)\n''',
+          )
+
+          # Token construction lives with apply semantics, but candidate bytes
+          # come from the shared physical writer. Freshness remains independent.
+          replace_once(
+              'src/okf_parser/apply.py',
+              'import re\n',
+              'import hashlib\nimport hmac\nimport json\nimport re\n',
+          )
+          replace_once(
+              'src/okf_parser/apply.py',
+              '''from okf_parser.write_support import (\n    snapshot_bundle as _snapshot_bundle,\n)\n''',
+              '''from okf_parser.write_support import (\n    render_raw as _render_raw,\n)\nfrom okf_parser.write_support import (\n    snapshot_bundle as _snapshot_bundle,\n)\n''',
+          )
+
+          helpers = '''\n\n_APPLY_PREVIEW_PREFIX = "okf-apply-preview-v1-sha256:"\n_APPLY_PREVIEW_CONFLICT = "apply candidate no longer matches the reviewed preview"\n\n\ndef _apply_preview_token(\n    snapshot: _BundleSnapshot,\n    sql: str,\n    exclude: Sequence[str],\n    spec_template: str | None,\n    candidates: dict[str, tuple[_RawDocument, str, Path]],\n) -> str:\n    """Fingerprint the exact baseline, operation and physical candidate bytes."""\n    payload = {\n        "version": 1,\n        "sql": sql,\n        "exclude": list(exclude),\n        "spec_template": spec_template,\n        "manifest": [\n            [relative, signature[0], signature[1]]\n            for relative, signature in sorted(snapshot.manifest.items())\n        ],\n        "concepts": [\n            [concept.relative, concept.content_hash]\n            for concept in sorted(snapshot.concepts, key=lambda item: item.relative)\n        ],\n        "candidates": [\n            [relative, hashlib.sha256(_render_raw(raw, frontmatter_text)).hexdigest()]\n            for relative, (raw, frontmatter_text, _real_path) in sorted(candidates.items())\n        ],\n    }\n    encoded = json.dumps(\n        payload,\n        ensure_ascii=False,\n        sort_keys=True,\n        separators=(",", ":"),\n    ).encode("utf-8")\n    return _APPLY_PREVIEW_PREFIX + hashlib.sha256(encoded).hexdigest()\n\n\ndef _with_preview_token(payload: dict[str, object], preview_token: str) -> dict[str, object]:\n    payload["preview_token"] = preview_token\n    return payload\n\n\ndef _preview_token_conflict(\n    expected_preview_token: str | None,\n    preview_token: str,\n    changed_paths: Sequence[str] = (),\n) -> dict[str, object] | None:\n    if expected_preview_token is None or hmac.compare_digest(\n        expected_preview_token, preview_token\n    ):\n        return None\n    return _with_preview_token(\n        ApplyResult(\n            changed_paths=tuple(sorted(changed_paths)),\n            succeeded=False,\n            conflict_paths=tuple(sorted(changed_paths)),\n            error=_APPLY_PREVIEW_CONFLICT,\n        ).to_dict(),\n        preview_token,\n    )\n\n\ndef _no_op_preview_result(\n    snapshot: _BundleSnapshot,\n    sql: str,\n    exclude: Sequence[str],\n    spec_template: str | None,\n    expected_preview_token: str | None,\n) -> dict[str, object]:\n    preview_token = _apply_preview_token(snapshot, sql, exclude, spec_template, {})\n    conflict = _preview_token_conflict(expected_preview_token, preview_token)\n    if conflict is not None:\n        return conflict\n    return _with_preview_token(ApplyResult().to_dict(), preview_token)\n\n\ndef _candidate_review_result(\n    expected_preview_token: str | None,\n    preview_token: str,\n    changed_paths: Sequence[str],\n    *,\n    write: bool,\n) -> dict[str, object] | None:\n    conflict = _preview_token_conflict(expected_preview_token, preview_token, changed_paths)\n    if conflict is not None:\n        return conflict\n    if not write:\n        return _with_preview_token(\n            ApplyResult(changed_paths=tuple(sorted(changed_paths))).to_dict(),\n            preview_token,\n        )\n    return None\n'''
+          replace_once(
+              'src/okf_parser/apply.py',
+              '\n\ndef apply_bundle(  # each argument is an independent public CLI flag.\n',
+              helpers + '\n\ndef apply_bundle(  # each argument is an independent public CLI flag.\n',
+          )
+          replace_once(
+              'src/okf_parser/apply.py',
+              '''    exclude: Sequence[str] = (),\n    spec_template: str | None = None,\n) -> dict[str, object]:\n''',
+              '''    exclude: Sequence[str] = (),\n    spec_template: str | None = None,\n    expected_preview_token: str | None = None,\n) -> dict[str, object]:\n''',
+          )
+          replace_once(
+              'src/okf_parser/apply.py',
+              '''    if outcome.touched_type is None or not outcome.row_diffs:\n        return ApplyResult().to_dict()\n''',
+              '''    if outcome.touched_type is None or not outcome.row_diffs:\n        return _no_op_preview_result(\n            snapshot, sql, exclude, spec_template, expected_preview_token\n        )\n''',
+          )
+          replace_once(
+              'src/okf_parser/apply.py',
+              '''    if not write:\n        return ApplyResult(changed_paths=tuple(sorted(changed_paths))).to_dict()\n\n    touched_hashes = {rel: content_hashes[rel] for rel in candidates}\n    return _stage_validate_write(\n''',
+              '''    preview_token = _apply_preview_token(\n        snapshot, sql, exclude, spec_template, candidates\n    )\n    reviewed = _candidate_review_result(\n        expected_preview_token, preview_token, changed_paths, write=write\n    )\n    if reviewed is not None:\n        return reviewed\n\n    touched_hashes = {rel: content_hashes[rel] for rel in candidates}\n    result = _stage_validate_write(\n''',
+          )
+          replace_once(
+              'src/okf_parser/apply.py',
+              '''        conflict_error="the bundle changed since apply validated it",\n        temp_prefix="okf-apply-",\n    )\n''',
+              '''        conflict_error="the bundle changed since apply validated it",\n        temp_prefix="okf-apply-",\n    )\n    return _with_preview_token(result, preview_token)\n''',
+          )
+
+          # Keep the transport-neutral service capable of enforcing a reviewed
+          # preview; CLI/MCP one-shot behavior remains unchanged in this slice.
+          replace_once(
+              'src/okf_parser/service.py',
+              '''    exclude: Sequence[str] = (),\n    spec_template: str | None = None,\n) -> dict[str, object]:\n    """Mutate frontmatter fields across a bundle via a bounded SQL script."""\n''',
+              '''    exclude: Sequence[str] = (),\n    spec_template: str | None = None,\n    expected_preview_token: str | None = None,\n) -> dict[str, object]:\n    """Mutate frontmatter fields across a bundle via a bounded SQL script."""\n''',
+          )
+          replace_once(
+              'src/okf_parser/service.py',
+              '''        exclude=exclude,\n        spec_template=spec_template,\n    )\n''',
+              '''        exclude=exclude,\n        spec_template=spec_template,\n        expected_preview_token=expected_preview_token,\n    )\n''',
+          )
+
+          # Pin service forwarding so a web adapter cannot silently drop the token.
+          with Path('tests/test_apply_preview_token.py').open('a', encoding='utf-8') as handle:
+              handle.write('''\n\ndef test_service_forwards_reviewed_preview_token(tmp_path: Path) -> None:\n    from okf_parser.service import apply_bundle as service_apply_bundle\n\n    _write_bundle(tmp_path)\n    preview = service_apply_bundle(str(tmp_path), sql=_status_sql())\n    token = preview["preview_token"]\n    assert isinstance(token, str)\n\n    result = service_apply_bundle(\n        str(tmp_path),\n        sql=_status_sql(),\n        write=True,\n        expected_preview_token=token,\n    )\n\n    assert result["succeeded"] is True\n    assert result["written"] is True\n    assert result["preview_token"] == token\n''')
+
+          replacements = {
+              'pyproject.toml': [('version = "0.36.0"', 'version = "0.37.0"')],
+              'typescript/package.json': [('"version": "0.36.0"', '"version": "0.37.0"')],
+              'typescript-duckdb/package.json': [
+                  ('"version": "0.36.0"', '"version": "0.37.0"'),
+                  ('"okf-parser": "^0.36.0"', '"okf-parser": "^0.37.0"'),
+              ],
+              'typescript/src/version.ts': [('PROTOCOL_VERSION = "0.36.0"', 'PROTOCOL_VERSION = "0.37.0"')],
+              'README.md': [('franklinbaldo/okf-parser@v0.36.0', 'franklinbaldo/okf-parser@v0.37.0')],
+          }
+          for name, pairs in replacements.items():
+              target = Path(name)
+              text = target.read_text(encoding='utf-8')
+              for old, new in pairs:
+                  count = text.count(old)
+                  if count != 1:
+                      raise SystemExit(f'{name}: expected one {old!r}, found {count}')
+                  text = text.replace(old, new)
+              target.write_text(text, encoding='utf-8')
+
+          Path('changelog/0.37.0.md').write_text('''---\ntype: Release\ntitle: okf-parser 0.37.0\ndescription: bind apply commits to the exact preview candidate a caller reviewed\n---\n\n# okf-parser 0.37.0\n\n- successful RFC 0005 `apply` previews now return an opaque deterministic `preview_token`;\n- the token commits to the coherent baseline snapshot, exact SQL/options and exact physical candidate bytes produced by the shared writer;\n- `apply_bundle(..., write=True, expected_preview_token=...)` fails closed when recomputation differs, including nondeterministic DuckDB SQL and reviewed no-ops whose source changed;\n- one-shot writes may omit the token and retain existing behavior;\n- final whole-bundle freshness/staging validation remains mandatory after token verification, so the token does not replace optimistic conflict detection;\n- the transport-neutral service forwards `expected_preview_token` while existing CLI/MCP one-shot contracts remain unchanged in this slice.\n''', encoding='utf-8')
+          PY
+
+      - name: Refresh locks
+        run: |
+          uv lock
+          npm install --package-lock-only --ignore-scripts --prefix typescript
+          npm install --package-lock-only --ignore-scripts --prefix typescript-duckdb
+
+      - name: Validate full preview-token stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv sync --frozen --all-groups
+          npm ci --prefix typescript
+          npm run build --prefix typescript
+          npm ci --prefix typescript-duckdb
+          uv run ruff format src tests
+          uv run ruff check --fix src tests
+          uv run ruff check src tests
+          uv run ty check src tests
+          uv run vulture src tests --min-confidence 100
+          uv run pytest -q
+          uv run python scripts/release_contract.py verify-source --root .
+          npm run check --prefix typescript
+          npm test --prefix typescript
+          npm run build --prefix typescript
+          npm run check --prefix typescript-duckdb
+          npm test --prefix typescript-duckdb
+          npm run build --prefix typescript-duckdb
+          cargo fmt --manifest-path rust-core/Cargo.toml --check
+          cargo test --locked --manifest-path rust-core/Cargo.toml
+
+      - name: Publish clean review head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm -f .github/workflows/prepare-apply-preview-token-0.37.0.yml
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'feat(apply): bind commits to exact reviewed preview'
+          git push origin HEAD:feat/apply-reviewed-preview-token
