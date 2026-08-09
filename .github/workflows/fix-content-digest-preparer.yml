@@ -15,24 +15,25 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: restack/content-digests-0.34.0
-      - name: Patch current mcp_inventory spelling
+      - name: Align current source with preparer marker
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
-          path = Path('.github/workflows/prepare-content-digests-0.34.0.yml')
+          path = Path('src/okf_parser/cli.py')
           text = path.read_text(encoding='utf-8')
-          old = r'''def mcp_inventory(\n    path: str, exclude: RepeatableStrings = None\n) -> dict[str, object]:\n'''
-          new = r'''def mcp_inventory(path: str, exclude: RepeatableStrings = None) -> dict[str, object]:\n'''
+          old = 'def mcp_inventory(path: str, exclude: RepeatableStrings = None) -> dict[str, object]:\n'
+          new = 'def mcp_inventory(\n    path: str, exclude: RepeatableStrings = None\n) -> dict[str, object]:\n'
           count = text.count(old)
           if count != 1:
-              raise SystemExit(f'expected one mcp_inventory signature marker, found {count}')
+              raise SystemExit(f'expected one current mcp_inventory signature, found {count}')
           path.write_text(text.replace(old, new, 1), encoding='utf-8')
           PY
-          git rm -f .github/workflows/fix-content-digest-preparer.yml .digest-fixer-trigger
+          rm -f .digest-fixer-trigger
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add .github/workflows/prepare-content-digests-0.34.0.yml
-          git commit -m 'chore: align digest preparer with current MCP inventory'
+          git add src/okf_parser/cli.py
+          git add -u .digest-fixer-trigger
+          git commit -m 'chore: reconcile digest preparer with current MCP inventory'
           git push origin HEAD:restack/content-digests-0.34.0
