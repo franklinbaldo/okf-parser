@@ -1,18 +1,16 @@
+"""Engine resolver conformance tests."""
+
 from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
 
-import okf_parser.rust_core as rust_core
-
-if TYPE_CHECKING:
-    from pytest import MonkeyPatch
+from okf_parser import rust_core
 
 
-def test_native_mode_skips_all_discovery(monkeypatch: MonkeyPatch) -> None:
+def test_native_mode_skips_all_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         rust_core,
         "packaged_rust_core",
@@ -28,7 +26,7 @@ def test_native_mode_skips_all_discovery(monkeypatch: MonkeyPatch) -> None:
     )
 
 
-def test_resolution_order(monkeypatch: MonkeyPatch) -> None:
+def test_resolution_order(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(rust_core, "packaged_rust_core", lambda: Path("/package/core"))
     assert rust_core.resolve_rust_core(explicit=Path("/explicit/core")) == Path("/explicit/core")
     assert rust_core.resolve_rust_core(environ={"OKF_CORE": "/env/core"}) == Path("/package/core")
@@ -44,7 +42,7 @@ def test_resolution_order(monkeypatch: MonkeyPatch) -> None:
 
 
 def test_packaged_core_discovers_active_interpreter_scripts(
-    tmp_path: Path, monkeypatch: MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     executable = tmp_path / ("okf-core.exe" if os.name == "nt" else "okf-core")
     executable.write_text("", encoding="utf-8")
