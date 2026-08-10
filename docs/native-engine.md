@@ -22,7 +22,15 @@ const bundle = await loadBundle(root);
 
 No application code needs to locate `okf-core`.
 
-With the default `engine="auto"` policy, an explicit expert override wins first. The parser then looks for a release-matched engine installed by its own distribution, followed by `OKF_CORE` and `okf-core` on `PATH`. When no compatible native engine exists, Python and TypeScript keep their portable implementations.
+With the default `engine="auto"` policy, resolution is deterministic:
+
+1. an explicit `rust_core` / `rustCore` expert override;
+2. a release-matched native engine installed by the Python or npm distribution;
+3. the `OKF_CORE` environment override;
+4. `okf-core` on `PATH`;
+5. the portable Python or TypeScript implementation.
+
+If a selected Rust engine starts and fails, the request fails rather than silently changing engines midway through one load.
 
 `engine="native"` means language-native Python or TypeScript and deliberately skips every Rust probe. It is the deterministic escape hatch for tests, unsupported platforms, and environments that do not permit subprocesses.
 
