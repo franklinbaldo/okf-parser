@@ -51,6 +51,14 @@ jobs:
                       raise SystemExit(f'missing expected {old!r} in {raw}')
                   text = text.replace(old, new)
               path.write_text(text, encoding='utf-8')
+
+          lock = Path('rust-core/Cargo.lock')
+          text = lock.read_text(encoding='utf-8')
+          old = 'name = "okf-core"\nversion = "0.40.0"'
+          new = 'name = "okf-core"\nversion = "0.41.0"'
+          if old not in text:
+              raise SystemExit('missing okf-core 0.40.0 root identity in rust-core/Cargo.lock')
+          lock.write_text(text.replace(old, new, 1), encoding='utf-8')
           PY
           cat > changelog/0.41.0.md <<'EOF'
           ---
@@ -68,7 +76,6 @@ jobs:
           uv lock
           npm install --prefix typescript --package-lock-only --ignore-scripts
           npm install --prefix typescript-duckdb --package-lock-only --ignore-scripts
-          cargo check --manifest-path rust-core/Cargo.toml >/dev/null
           rm -f .github/workflows/refresh-041-metadata.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
