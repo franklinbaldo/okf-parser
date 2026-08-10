@@ -1,12 +1,9 @@
 name: Bootstrap native npm lock
 
 on:
-  push:
-    branches:
-      - release/npm-native-core
   pull_request:
     branches:
-      - release/python-native-core
+      - release/npm-native-core
 
 permissions:
   contents: write
