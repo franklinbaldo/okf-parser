@@ -1,6 +1,6 @@
 [package]
 name = "okf-core"
-version = "0.38.0"
+version = "0.40.0"
 edition = "2024"
 license = "MIT"
 description = "Native OKF ingestion, validation, and DuckDB engine"
