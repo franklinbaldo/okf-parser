@@ -1,0 +1,86 @@
+name: Prepare native Python release metadata
+
+on:
+  push:
+    branches:
+      - release/python-native-core
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: release/python-native-core
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+      - name: Synchronize source versions and local companion source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('.')
+          pyproject = root / 'pyproject.toml'
+          text = pyproject.read_text(encoding='utf-8')
+          text = text.replace('version = "0.39.0"', 'version = "0.40.0"', 1)
+          dependency = '  "okf-parser-native==0.40.0",\n'
+          marker = 'dependencies = [\n'
+          if dependency not in text:
+              text = text.replace(marker, marker + dependency, 1)
+          if '[tool.uv.sources]' not in text:
+              text += '\n[tool.uv.sources]\nokf-parser-native = { path = "native-python-stub", editable = false }\n'
+          pyproject.write_text(text, encoding='utf-8')
+
+          for relative in ('typescript/package.json', 'typescript-duckdb/package.json'):
+              path = root / relative
+              data = json.loads(path.read_text(encoding='utf-8'))
+              data['version'] = '0.40.0'
+              if relative.startswith('typescript-duckdb'):
+                  data['peerDependencies']['okf-parser'] = '^0.40.0'
+              path.write_text(json.dumps(data, indent=2) + '\n', encoding='utf-8')
+
+          version_ts = root / 'typescript/src/version.ts'
+          version_ts.write_text(
+              version_ts.read_text(encoding='utf-8').replace('0.39.0', '0.40.0'),
+              encoding='utf-8',
+          )
+          readme = root / 'README.md'
+          readme.write_text(
+              readme.read_text(encoding='utf-8').replace(
+                  'franklinbaldo/okf-parser@v0.39.0',
+                  'franklinbaldo/okf-parser@v0.40.0',
+              ),
+              encoding='utf-8',
+          )
+          cargo = root / 'rust-core/Cargo.toml'
+          cargo.write_text(
+              cargo.read_text(encoding='utf-8').replace('version = "0.38.0"', 'version = "0.40.0"', 1),
+              encoding='utf-8',
+          )
+          PY
+          uv lock
+          npm install --package-lock-only --ignore-scripts --prefix typescript
+          npm install --package-lock-only --ignore-scripts --prefix typescript-duckdb
+          cargo generate-lockfile --manifest-path rust-core/Cargo.toml
+          rm .github/workflows/prepare-native-python-release.yml
+      - name: Commit canonical generated metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add pyproject.toml uv.lock README.md rust-core/Cargo.toml rust-core/Cargo.lock typescript/package.json typescript/package-lock.json typescript/src/version.ts typescript-duckdb/package.json typescript-duckdb/package-lock.json .github/workflows/prepare-native-python-release.yml
+          git commit -m "chore: synchronize 0.40.0 release metadata"
+          git push origin HEAD:release/python-native-core
