@@ -1,6 +1,6 @@
 [package]
 name = "okf-core"
-version = "0.39.1"
+version = "0.40.0"
 edition = "2024"
 license = "MIT"
 description = "Native OKF CLI and compatibility adapters"
@@ -8,6 +8,6 @@ description = "Native OKF CLI and compatibility adapters"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 duckdb = { version = "1.10505.0", features = ["bundled"] }
-okf-engine = { path = "../okf-engine", version = "0.39.1" }
+okf-engine = { path = "../okf-engine", version = "0.40.0" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

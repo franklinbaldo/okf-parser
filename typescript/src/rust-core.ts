@@ -19,7 +19,9 @@ function binaryName(): string {
 }
 
 export function packagedRustCore(): string | undefined {
-  const candidate = fileURLToPath(new URL(`../native/${binaryName()}`, import.meta.url));
+  const candidate = fileURLToPath(
+    new URL(`../native/${process.platform}-${process.arch}/${binaryName()}`, import.meta.url),
+  );
   return existsSync(candidate) ? candidate : undefined;
 }
 
@@ -156,7 +158,6 @@ export async function rustMarkdownFactsBatch(
   };
   signal?.addEventListener("abort", abort, { once: true });
   child.stdin.end(JSON.stringify({ documents: bodies }));
-
   const code = await new Promise<number | null>((resolve, reject) => {
     child.once("error", reject);
     child.once("close", resolve);

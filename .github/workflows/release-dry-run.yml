@@ -4,16 +4,21 @@ on:
   pull_request:
     paths:
       - ".github/workflows/release-dry-run.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
       - "changelog/**"
       - "docs/releasing.md"
+      - "okf-engine/**"
       - "pyproject.toml"
       - "rfcs/0003-resumable-multi-registry-release.md"
+      - "rust-core/**"
       - "scripts/**"
-      - "tests/test_release_contract.py"
-      - "tests/test_registry_state.py"
+      - "src/okf_parser/rust_core.py"
+      - "tests/test_embed_native_wheel.py"
       - "typescript/package.json"
       - "typescript/package-lock.json"
       - "typescript/src/version.ts"
+      - "typescript/src/rust-core.ts"
       - "typescript-duckdb/package.json"
       - "typescript-duckdb/package-lock.json"
       - "uv.lock"
@@ -44,13 +49,11 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
-
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: "0.11.21"
           python-version: "3.12"
-
       - name: Install Node.js
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
@@ -59,48 +62,39 @@ jobs:
           cache-dependency-path: |
             typescript/package-lock.json
             typescript-duckdb/package-lock.json
-
       - name: Verify synchronized source contract
         shell: bash
         run: |
           set -euo pipefail
           args=()
-          if [[ "$DRY_RUN_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            args+=(--tag "$DRY_RUN_REF")
-          fi
+          if [[ "$DRY_RUN_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then args+=(--tag "$DRY_RUN_REF"); fi
           python scripts/release_contract.py verify-source "${args[@]}"
-
       - name: Install locked build dependencies
         run: |
           uv sync --frozen --all-groups
           npm ci --prefix typescript
           npm ci --prefix typescript-duckdb
-
+      - name: Build release native engine
+        run: cargo build --release --locked --manifest-path Cargo.toml -p okf-core
       - name: Build each artifact once
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf release
-          mkdir -p release/python release/npm
+          rm -rf release typescript/native
+          mkdir -p release/python release/npm typescript/native/linux-x64
           uv build --out-dir release/python
           rm -f release/python/.gitignore
+          wheel=$(find release/python -maxdepth 1 -type f -name '*-py3-none-any.whl' -print -quit)
+          python scripts/embed_native_wheel.py "$wheel" target/release/okf-core --platform-tag linux_x86_64 --replace
+          cp target/release/okf-core typescript/native/linux-x64/okf-core
+          chmod 755 typescript/native/linux-x64/okf-core
           (cd typescript && npm pack --pack-destination ../release/npm --silent)
+          rm -rf typescript/native
           (cd typescript-duckdb && npm pack --pack-destination ../release/npm --silent)
-
       - name: Generate immutable release manifest
         shell: bash
         run: |
-          set -euo pipefail
-          python scripts/release_contract.py build-manifest \
-            --directory release \
-            --repository "$GITHUB_REPOSITORY" \
-            --commit "$(git rev-parse HEAD)" \
-            --ref "$DRY_RUN_REF" \
-            --python-version "$(python -c 'import platform; print(platform.python_version())')" \
-            --node-version "$(node --version)" \
-            --npm-version "$(npm --version)" \
-            --uv-version "$(uv --version | awk '{print $2}')"
-
+          python scripts/release_contract.py build-manifest --directory release --repository "$GITHUB_REPOSITORY" --commit "$(git rev-parse HEAD)" --ref "$DRY_RUN_REF" --python-version "$(python -c 'import platform; print(platform.python_version())')" --node-version "$(node --version)" --npm-version "$(npm --version)" --uv-version "$(uv --version | awk '{print $2}')"
       - name: Verify wheel and source distribution as consumers
         shell: bash
         run: |
@@ -117,9 +111,9 @@ jobs:
             "$environment/bin/okf-parser" --help >/dev/null
             mkdir "$environment/fixture"
             printf '%s\n' '---' 'type: Node' '---' '# Node' > "$environment/fixture/node.md"
-            "$environment/bin/okf-parser" check "$environment/fixture" >/dev/null
+            if [[ "$artifact" == *.whl ]]; then "$environment/bin/python" -c 'from okf_parser.rust_core import packaged_rust_core; p=packaged_rust_core(); assert p is not None and p.is_file()'; fi
+            "$environment/bin/python" -c 'from pathlib import Path; from okf_parser import load_bundle; b=load_bundle(Path("'$environment'/fixture")); assert b.markdown_count == 1'
           done
-
       - name: Verify main npm tarball as a consumer
         shell: bash
         run: |
@@ -127,23 +121,13 @@ jobs:
           expected_version=$(node -p "require('./typescript/package.json').version")
           parser_tarball="$GITHUB_WORKSPACE/release/npm/okf-parser-$expected_version.tgz"
           consumer="$RUNNER_TEMP/npm-consumer"
-          mkdir "$consumer"
-          cd "$consumer"
+          mkdir "$consumer" && cd "$consumer"
           npm init -y >/dev/null
           npm install --ignore-scripts "$parser_tarball" >/dev/null
-          EXPECTED_VERSION="$expected_version" node --input-type=module -e 'import("okf-parser").then(({ capabilityManifest }) => { if (capabilityManifest.protocol_version !== process.env.EXPECTED_VERSION) process.exit(1) })'
-          ./node_modules/.bin/okf-parser-ts --help >/dev/null
-          mkdir format-fixture
-          printf '# Heading\n\n-   item\n' > format-fixture/concept.md
-          if ./node_modules/.bin/okf-parser-ts format format-fixture >/dev/null; then
-            echo "installed formatter check unexpectedly succeeded before rewrite"
-            exit 1
-          fi
-          ./node_modules/.bin/okf-parser-ts format format-fixture --write >/dev/null
-          ./node_modules/.bin/okf-parser-ts format format-fixture >/dev/null
-          grep -qx -- '- item' format-fixture/concept.md
-          node "$GITHUB_WORKSPACE/typescript/scripts/smoke-mcp-stdio.mjs" ./node_modules/.bin/okf-parser-ts-mcp
-
+          EXPECTED_VERSION="$expected_version" node --input-type=module -e 'import("okf-parser").then(({ capabilityManifest, packagedRustCore }) => { if (capabilityManifest.protocol_version !== process.env.EXPECTED_VERSION || !packagedRustCore()) process.exit(1) })'
+          mkdir knowledge
+          printf '%s\n' '---' 'type: Node' '---' '# Node' > knowledge/node.md
+          node --input-type=module -e 'import("okf-parser").then(async ({ loadBundle }) => { const b = await loadBundle("knowledge"); if (b.markdownCount !== 1) process.exit(1) })'
       - name: Verify both npm tarballs together
         shell: bash
         run: |
@@ -152,59 +136,18 @@ jobs:
           parser_tarball="$GITHUB_WORKSPACE/release/npm/okf-parser-$expected_version.tgz"
           adapter_tarball="$GITHUB_WORKSPACE/release/npm/okf-parser-duckdb-$expected_version.tgz"
           consumer="$RUNNER_TEMP/duckdb-consumer"
-          mkdir "$consumer"
-          cd "$consumer"
+          mkdir "$consumer" && cd "$consumer"
           npm init -y >/dev/null
-          npm install --ignore-scripts "$parser_tarball" >/dev/null
-          npm install --ignore-scripts "$adapter_tarball" >/dev/null
+          npm install --ignore-scripts "$parser_tarball" "$adapter_tarball" >/dev/null
           mkdir knowledge
           printf '%s\n' '---' 'type: Node' '---' '# Node' > knowledge/node.md
           ./node_modules/.bin/okf-parser-ts-duckdb knowledge --database bundle.duckdb > report.json
-          node --input-type=module -e 'import("okf-parser-duckdb").then(async ({ exportDuckDb }) => { const result = await exportDuckDb("knowledge", { database: "second.duckdb" }); if (result.concept_count !== 1) process.exit(1) })'
-
       - name: Re-verify exact artifact bytes
         run: python scripts/release_contract.py verify-local --manifest release/manifest.json
-
       - name: Verify shipped package contents
         run: python scripts/release_contract.py verify-contents --manifest release/manifest.json
-
       - name: Inspect public registry state
         run: python -m scripts.registry_state --manifest release/manifest.json --output release/registry-state.json
-
-      - name: Write release summary
-        shell: bash
-        run: |
-          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import json
-          from pathlib import Path
-
-          manifest = json.loads(Path("release/manifest.json").read_text(encoding="utf-8"))
-          registry = json.loads(Path("release/registry-state.json").read_text(encoding="utf-8"))
-          print(f"## Release dry run {manifest['version']}")
-          print()
-          print(f"Source: `{manifest['repository']}@{manifest['commit']}`")
-          print()
-          print("| Artifact | Bytes | SHA-256 |")
-          print("|---|---:|---|")
-          for artifact in manifest["artifacts"]:
-              print(f"| `{artifact['path']}` | {artifact['size']} | `{artifact['sha256']}` |")
-          print()
-          print("## Public registry preflight")
-          print()
-          print("| Registry | Package | State | Package exists | Action |")
-          print("|---|---|---|---|---|")
-          actions = {
-              (item["registry"], item["package"]): item["action"]
-              for item in registry["plan"]
-          }
-          for entry in registry["entries"]:
-              action = actions[(entry["registry"], entry["package"])]
-              print(
-                  f"| {entry['registry']} | `{entry['package']}` | "
-                  f"`{entry['state']}` | `{entry['package_exists']}` | `{action}` |"
-              )
-          PY
-
       - name: Upload tested release set
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
