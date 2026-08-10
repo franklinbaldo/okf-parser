@@ -7,6 +7,7 @@ on:
       - "changelog/**"
       - "docs/releasing.md"
       - "native-python-stub/**"
+      - "native-npm-linux-x64/**"
       - "pyproject.toml"
       - "rfcs/0003-resumable-multi-registry-release.md"
       - "rust-core/Cargo.lock"
@@ -85,11 +86,16 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf release
-          mkdir -p release/python release/native-python release/npm
+          mkdir -p release/python release/native-python release/npm release/native-npm
           uv build --out-dir release/python
           uv build --wheel native-python-stub --out-dir release/native-python
           uv build --wheel rust-core --out-dir release/native-python
           rm -f release/python/.gitignore release/native-python/.gitignore
+          cargo build --release --locked --manifest-path rust-core/Cargo.toml
+          mkdir -p native-npm-linux-x64/bin
+          cp rust-core/target/release/okf-core native-npm-linux-x64/bin/okf-core
+          chmod +x native-npm-linux-x64/bin/okf-core
+          (cd native-npm-linux-x64 && npm pack --pack-destination ../release/native-npm --silent)
           (cd typescript && npm pack --pack-destination ../release/npm --silent)
           (cd typescript-duckdb && npm pack --pack-destination ../release/npm --silent)
 
@@ -113,6 +119,16 @@ jobs:
               if len(scripts) != 1:
                   raise SystemExit(f"expected one okf-core wheel script, found {scripts}")
           PY
+
+      - name: Verify npm native companion artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_version=$(node -p "require('./typescript/package.json').version")
+          native="release/native-npm/okf-parser-native-linux-x64-${expected_version}.tgz"
+          test -f "$native"
+          tar -tzf "$native" | grep -qx 'package/bin/okf-core'
+          tar -tzf "$native" | grep -qx 'package/package.json'
 
       - name: Generate immutable release manifest
         shell: bash
@@ -177,18 +193,30 @@ jobs:
               raise SystemExit("portable selector unexpectedly claims a native core")
           PY
 
-      - name: Verify main npm tarball as a consumer
+      - name: Verify main npm tarball with native companion
         shell: bash
         run: |
           set -euo pipefail
           expected_version=$(node -p "require('./typescript/package.json').version")
           parser_tarball="$GITHUB_WORKSPACE/release/npm/okf-parser-$expected_version.tgz"
+          native_tarball="$GITHUB_WORKSPACE/release/native-npm/okf-parser-native-linux-x64-$expected_version.tgz"
           consumer="$RUNNER_TEMP/npm-consumer"
           mkdir "$consumer"
           cd "$consumer"
           npm init -y >/dev/null
-          npm install --ignore-scripts "$parser_tarball" >/dev/null
+          npm install --ignore-scripts "$native_tarball" "$parser_tarball" >/dev/null
           EXPECTED_VERSION="$expected_version" node --input-type=module -e 'import("okf-parser").then(({ capabilityManifest }) => { if (capabilityManifest.protocol_version !== process.env.EXPECTED_VERSION) process.exit(1) })'
+          mkdir knowledge
+          printf '%s\n' '---' 'type: Node' '---' '# Node' > knowledge/node.md
+          node --input-type=module - <<'JS'
+          import { loadBundle, resolveRustCore } from "okf-parser";
+          const executable = resolveRustCore({ environment: { PATH: "" } });
+          if (executable === undefined || !executable.includes("okf-parser-native-linux-x64")) {
+            throw new Error(`npm native companion was not selected: ${String(executable)}`);
+          }
+          const bundle = await loadBundle("knowledge");
+          if (bundle.markdownCount !== 1) throw new Error(`unexpected native bundle count: ${String(bundle.markdownCount)}`);
+          JS
           ./node_modules/.bin/okf-parser-ts --help >/dev/null
           mkdir format-fixture
           printf '# Heading\n\n-   item\n' > format-fixture/concept.md
@@ -201,6 +229,26 @@ jobs:
           grep -qx -- '- item' format-fixture/concept.md
           node "$GITHUB_WORKSPACE/typescript/scripts/smoke-mcp-stdio.mjs" ./node_modules/.bin/okf-parser-ts-mcp
 
+      - name: Verify npm portable fallback without optional package
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_version=$(node -p "require('./typescript/package.json').version")
+          parser_tarball="$GITHUB_WORKSPACE/release/npm/okf-parser-$expected_version.tgz"
+          consumer="$RUNNER_TEMP/npm-portable-consumer"
+          mkdir "$consumer"
+          cd "$consumer"
+          npm init -y >/dev/null
+          npm install --ignore-scripts --omit=optional "$parser_tarball" >/dev/null
+          mkdir knowledge
+          printf '%s\n' '---' 'type: Node' '---' '# Node' > knowledge/node.md
+          node --input-type=module - <<'JS'
+          import { loadBundle, resolveRustCore } from "okf-parser";
+          if (resolveRustCore({ environment: { PATH: "" } }) !== undefined) throw new Error("portable install unexpectedly found Rust");
+          const bundle = await loadBundle("knowledge", { engine: "native" });
+          if (bundle.markdownCount !== 1) throw new Error("portable fallback failed");
+          JS
+
       - name: Verify both npm tarballs together
         shell: bash
         run: |
@@ -212,7 +260,7 @@ jobs:
           mkdir "$consumer"
           cd "$consumer"
           npm init -y >/dev/null
-          npm install --ignore-scripts "$parser_tarball" >/dev/null
+          npm install --ignore-scripts --omit=optional "$parser_tarball" >/dev/null
           npm install --ignore-scripts "$adapter_tarball" >/dev/null
           mkdir knowledge
           printf '%s\n' '---' 'type: Node' '---' '# Node' > knowledge/node.md
@@ -237,7 +285,8 @@ jobs:
 
           manifest = json.loads(Path("release/manifest.json").read_text(encoding="utf-8"))
           registry = json.loads(Path("release/registry-state.json").read_text(encoding="utf-8"))
-          native = sorted(path.name for path in Path("release/native-python").glob("*.whl"))
+          native_python = sorted(path.name for path in Path("release/native-python").glob("*.whl"))
+          native_npm = sorted(path.name for path in Path("release/native-npm").glob("*.tgz"))
           print(f"## Release dry run {manifest['version']}")
           print()
           print(f"Source: `{manifest['repository']}@{manifest['commit']}`")
@@ -246,8 +295,10 @@ jobs:
           print("|---|---:|---|")
           for artifact in manifest["artifacts"]:
               print(f"| `{artifact['path']}` | {artifact['size']} | `{artifact['sha256']}` |")
-          for filename in native:
+          for filename in native_python:
               print(f"| `native-python/{filename}` | native companion | verified separately |")
+          for filename in native_npm:
+              print(f"| `native-npm/{filename}` | native companion | verified separately |")
           print()
           print("## Public registry preflight")
           print()
