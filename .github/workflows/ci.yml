@@ -51,9 +51,9 @@ jobs:
       - name: Prove native and Rust full bundles equivalent
         shell: bash
         run: |
-          OKF_CORE=rust-core/target/release/okf-core uv run pytest tests/test_rust_core.py
-          uv run python benchmarks/python_parser.py --sizes 10 --rounds 1 --rust-core rust-core/target/release/okf-core > "$RUNNER_TEMP/python-rust-benchmark.json"
-          node benchmarks/typescript-parser.mjs --sizes=10 --rounds=1 --rust-core=rust-core/target/release/okf-core > "$RUNNER_TEMP/typescript-rust-benchmark.json"
+          OKF_CORE=target/release/okf-core uv run pytest tests/test_rust_core.py
+          uv run python benchmarks/python_parser.py --sizes 10 --rounds 1 --rust-core target/release/okf-core > "$RUNNER_TEMP/python-rust-benchmark.json"
+          node benchmarks/typescript-parser.mjs --sizes=10 --rounds=1 --rust-core=target/release/okf-core > "$RUNNER_TEMP/typescript-rust-benchmark.json"
 
   version-bump:
     name: Version bump and changelog
