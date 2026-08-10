@@ -4,12 +4,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from okf_parser.bundle import Bundle, load_bundle as _load_bundle_native
-from okf_parser.rust_core import EngineMode, resolve_rust_core
+from okf_parser.bundle import load_bundle as _load_bundle_native
+from okf_parser.rust_core import resolve_rust_core
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from pathlib import Path
+
+    from okf_parser.bundle import Bundle
+    from okf_parser.rust_core import EngineMode
 
 
 def load_bundle(
