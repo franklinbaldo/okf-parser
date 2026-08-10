@@ -74,4 +74,5 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add pyproject.toml uv.lock native-python-stub/pyproject.toml rust-core/pyproject.toml rust-core/Cargo.toml rust-core/Cargo.lock typescript/package.json typescript/package-lock.json typescript-duckdb/package.json typescript-duckdb/package-lock.json typescript/src/version.ts README.md changelog/0.41.0.md .github/workflows/refresh-041-metadata.yml
           git commit -m 'chore: synchronize 0.41.0 release metadata'
+          git pull --rebase origin release/npm-native-core
           git push origin HEAD:release/npm-native-core
