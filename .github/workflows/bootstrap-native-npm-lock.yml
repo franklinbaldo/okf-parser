@@ -1,0 +1,49 @@
+name: Bootstrap native npm lock
+
+on:
+  push:
+    branches:
+      - release/npm-native-core
+
+permissions:
+  contents: write
+
+jobs:
+  bootstrap:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: release/npm-native-core
+          fetch-depth: 0
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e
+        with:
+          node-version: 24
+      - name: Add local bootstrap entry and prove npm ci
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'JS'
+          const fs = require('node:fs');
+          const path = 'typescript/package-lock.json';
+          const lock = JSON.parse(fs.readFileSync(path, 'utf8'));
+          lock.packages['node_modules/okf-parser-native-linux-x64'] = {
+            version: '0.41.0',
+            resolved: 'file:../native-npm-linux-x64',
+            cpu: ['x64'],
+            license: 'MIT',
+            optional: true,
+            os: ['linux'],
+            bin: { 'okf-core': 'bin/okf-core' }
+          };
+          fs.writeFileSync(path, JSON.stringify(lock, null, 2) + '\n');
+          JS
+          npm ci --prefix typescript --ignore-scripts
+          rm -f .github/workflows/bootstrap-native-npm-lock.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add typescript/package-lock.json .github/workflows/bootstrap-native-npm-lock.yml
+          git commit -m 'chore: bootstrap npm native companion lock'
+          git pull --rebase origin release/npm-native-core
+          git push origin HEAD:release/npm-native-core
