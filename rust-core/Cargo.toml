@@ -1,25 +1,13 @@
 [package]
 name = "okf-core"
-version = "0.38.0"
+version = "0.39.1"
 edition = "2024"
 license = "MIT"
-description = "Native OKF ingestion, validation, and DuckDB engine"
+description = "Native OKF CLI and compatibility adapters"
 
 [dependencies]
-chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
 duckdb = { version = "1.10505.0", features = ["bundled"] }
-ignore = "0.4"
-percent-encoding = "2"
-pulldown-cmark = "0.13"
-rayon = "1"
+okf-engine = { path = "../okf-engine", version = "0.39.1" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
-walkdir = "2"
-yaml-rust2 = "0.10"
-
-[profile.release]
-lto = "thin"
-codegen-units = 1
-strip = true

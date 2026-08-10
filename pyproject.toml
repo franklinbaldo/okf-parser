@@ -1,6 +1,6 @@
 [project]
 name = "okf-parser"
-version = "0.39.0"
+version = "0.39.1"
 description = "Relational inspection and validation for Open Knowledge Format bundles"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -41,8 +41,6 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.sdist]
-# Repository automation is not part of the published source distribution: the
-# release workflows are a privileged CI boundary, not consumer-installable code.
 exclude = [
   ".github",
   ".gitignore",
@@ -63,27 +61,12 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["ALL"]
-ignore = [
-  "COM812",
-  "ISC001",
-]
+ignore = ["COM812", "ISC001"]
 
 [tool.ruff.lint.flake8-type-checking]
-# Pydantic evaluates model annotations at runtime, so their imports must stay
-# outside a type-checking block.
 runtime-evaluated-base-classes = ["pydantic.BaseModel"]
 
 [tool.ruff.lint.per-file-ignores]
-# PLR0913: every listed function's arguments are independent public CLI/API
-# flags or distinct compile/write-path inputs, not a sign the function
-# should take fewer of them - see each module's docstring.
-# S608: the only dynamic SQL in these files quotes identifiers and
-# '-doubles string literals rather than interpolating raw input (apply.py's
-# `_build_sugar_sql`, bundle_import.py's source-path replacement scan).
-# A002: cli.py's `type` parameters name the domain concept `type`, matching
-# every other surface (frontmatter, service functions) for the same flag.
-# BLE001: apply.py's frontmatter round-trip probe treats any load/dump
-# failure alike, by construction - see `_round_trips_losslessly`.
 "src/okf_parser/apply.py" = ["BLE001", "PLR0913", "S608"]
 "src/okf_parser/bundle_import.py" = ["PLR0913", "S608"]
 "src/okf_parser/declared_schema.py" = ["S608"]
@@ -104,7 +87,4 @@ include = [
 ]
 
 [tool.ty.overrides.rules]
-# Pydantic intentionally uses a non-None annotation with a None Field default
-# to represent "may be absent, but explicit null is invalid". Runtime tests pin
-# that behavior; ty currently treats Field(default=None) as a plain assignment.
 invalid-assignment = "ignore"

@@ -1,0 +1,18 @@
+[package]
+name = "okf-engine"
+version = "0.39.1"
+edition = "2024"
+license = "MIT"
+description = "DuckDB-independent OKF semantic ingestion engine"
+
+[dependencies]
+chrono = "0.4"
+ignore = "0.4"
+percent-encoding = "2"
+pulldown-cmark = "0.13"
+rayon = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+walkdir = "2"
+yaml-rust2 = "0.10"
