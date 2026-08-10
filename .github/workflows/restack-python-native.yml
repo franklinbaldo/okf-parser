@@ -1,0 +1,27 @@
+name: Restack Python native release
+
+on:
+  pull_request:
+    branches:
+      - release/python-native-core
+
+permissions:
+  contents: write
+
+jobs:
+  restack:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: release/python-native-core
+          fetch-depth: 0
+      - name: Rebase Python native branch onto auto-engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git fetch origin feat/auto-rust-engine
+          git rebase origin/feat/auto-rust-engine
+          git push --force-with-lease origin HEAD:release/python-native-core
