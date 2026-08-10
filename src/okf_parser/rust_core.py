@@ -1,16 +1,60 @@
-"""Experimental batch bridge to the optional Rust Markdown facts core."""
+"""Bridge and deterministic discovery for the optional Rust OKF engine."""
 
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
-from typing import TYPE_CHECKING, TypedDict, cast
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
 from okf_parser.parser import MarkdownFacts
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from pathlib import Path
+
+EngineMode = Literal["auto", "native"]
+
+
+def _binary_name() -> str:
+    return "okf-core.exe" if os.name == "nt" else "okf-core"
+
+
+def packaged_rust_core() -> Path | None:
+    """Return the package-local native engine when this distribution ships one."""
+    candidate = Path(__file__).resolve().parent / "_native" / _binary_name()
+    return candidate if candidate.is_file() else None
+
+
+def resolve_rust_core(
+    *,
+    engine: EngineMode = "auto",
+    explicit: Path | None = None,
+    environ: dict[str, str] | None = None,
+    path_lookup: object = shutil.which,
+) -> Path | None:
+    """Resolve the best available Rust engine without leaking deployment into callers."""
+    if engine not in {"auto", "native"}:
+        msg = f"unsupported OKF engine mode: {engine}"
+        raise ValueError(msg)
+    if engine == "native":
+        return None
+    if explicit is not None:
+        return explicit
+
+    packaged = packaged_rust_core()
+    if packaged is not None:
+        return packaged
+
+    environment = os.environ if environ is None else environ
+    configured = environment.get("OKF_CORE")
+    if configured:
+        return Path(configured)
+
+    lookup = cast("object", path_lookup)
+    resolved = lookup(_binary_name()) if callable(lookup) else None
+    return Path(resolved) if isinstance(resolved, str) and resolved else None
 
 
 def rust_load_bundle(

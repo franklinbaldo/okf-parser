@@ -1,12 +1,53 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { Bundle, Diagnostic, MarkdownFacts } from "./core.js";
+
+export type EngineMode = "auto" | "native";
 
 export class RustCoreError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "RustCoreError";
   }
+}
+
+function binaryName(): string {
+  return process.platform === "win32" ? "okf-core.exe" : "okf-core";
+}
+
+export function packagedRustCore(): string | undefined {
+  const candidate = fileURLToPath(new URL(`../native/${binaryName()}`, import.meta.url));
+  return existsSync(candidate) ? candidate : undefined;
+}
+
+function pathRustCore(environment: NodeJS.ProcessEnv): string | undefined {
+  for (const directory of (environment.PATH ?? "").split(path.delimiter)) {
+    if (directory === "") continue;
+    const candidate = path.join(directory, binaryName());
+    if (existsSync(candidate)) return candidate;
+  }
+  return undefined;
+}
+
+export function resolveRustCore(
+  options: {
+    readonly engine?: EngineMode;
+    readonly explicit?: string;
+    readonly environment?: NodeJS.ProcessEnv;
+  } = {},
+): string | undefined {
+  const engine = options.engine ?? "auto";
+  if (engine === "native") return undefined;
+  if (engine !== "auto") throw new TypeError(`unsupported OKF engine mode: ${String(engine)}`);
+  if (options.explicit !== undefined) return options.explicit;
+  const packaged = packagedRustCore();
+  if (packaged !== undefined) return packaged;
+  const environment = options.environment ?? process.env;
+  if (environment.OKF_CORE !== undefined && environment.OKF_CORE !== "") return environment.OKF_CORE;
+  return pathRustCore(environment);
 }
 
 interface RustBundle {
@@ -21,7 +62,11 @@ interface RustBundle {
 export async function rustLoadBundle(
   root: string,
   executable: string,
-  options: { readonly exclude?: readonly string[]; readonly readConcurrency: number; readonly signal?: AbortSignal },
+  options: {
+    readonly exclude?: readonly string[];
+    readonly readConcurrency: number;
+    readonly signal?: AbortSignal;
+  },
 ): Promise<Bundle> {
   options.signal?.throwIfAborted();
   const args = ["load", root, "--read-concurrency", String(options.readConcurrency)];
@@ -49,30 +94,42 @@ export async function rustLoadBundle(
     const value = JSON.parse(Buffer.concat(stdout).toString("utf8")) as RustBundle;
     return Object.freeze({
       root: value.root,
-      concepts: Object.freeze(value.concepts.map((item) => Object.freeze({
-        conceptId: item.concept_id,
-        logicalKey: item.logical_key,
-        path: item.path,
-        conceptType: item.concept_type,
-        title: item.title,
-        description: item.description,
-        sourceDigest: item.source_digest,
-        parsedDigest: item.parsed_digest,
-        frontmatterJson: item.frontmatter_json,
-        body: item.body,
-      }))) as Bundle["concepts"],
-      reserved: Object.freeze(value.reserved.map((item) => Object.freeze({
-        path: item.path,
-        filename: item.filename,
-        body: item.body,
-      }))) as Bundle["reserved"],
-      links: Object.freeze(value.links.map((item) => Object.freeze({
-        sourceId: item.source_id,
-        rawTarget: item.raw_target,
-        targetId: item.target_id,
-        exists: item.exists,
-        origin: item.origin,
-      }))) as Bundle["links"],
+      concepts: Object.freeze(
+        value.concepts.map((item) =>
+          Object.freeze({
+            conceptId: item.concept_id,
+            logicalKey: item.logical_key,
+            path: item.path,
+            conceptType: item.concept_type,
+            title: item.title,
+            description: item.description,
+            sourceDigest: item.source_digest,
+            parsedDigest: item.parsed_digest,
+            frontmatterJson: item.frontmatter_json,
+            body: item.body,
+          }),
+        ),
+      ) as Bundle["concepts"],
+      reserved: Object.freeze(
+        value.reserved.map((item) =>
+          Object.freeze({
+            path: item.path,
+            filename: item.filename,
+            body: item.body,
+          }),
+        ),
+      ) as Bundle["reserved"],
+      links: Object.freeze(
+        value.links.map((item) =>
+          Object.freeze({
+            sourceId: item.source_id,
+            rawTarget: item.raw_target,
+            targetId: item.target_id,
+            exists: item.exists,
+            origin: item.origin,
+          }),
+        ),
+      ) as Bundle["links"],
       diagnostics: Object.freeze(value.diagnostics),
       markdownCount: value.markdown_count,
     });
