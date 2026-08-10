@@ -1,6 +1,6 @@
 {
   "name": "okf-parser",
-  "version": "0.40.0",
+  "version": "0.41.0",
   "description": "Native TypeScript parser, validator, formatter, graph inspector, schema exporter, and MCP server for Open Knowledge Format bundles",
   "type": "module",
   "license": "MIT",
@@ -48,6 +48,9 @@
     "micromark-extension-gfm": "^3.0.0",
     "yaml": "^2.8.1",
     "zod": "^4.0.0"
+  },
+  "optionalDependencies": {
+    "okf-parser-native-linux-x64": "0.41.0"
   },
   "devDependencies": {
     "@types/markdown-it": "^14.1.2",
