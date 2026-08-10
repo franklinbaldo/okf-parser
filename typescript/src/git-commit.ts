@@ -66,8 +66,8 @@ function validateMetadata(metadata: Readonly<Record<string, FrontmatterValue>>):
     );
   }
 
+  if (!("type" in metadata)) return "Commit";
   const rawType = metadata.type;
-  if (rawType === undefined || rawType === null) return "Commit";
   if (typeof rawType !== "string" || rawType.trim() === "") {
     throw new GitCommitMessageError(
       "GIT_MESSAGE_TYPE",
