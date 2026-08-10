@@ -127,8 +127,9 @@ jobs:
           expected_version=$(node -p "require('./typescript/package.json').version")
           native="release/native-npm/okf-parser-native-linux-x64-${expected_version}.tgz"
           test -f "$native"
-          tar -tzf "$native" | grep -qx 'package/bin/okf-core'
-          tar -tzf "$native" | grep -qx 'package/package.json'
+          native_listing="$(tar -tzf "$native")"
+          grep -qx 'package/bin/okf-core' <<<"$native_listing"
+          grep -qx 'package/package.json' <<<"$native_listing"
 
       - name: Generate immutable release manifest
         shell: bash
