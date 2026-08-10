@@ -1,11 +1,11 @@
 [project]
 name = "okf-parser"
-version = "0.40.0"
+version = "0.41.0"
 description = "Relational inspection and validation for Open Knowledge Format bundles"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
-  "okf-parser-native==0.40.0",
+  "okf-parser-native==0.41.0",
   "cyclopts>=4.22,<5",
   "duckdb>=1.4,<2",
   "fastmcp>=3.4,<4",
