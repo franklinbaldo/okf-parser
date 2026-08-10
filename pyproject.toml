@@ -26,6 +26,7 @@ dependencies = [
 [project.scripts]
 okf-parser = "okf_parser.cli:main"
 okf-parser-mcp = "okf_parser.cli:run_mcp_stdio"
+okf-commit-msg = "okf_parser.git_commit_cli:main"
 
 [dependency-groups]
 dev = [
