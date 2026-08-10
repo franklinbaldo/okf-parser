@@ -1,3 +1,9 @@
+---
+type: Documentation
+title: okf-parser native Linux x64 package
+description: Platform companion that ships the release-matched okf-core executable for npm consumers
+---
+
 # okf-parser-native-linux-x64
 
 Platform companion for `okf-parser` on Linux x64.
