@@ -83,9 +83,9 @@ def _validate_metadata(metadata: dict[str, YamlValue]) -> str:
             line=3,
         )
 
-    raw_type = metadata.get("type")
-    if raw_type is None:
+    if "type" not in metadata:
         return "Commit"
+    raw_type = metadata["type"]
     if not isinstance(raw_type, str) or not raw_type.strip():
         raise GitCommitMessageError(
             "GIT_MESSAGE_TYPE",
