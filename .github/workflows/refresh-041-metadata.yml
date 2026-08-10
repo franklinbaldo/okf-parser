@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - release/npm-native-core
+  pull_request:
+    branches:
+      - release/python-native-core
 
 permissions:
   contents: write
