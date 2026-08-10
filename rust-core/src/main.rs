@@ -1,6 +1,5 @@
 mod database;
 mod engine;
-mod yaml;
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
 use std::io::{self, Read};
