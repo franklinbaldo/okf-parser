@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import subprocess
+import sysconfig
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
@@ -22,9 +23,17 @@ def _binary_name() -> str:
 
 
 def packaged_rust_core() -> Path | None:
-    """Return the package-local native engine when this distribution ships one."""
-    candidate = Path(__file__).resolve().parent / "_native" / _binary_name()
-    return candidate if candidate.is_file() else None
+    """Return a native engine installed with this Python environment, when present."""
+    package_local = Path(__file__).resolve().parent / "_native" / _binary_name()
+    if package_local.is_file():
+        return package_local
+
+    scripts = sysconfig.get_path("scripts")
+    if scripts:
+        companion = Path(scripts) / _binary_name()
+        if companion.is_file():
+            return companion
+    return None
 
 
 def resolve_rust_core(
