@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Literal, TypedDict, cast
 from okf_parser.parser import MarkdownFacts
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
 EngineMode = Literal["auto", "native"]
 
@@ -32,7 +32,7 @@ def resolve_rust_core(
     engine: EngineMode = "auto",
     explicit: Path | None = None,
     environ: dict[str, str] | None = None,
-    path_lookup: object = shutil.which,
+    path_lookup: Callable[[str], str | None] = shutil.which,
 ) -> Path | None:
     """Resolve the best available Rust engine without leaking deployment into callers."""
     if engine not in {"auto", "native"}:
@@ -52,9 +52,8 @@ def resolve_rust_core(
     if configured:
         return Path(configured)
 
-    lookup = cast("object", path_lookup)
-    resolved = lookup(_binary_name()) if callable(lookup) else None
-    return Path(resolved) if isinstance(resolved, str) and resolved else None
+    resolved = path_lookup(_binary_name())
+    return Path(resolved) if resolved else None
 
 
 def rust_load_bundle(
