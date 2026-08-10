@@ -93,7 +93,7 @@ jobs:
           rm -f release/python/.gitignore release/native-python/.gitignore
           cargo build --release --locked --manifest-path rust-core/Cargo.toml
           mkdir -p native-npm-linux-x64/bin
-          cp rust-core/target/release/okf-core native-npm-linux-x64/bin/okf-core
+          cp target/release/okf-core native-npm-linux-x64/bin/okf-core
           chmod +x native-npm-linux-x64/bin/okf-core
           (cd native-npm-linux-x64 && npm pack --pack-destination ../release/native-npm --silent)
           (cd typescript && npm pack --pack-destination ../release/npm --silent)
