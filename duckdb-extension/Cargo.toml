@@ -1,0 +1,13 @@
+[package]
+name = "okf-duckdb-extension"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "okf"
+crate-type = ["cdylib"]
+
+[dependencies]
+duckdb = { version = "~1.10504.0", features = ["loadable-extension"] }
+okf-engine = { path = "../okf-engine" }
