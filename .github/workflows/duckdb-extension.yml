@@ -58,18 +58,18 @@ jobs:
                   encoding='utf-8',
               )
 
-          Path('changelog/0.39.2.md').write_text('''---
-type: Release
-title: okf-parser 0.39.2
----
-
-# okf-parser 0.39.2
-
-- adds the first experimental Rust loadable DuckDB extension slice through the C Extension API;
-- exposes `okf_concepts(root)` with canonical `okf-engine` semantics and direct DuckDB data chunks;
-- builds a real `.duckdb_extension` with pinned DuckDB tooling and proves it loads in DuckDB 1.5.4;
-- keeps the experimental DuckDB crate outside the stable root workspace release graph.
-''', encoding='utf-8')
+          changelog = (
+              '---\n'
+              'type: Release\n'
+              'title: okf-parser 0.39.2\n'
+              '---\n\n'
+              '# okf-parser 0.39.2\n\n'
+              '- adds the first experimental Rust loadable DuckDB extension slice through the C Extension API;\n'
+              '- exposes `okf_concepts(root)` with canonical `okf-engine` semantics and direct DuckDB data chunks;\n'
+              '- builds a real `.duckdb_extension` with pinned DuckDB tooling and proves it loads in DuckDB 1.5.4;\n'
+              '- keeps the experimental DuckDB crate outside the stable root workspace release graph.\n'
+          )
+          Path('changelog/0.39.2.md').write_text(changelog, encoding='utf-8')
           PY
           uv lock
           npm install --package-lock-only --ignore-scripts --prefix typescript
