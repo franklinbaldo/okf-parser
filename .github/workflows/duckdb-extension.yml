@@ -2,25 +2,12 @@ name: DuckDB Rust extension
 
 on:
   pull_request:
-    paths:
-      - "duckdb-extension/**"
-      - "okf-engine/**"
-      - ".github/workflows/duckdb-extension.yml"
-      - "Cargo.toml"
-  push:
-    branches: [main]
-    paths:
-      - "duckdb-extension/**"
-      - "okf-engine/**"
-      - ".github/workflows/duckdb-extension.yml"
-      - "Cargo.toml"
 
 permissions:
   contents: write
 
 jobs:
   sync-release-metadata:
-    if: github.event_name == 'pull_request' && github.head_ref == 'feat/duckdb-okf-concepts-115' && github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -38,6 +25,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if grep -q '^version = "0.39.2"$' pyproject.toml; then
+            echo '0.39.2 already synchronized'
+            exit 0
+          fi
           python - <<'PY'
           from pathlib import Path
 
@@ -120,7 +111,6 @@ title: okf-parser 0.39.2
           root = pathlib.Path("duckdb-extension/test/knowledge").resolve()
           extension = pathlib.Path("duckdb-extension/build/debug/okf.duckdb_extension").resolve()
           assert extension.is_file() and extension.stat().st_size > 0
-
           con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
           con.execute(f"LOAD '{extension.as_posix()}'")
           rows = con.execute(
