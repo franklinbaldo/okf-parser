@@ -8,5 +8,9 @@ dist/
 build/
 release/
 
+# Rust workspace build output (Cargo.toml lives at repo root since okf-engine
+# extraction; rust-core/.gitignore only covers the old rust-core/target/ path)
+/target/
+
 # JavaScript dependencies
 node_modules/
