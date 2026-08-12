@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "okf-parser-native"
-version = "0.41.1"
+version = "0.41.2"
 description = "Portable fallback selector for the optional okf-parser native engine"
 requires-python = ">=3.12"
 license = "MIT"
