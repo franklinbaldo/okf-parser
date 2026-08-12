@@ -1,0 +1,15 @@
+[build-system]
+requires = ["maturin>=1.10,<2"]
+build-backend = "maturin"
+
+[project]
+name = "okf-parser-native"
+version = "0.40.0"
+description = "Platform-native okf-core executable for okf-parser"
+requires-python = ">=3.12"
+license = "MIT"
+
+[tool.maturin]
+bindings = "bin"
+strip = true
+locked = true

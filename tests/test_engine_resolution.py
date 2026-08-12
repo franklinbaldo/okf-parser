@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -38,3 +39,18 @@ def test_resolution_order(monkeypatch: pytest.MonkeyPatch) -> None:
         "/path/core"
     )
     assert rust_core.resolve_rust_core(environ={}, path_lookup=lambda _: None) is None
+
+
+def test_packaged_core_discovers_active_interpreter_scripts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = tmp_path / ("okf-core.exe" if os.name == "nt" else "okf-core")
+    executable.write_text("", encoding="utf-8")
+    monkeypatch.setattr(rust_core, "__file__", str(tmp_path / "missing" / "rust_core.py"))
+    monkeypatch.setattr(
+        rust_core.sysconfig,
+        "get_path",
+        lambda name: str(tmp_path) if name == "scripts" else None,
+    )
+
+    assert rust_core.packaged_rust_core() == executable
