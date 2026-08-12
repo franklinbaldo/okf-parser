@@ -101,7 +101,7 @@ jobs:
           git -C duckdb-extension/extension-ci-tools checkout --detach a285602bf745d6ceaa704b5df47f08b00ca296ae
       - name: Build loadable development artifact
         run: make -C duckdb-extension configure debug
-      - name: Load artifact in stock DuckDB and query concepts
+      - name: Load artifact in stock DuckDB and query full read surface
         shell: bash
         run: |
           duckdb-extension/configure/venv/bin/python - <<'PY'
@@ -113,9 +113,28 @@ jobs:
           assert extension.is_file() and extension.stat().st_size > 0
           con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
           con.execute(f"LOAD '{extension.as_posix()}'")
-          rows = con.execute(
+
+          concepts = con.execute(
               "SELECT concept_id, concept_type, title FROM okf_concepts(?)",
               [str(root)],
           ).fetchall()
-          assert rows == [("node", "Node", "Example node")], rows
+          assert concepts == [("node", "Node", "Example node")], concepts
+
+          links = con.execute(
+              "SELECT source_id, raw_target, target_id, exists FROM okf_links(?)",
+              [str(root)],
+          ).fetchall()
+          assert links == [("node", "missing.md", None, False)], links
+
+          reserved = con.execute(
+              "SELECT path, filename FROM okf_reserved(?)",
+              [str(root)],
+          ).fetchall()
+          assert reserved == [("index.md", "index.md")], reserved
+
+          diagnostics = con.execute(
+              "SELECT path, severity FROM okf_diagnostics(?)",
+              [str(root)],
+          ).fetchall()
+          assert len(diagnostics) == 1 and diagnostics[0][0] == "bad.md", diagnostics
           PY
