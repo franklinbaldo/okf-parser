@@ -86,6 +86,7 @@ invalid-assignment = "ignore"
 [tool.maturin]
 manifest-path = "rust-core/Cargo.toml"
 bindings = "bin"
+module-name = "okf_parser"
 python-source = "src"
 python-packages = ["okf_parser"]
 strip = true
