@@ -106,7 +106,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
 fn python_cli() -> Result<ExitStatus, Box<dyn std::error::Error>> {
     let executable = std::env::current_exe()?;
-    let scripts = executable.parent().ok_or("okf-parser executable has no parent directory")?;
+    let scripts = executable
+        .parent()
+        .ok_or("okf-parser executable has no parent directory")?;
     let sibling = if cfg!(windows) {
         scripts.join("python.exe")
     } else {
