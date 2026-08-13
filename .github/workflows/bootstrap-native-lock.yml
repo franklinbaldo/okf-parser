@@ -6,7 +6,7 @@ on:
     paths: [.github/workflows/bootstrap-native-lock.yml]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   generate:
@@ -25,7 +25,6 @@ jobs:
           python - <<'PY'
           import json
           from pathlib import Path
-
           path = Path("typescript/package-lock.json")
           payload = json.loads(path.read_text(encoding="utf-8"))
           payload["packages"]["node_modules/okf-parser-native-linux-x64"] = {
@@ -40,7 +39,21 @@ jobs:
           path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
           PY
           npm ci --prefix typescript --ignore-scripts
+      - name: Create unattached validated lock blob
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -Rs '{content: ., encoding: "utf-8"}' typescript/package-lock.json > "$RUNNER_TEMP/blob.json"
+          sha=$(curl --fail-with-body --silent --show-error -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            --data-binary @"$RUNNER_TEMP/blob.json" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/git/blobs" | jq -r .sha)
+          printf 'LOCK_BLOB=%s\n' "$sha" | tee "$RUNNER_TEMP/blob-sha.txt"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: bootstrapped-native-lock
-          path: typescript/package-lock.json
+          name: bootstrapped-native-lock-blob
+          path: ${{ runner.temp }}/blob-sha.txt
