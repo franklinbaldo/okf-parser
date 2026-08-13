@@ -47,10 +47,10 @@ jobs:
           python scripts/release_contract.py verify-local --manifest release/manifest.json
           python scripts/release_contract.py verify-contents --manifest release/manifest.json
 
-      - name: Publish Python parser
+      - name: Publish Python parser sdist
         env:
           UV_PUBLISH_CHECK_URL: https://pypi.org/simple
-        run: uv publish release/python/*
+        run: uv publish release/python/okf_parser-0.41.3.tar.gz
 
       - name: Publish npm native companion
         shell: bash
