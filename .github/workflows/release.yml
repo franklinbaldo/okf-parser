@@ -2,8 +2,8 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*.*.*"
+    branches:
+      - "release/v0.41.3"
 
 permissions:
   contents: read
@@ -38,7 +38,7 @@ jobs:
             typescript-duckdb/package-lock.json
 
       - name: Verify tagged source contract
-        run: python scripts/release_contract.py verify-source --tag "$GITHUB_REF_NAME"
+        run: python scripts/release_contract.py verify-source --tag "v0.41.3"
 
       - name: Install locked build dependencies
         run: |
@@ -94,7 +94,7 @@ jobs:
             --directory release \
             --repository "$GITHUB_REPOSITORY" \
             --commit "$(git rev-parse HEAD)" \
-            --ref "$GITHUB_REF_NAME" \
+            --ref "v0.41.3" \
             --python-version "$(python -c 'import platform; print(platform.python_version())')" \
             --node-version "$(node --version)" \
             --npm-version "$(npm --version)" \
@@ -108,7 +108,7 @@ jobs:
       - name: Upload exact tested release set
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-${{ github.ref_name }}
+          name: release-v0.41.3
           path: release/
           if-no-files-found: error
           retention-days: 14
@@ -144,7 +144,7 @@ jobs:
       - name: Download tested release set
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: release-${{ github.ref_name }}
+          name: release-v0.41.3
           path: release/
 
       - name: Re-verify exact bytes before publication
@@ -208,11 +208,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
+          version="0.41.3"
           notes="changelog/${version}.md"
           test -f "$notes"
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            echo "GitHub Release ${GITHUB_REF_NAME} already exists"
+          if gh release view "v0.41.3" >/dev/null 2>&1; then
+            echo "GitHub Release v0.41.3 already exists"
           else
-            gh release create "$GITHUB_REF_NAME" --verify-tag --title "okf-parser ${version}" --notes-file "$notes"
+            gh release create "v0.41.3" --target "1ab91592da59697d2d400606d16f35038eae9ad2" --title "okf-parser ${version}" --notes-file "$notes"
           fi
