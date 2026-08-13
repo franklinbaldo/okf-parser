@@ -892,7 +892,7 @@ wheels = [
 
 [[package]]
 name = "okf-parser"
-version = "0.41.2"
+version = "0.41.3"
 source = { editable = "." }
 dependencies = [
     { name = "cyclopts" },
@@ -904,7 +904,6 @@ dependencies = [
     { name = "mdformat-frontmatter" },
     { name = "mdformat-gfm" },
     { name = "networkx" },
-    { name = "okf-parser-native" },
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pyyaml" },
@@ -931,7 +930,6 @@ requires-dist = [
     { name = "mdformat-frontmatter", specifier = ">=2,<3" },
     { name = "mdformat-gfm", specifier = ">=1,<2" },
     { name = "networkx", specifier = ">=3.4,<4" },
-    { name = "okf-parser-native", directory = "native-python-stub" },
     { name = "pyarrow", specifier = ">=18,<26" },
     { name = "pydantic", specifier = ">=2.11,<3" },
     { name = "pyyaml", specifier = ">=6,<7" },
@@ -946,11 +944,6 @@ dev = [
     { name = "ty", specifier = ">=0.0.1a20,<0.1" },
     { name = "vulture", specifier = ">=2.14,<3" },
 ]
-
-[[package]]
-name = "okf-parser-native"
-version = "0.41.2"
-source = { directory = "native-python-stub" }
 
 [[package]]
 name = "openapi-pydantic"
