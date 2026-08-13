@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
@@ -14,6 +13,7 @@ from okf_parser.typed_tables import duckdb_identifier_key
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
+    from pathlib import Path
 
     from okf_parser.bundle import Bundle
     from okf_parser.models import YamlValue
@@ -68,7 +68,8 @@ def parse_relational_schema(sql_text: str) -> RelationalSchema:
         try:
             con.execute(sql_text)
         except duckdb.Error as exc:
-            raise RelationalSchemaError(f"relational schema script failed: {exc}") from exc
+            message = f"relational schema script failed: {exc}"
+            raise RelationalSchemaError(message) from exc
 
         table_rows = con.execute(
             "SELECT table_name FROM duckdb_tables() WHERE NOT temporary ORDER BY table_name"
@@ -106,7 +107,8 @@ def parse_relational_schema(sql_text: str) -> RelationalSchema:
         referenced_table = row[4]
         referenced_columns = row[5]
         if referenced_table is None or referenced_columns is None:
-            raise RelationalSchemaError(f"foreign key {name!r} has incomplete catalog metadata")
+            message = f"foreign key {name!r} has incomplete catalog metadata"
+            raise RelationalSchemaError(message)
         foreign_keys.append(
             ForeignKeyConstraint(
                 table=table,
@@ -125,7 +127,8 @@ def load_relational_schema(path: Path) -> RelationalSchema:
     try:
         sql_text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
-        raise RelationalSchemaError(f"could not read relational schema {path}: {exc}") from exc
+        message = f"could not read relational schema {path}: {exc}"
+        raise RelationalSchemaError(message) from exc
     return parse_relational_schema(sql_text)
 
 
@@ -296,8 +299,8 @@ def _validate_foreign_keys(
                     path=concept.path,
                     message=(
                         f"foreign key {constraint.name!r} on {constraint.table!r} has no "
-                        f"matching {constraint.referenced_table!r}{constraint.referenced_columns!r} "
-                        f"for {concrete!r}"
+                        f"matching {constraint.referenced_table!r}"
+                        f"{constraint.referenced_columns!r} for {concrete!r}"
                     ),
                 )
             )
