@@ -1,0 +1,63 @@
+name: Generate 0.42.0 version state
+
+on:
+  push:
+    branches: [main]
+    paths: [.github/workflows/generate-version-state.yml]
+
+permissions:
+  contents: read
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/declared-relational-constraints
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+      - name: Generate synchronized files
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          files = [
+              "pyproject.toml",
+              "rust-core/Cargo.toml",
+              "typescript/package.json",
+              "typescript-duckdb/package.json",
+              "native-npm-linux-x64/package.json",
+              "typescript/src/version.ts",
+          ]
+          for name in files:
+              path = Path(name)
+              path.write_text(path.read_text(encoding="utf-8").replace("0.41.3", "0.42.0"), encoding="utf-8")
+          Path("changelog/0.42.0.md").write_text(
+              "---\ntype: Release\ntitle: okf-parser 0.42.0\n---\n\n"
+              "# okf-parser 0.42.0\n\n"
+              "- adds RFC 0007 bundle-level relational schemas via explicitly trusted `okf.schema.sql`;\n"
+              "- validates `PRIMARY KEY`, `UNIQUE`, and cross-type `FOREIGN KEY` constraints against original OKF frontmatter;\n"
+              "- enables natural-key 1:N models such as `Regra(nome)` to `Fundamentacao(regra)` without embedding child records.\n",
+              encoding="utf-8",
+          )
+          PY
+          uv lock
+          npm install --prefix typescript --package-lock-only --ignore-scripts
+          npm install --prefix typescript-duckdb --package-lock-only --ignore-scripts
+          cargo generate-lockfile --manifest-path rust-core/Cargo.toml
+          tar -czf "$RUNNER_TEMP/version-state.tgz" \
+            pyproject.toml uv.lock rust-core/Cargo.toml Cargo.lock \
+            typescript/package.json typescript/package-lock.json typescript/src/version.ts \
+            typescript-duckdb/package.json typescript-duckdb/package-lock.json \
+            native-npm-linux-x64/package.json changelog/0.42.0.md
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: version-state-0.42.0
+          path: ${{ runner.temp }}/version-state.tgz
