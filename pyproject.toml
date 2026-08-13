@@ -37,8 +37,16 @@ dev = [
 ]
 
 [build-system]
-requires = ["maturin>=1.10,<2"]
-build-backend = "maturin"
+requires = ["setuptools>=80,<83", "setuptools-rust>=1.13,<2"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages]
+find = { where = ["src"] }
+
+[[tool.setuptools-rust.bins]]
+target = "okf-core"
+path = "rust-core/Cargo.toml"
+args = ["--locked"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -82,13 +90,3 @@ include = [
 
 [tool.ty.overrides.rules]
 invalid-assignment = "ignore"
-
-[tool.maturin]
-manifest-path = "rust-core/Cargo.toml"
-bindings = "bin"
-module-name = "okf_parser"
-python-source = "src"
-python-packages = ["okf_parser"]
-strip = true
-locked = true
-sdist-generator = "git"
