@@ -1,4 +1,4 @@
-name: Publish v0.41.3
+name: Finalize v0.41.3
 
 on:
   push:
@@ -9,83 +9,13 @@ on:
 
 permissions:
   contents: write
-  actions: read
-  id-token: write
 
 jobs:
-  publish:
-    name: Publish tested v0.41.3 artifacts
+  finalize:
     runs-on: ubuntu-latest
-    environment:
-      name: pypi
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
-        with:
-          version: "0.11.21"
-          python-version: "3.12"
-
-      - name: Install Node.js for npm trusted publishing
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: 24
-          registry-url: "https://registry.npmjs.org"
-          package-manager-cache: false
-
-      - name: Download exact tested release set
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh run download 31696610173 -n release-v0.41.3 -D release
-
-      - name: Re-verify exact bytes
-        run: |
-          python scripts/release_contract.py verify-local --manifest release/manifest.json
-          python scripts/release_contract.py verify-contents --manifest release/manifest.json
-
-      - name: Publish Python parser sdist
-        env:
-          UV_PUBLISH_CHECK_URL: https://pypi.org/simple
-        run: uv publish release/python/okf_parser-0.41.3.tar.gz
-
-      - name: Publish npm native companion
-        shell: bash
-        run: |
-          set -euo pipefail
-          version=0.41.3
-          package="okf-parser-native-linux-x64"
-          tarball="release/native-npm/${package}-${version}.tgz"
-          if npm view "${package}@${version}" version >/dev/null 2>&1; then
-            echo "${package}@${version} already exists"
-          else
-            npm publish "$tarball" --access public
-          fi
-
-      - name: Publish npm parser
-        shell: bash
-        run: |
-          set -euo pipefail
-          version=0.41.3
-          if npm view "okf-parser@${version}" version >/dev/null 2>&1; then
-            echo "okf-parser@${version} already exists"
-          else
-            npm publish "release/npm/okf-parser-${version}.tgz" --access public
-          fi
-
-      - name: Publish npm DuckDB adapter
-        shell: bash
-        run: |
-          set -euo pipefail
-          version=0.41.3
-          if npm view "okf-parser-duckdb@${version}" version >/dev/null 2>&1; then
-            echo "okf-parser-duckdb@${version} already exists"
-          else
-            npm publish "release/npm/okf-parser-duckdb-${version}.tgz" --access public
-          fi
 
       - name: Create GitHub Release and v0.41.3 tag
         env:
