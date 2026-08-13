@@ -9,6 +9,11 @@ from typing import TYPE_CHECKING
 import duckdb
 import ibis
 
+from okf_parser.relational_contract import (
+    RelationalContract,
+    load_relational_contract,
+    validate_relational_contract,
+)
 from okf_parser.typed_tables import discover_declared_schemas, materialize_typed_tables
 
 if TYPE_CHECKING:
@@ -26,17 +31,13 @@ _TYPED_SCHEMA = "okf_types"
 
 @dataclass(slots=True)
 class TypedRelations:
-    """Own one ephemeral typed DuckDB/Ibis projection of an OKF bundle.
-
-    Use the object as a context manager when practical. Returned Ibis table
-    expressions share this object's DuckDB connection and are valid until
-    :meth:`close` is called.
-    """
+    """Own one ephemeral typed DuckDB/Ibis projection of an OKF bundle."""
 
     _backend: Backend = field(repr=False)
     schema: str
     tables: tuple[str, ...]
     diagnostics: tuple[Violation, ...]
+    contract: RelationalContract | None = None
     _closed: bool = field(default=False, init=False, repr=False)
 
     def relation(self, concept_type: str) -> Table:
@@ -49,42 +50,31 @@ class TypedRelations:
         return self._backend.table(concept_type, database=self.schema)
 
     def __getitem__(self, concept_type: str) -> Table:
-        """Return the typed Ibis relation for ``concept_type``."""
         return self.relation(concept_type)
 
     def __iter__(self) -> Iterator[str]:
-        """Iterate declared concept type names in deterministic order."""
         return iter(self.tables)
 
     def __len__(self) -> int:
-        """Return the number of compiled declared type relations."""
         return len(self.tables)
 
     def close(self) -> None:
-        """Close the owned ephemeral DuckDB/Ibis backend once."""
         if self._closed:
             return
         self._backend.disconnect()
         self._closed = True
 
     def __enter__(self) -> Self:
-        """Return this live relation set for context-manager use."""
         return self
 
     def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
-        """Close the ephemeral backend when leaving a context manager."""
         self.close()
 
 
 def compile_bundle_types(bundle: Bundle, spec_template: str | None = None) -> TypedRelations:
-    """Compile one loaded bundle's declared types into live Ibis relations.
-
-    The implementation deliberately reuses the same declared-schema discovery
-    and typed-table materializer as persistent DuckDB export. With no matching
-    declarations, the result is a valid empty relation set rather than an
-    independently inferred schema.
-    """
+    """Compile declared types and validate an optional bundle relational contract."""
     declarations = discover_declared_schemas(bundle.root, bundle.concept_types, spec_template)
+    contract = load_relational_contract(bundle.root)
     with ExitStack() as stack:
         connection = stack.enter_context(closing(duckdb.connect()))
         materialized = materialize_typed_tables(
@@ -96,9 +86,18 @@ def compile_bundle_types(bundle: Bundle, spec_template: str | None = None) -> Ty
         )
         backend = ibis.duckdb.from_connection(connection)
         stack.pop_all()
-    return TypedRelations(
+
+    typed = TypedRelations(
         _backend=backend,
         schema=materialized.schema,
         tables=materialized.tables,
         diagnostics=tuple(bundle.validate()),
+        contract=contract,
     )
+    if contract is not None:
+        typed.diagnostics = typed.diagnostics + validate_relational_contract(
+            contract,
+            relation=typed.relation,
+            available_types=set(typed.tables),
+        )
+    return typed
