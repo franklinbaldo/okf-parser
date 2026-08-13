@@ -53,7 +53,7 @@ def test_native_engine_materializes_duckdb(tmp_path: Path) -> None:
     (root / "note.md").write_text("---\ntype: Note\n---\n# Note\n")
     database = tmp_path / "bundle.duckdb"
     subprocess.run(  # noqa: S603
-        [_EXECUTABLE or "", "duckdb", root, database],
+        [_EXECUTABLE or "", "__engine-duckdb", root, database],
         check=True,
         capture_output=True,
         text=True,

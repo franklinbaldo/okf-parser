@@ -1,64 +1,70 @@
 ---
 type: Documentation
 title: Releasing okf-parser
-description: Build, verify and bootstrap synchronized Python and TypeScript releases
+description: Build, verify and publish synchronized Python and TypeScript releases
 ---
 
 # Releasing okf-parser
 
-The repository publishes one synchronized protocol version as three packages:
+The repository publishes one synchronized protocol version across one Python project and three npm packages:
 
 - Python `okf-parser` on PyPI;
 - TypeScript `okf-parser` on npm;
-- TypeScript `okf-parser-duckdb` on npm.
+- TypeScript `okf-parser-duckdb` on npm;
+- platform npm companion `okf-parser-native-linux-x64` on npm.
 
-RFC 0003 defines the production model. PyPI and npm do not offer a distributed
-transaction, so releases are monotonic, digest-verified and resumable rather
-than falsely described as atomic.
+There is no `okf-parser-native` PyPI project. The Rust engine is an implementation detail of the `okf-parser` Python distribution and is embedded directly in its single `okf-parser` executable.
 
-## Current capability: dry run and read-only preflight
+RFC 0003 defines the production model. PyPI and npm do not offer a distributed transaction, so releases are monotonic, digest-verified and resumable rather than falsely described as atomic.
 
-The `Release Dry Run` workflow builds the complete release set without registry
-credentials or write permissions. It produces exactly four package artifacts:
+## Release dry run
+
+The `Release Dry Run` workflow builds the complete release set without registry credentials or write permissions. Its tested release tree contains:
 
 ```text
 release/
 ├── python/
-│   ├── okf_parser-X.Y.Z-py3-none-any.whl
+│   ├── okf_parser-X.Y.Z-<platform>.whl
 │   └── okf_parser-X.Y.Z.tar.gz
 ├── npm/
 │   ├── okf-parser-X.Y.Z.tgz
 │   └── okf-parser-duckdb-X.Y.Z.tgz
+├── native-npm/
+│   └── okf-parser-native-linux-x64-X.Y.Z.tgz
 ├── manifest.json
 ├── registry-state.json
 └── SHA256SUMS
 ```
 
-The workflow builds each artifact once, records its package identity, byte size,
-SHA-256, SHA-512 and npm-compatible SRI integrity, then installs those same files
-in clean Python and Node consumers. It does not rebuild before upload.
+The Python wheel must contain exactly one `okf-parser` executable in its wheel scripts payload. A fresh consumer install must resolve that executable automatically and successfully load a fixture through the public `load_bundle()` API. The source distribution is independently installed as a consumer to prove that it can build the same integrated package from source.
 
-Pull requests that change release-sensitive files run this workflow
-automatically. After the workflow exists on `main`, a maintainer can also open
-**Actions → Release Dry Run → Run workflow** and supply an existing branch,
-commit, or stable `vX.Y.Z` tag.
+The workflow builds each release artifact once, records its package identity, byte size, SHA-256, SHA-512 and npm-compatible SRI integrity, then installs those same files in clean Python and Node consumers. It does not rebuild before upload.
 
-The uploaded GitHub Actions artifact is evidence for review, not a public
-release. Its retention period is 14 days.
+Pull requests that change release-sensitive files run this workflow automatically. A maintainer can also open **Actions → Release Dry Run → Run workflow** and supply an existing branch, commit or stable `vX.Y.Z` tag.
+
+The uploaded GitHub Actions artifact is evidence for review, not a public release. Its retention period is 14 days.
 
 ## Source contract
 
-Before building, `scripts/release_contract.py verify-source` requires all of the
-following to agree:
+Before building, `scripts/release_contract.py verify-source` requires all of the following to agree:
 
 - `project.version` in `pyproject.toml`;
-- `version` in both npm manifests;
+- the Rust crate version;
+- versions in the npm manifests;
 - `PROTOCOL_VERSION` in `typescript/src/version.ts`;
-- `okf-parser` peer range in the DuckDB adapter;
+- the `okf-parser` peer range in the DuckDB adapter;
 - `changelog/X.Y.Z.md` frontmatter title;
 - an optional stable tag, exactly `vX.Y.Z`.
 
 Prereleases are deliberately rejected until npm dist-tag policy is implemented.
+
+## Python packaging
+
+The root project uses Maturin as its PEP 517 backend with `bindings = "bin"`. The Python import package and PyPI distribution remain `okf_parser` and `okf-parser`; the sole installed binary target is `okf-parser`.
+
+A platform wheel therefore installs the ordinary Python package behind one `okf-parser` command. That executable forwards public CLI and MCP commands to the packaged Python module and handles private native-engine operations itself. Applications do not depend on, import or locate a second Python distribution. `resolve_rust_core()` discovers the same executable from the interpreter scripts directory before consulting explicit environment overrides or `PATH`.
+
+The source distribution contains the Rust sources required to build that same wheel. Publishing a pure-Python selector wheel is deliberately not part of the Python release model.
 
 ## Local contract commands
 
@@ -81,61 +87,32 @@ python -m scripts.registry_state --manifest release/manifest.json \
   --output release/registry-state.json
 ```
 
-The manifest command fails on missing, duplicate or unexpected artifacts. The
-verification command rejects path traversal, archive identity drift, changed
-sizes or digests, and a `SHA256SUMS` file that no longer matches the manifest.
+The manifest command fails on missing, duplicate or unexpected release artifacts. Native npm companions are verified separately because they are platform implementation packages rather than protocol-level manifest entries.
 
 ## Package contents
 
-`verify-contents` reads the member list of each archive named by the manifest
-and answers a question digests cannot: whether the bytes that were tested are
-also the right files to publish.
+`verify-contents` reads the member list of each archive named by the manifest and answers a question digests cannot: whether the bytes that were tested are also the right files to publish.
 
-Every distribution must ship its installable payload — importable modules,
-executables, type declarations, README and licence — and must not ship:
+Every distribution must ship its installable payload and must not ship caches, virtual environments, repository automation, credentials, private keys, compiled Python bytecode, local databases, or source-only development material that does not belong in an installed consumer.
 
-- caches, virtual environments and editor state such as `__pycache__`,
-  `.ruff_cache`, `.pytest_cache`, `.venv` or `.vscode`;
-- repository automation, including `.github` workflows;
-- credential files such as `.npmrc`, `.pypirc`, `.netrc` or `.env`, private keys
-  and certificates;
-- compiled bytecode and local databases;
-- source-only or development paths that belong to the repository rather than an
-  installed consumer, such as TypeScript sources, test suites and compiler
-  configuration inside the npm tarballs.
-
-Archive members outside the expected package root, non-regular members such as
-symbolic links, and traversing member names are rejected before any policy check.
+The release dry run additionally verifies the presence and executability of the Rust engine inside the Python wheel and inside the npm platform package.
 
 ## Public registry preflight
 
-The registry command performs anonymous HTTPS reads only. It compares the
-manifest with PyPI SHA-256 file digests and npm SRI integrity, then classifies
-each target as `absent`, `present_expected`, `present_conflict` or
-`unverifiable`. Its plan uses `publish`, `skip` or `block`, which is the state
-machine later consumed by the privileged workflow.
+The registry command performs anonymous HTTPS reads only. It compares the manifest with PyPI SHA-256 file digests and npm SRI integrity, then classifies each target as `absent`, `present_expected`, `present_conflict` or `unverifiable`. Its plan uses `publish`, `skip` or `block`, which makes retries resumable without overwriting immutable registry state.
 
-When a target version is absent, the report also probes the package root. This
-distinguishes a genuinely available bootstrap name from a package that already
-exists at another version. Conflicts, incomplete releases and unverifiable
-responses return a non-zero status; no registry mutation is attempted.
+## Production publication
 
-## Production publication remains disabled
+`.github/workflows/release.yml` runs only for stable `vX.Y.Z` tag pushes. It builds and verifies the release set, uploads the exact tested artifact tree, and gives registry publication to a separate job using the GitHub `pypi` environment and OIDC trusted publishing.
 
-This phase intentionally does **not** add `.github/workflows/release.yml`, OIDC
-permissions, GitHub environments, registry credentials, tags or public package
-uploads.
+Publication order is:
 
-Before production publication is enabled, maintainers must separately review and
-complete the RFC bootstrap:
+1. publish the single Python `okf-parser` distribution to PyPI;
+2. publish the npm platform companion;
+3. publish the main npm parser;
+4. publish the npm DuckDB adapter;
+5. create the GitHub Release only after all registry publication steps succeed.
 
-1. protect stable `v*` tags and create a protected `release` environment;
-2. configure the pending PyPI trusted publisher for `release.yml`;
-3. confirm both unscoped npm names are available;
-4. perform the one-time reviewed npm bootstrap publications with account MFA;
-5. configure npm trusted publishers for both packages;
-6. review a privileged PR that consumes the tested registry-state model and adds
-   publication jobs using the already-tested artifact set.
+The workflow does not use a long-lived PyPI token. The PyPI Trusted Publisher must match repository `franklinbaldo/okf-parser`, workflow `release.yml`, and GitHub environment `pypi`.
 
-A GitHub Release will eventually be created only after PyPI and both npm package
-versions verify with the expected digests.
+npm publication follows the same no-overwrite rule and should use npm Trusted Publishing. A retry first checks whether an exact package version already exists and skips immutable state that has already been published.

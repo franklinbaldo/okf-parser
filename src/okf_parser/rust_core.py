@@ -19,7 +19,7 @@ EngineMode = Literal["auto", "native"]
 
 
 def _binary_name() -> str:
-    return "okf-core.exe" if os.name == "nt" else "okf-core"
+    return "okf-parser.exe" if os.name == "nt" else "okf-parser"
 
 
 def packaged_rust_core() -> Path | None:
@@ -69,7 +69,13 @@ def rust_load_bundle(
     root: Path, executable: Path, exclude: Sequence[str] = (), *, read_concurrency: int = 32
 ) -> object:
     """Run the end-to-end native engine and return its relational payload."""
-    command = [str(executable), "load", str(root), "--read-concurrency", str(read_concurrency)]
+    command = [
+        str(executable),
+        "__engine-load",
+        str(root),
+        "--read-concurrency",
+        str(read_concurrency),
+    ]
     for pattern in exclude:
         command.extend(("--exclude", pattern))
     completed = subprocess.run(command, capture_output=True, check=False, text=True)  # noqa: S603
@@ -102,7 +108,7 @@ def _validate_payload(payload: object, expected: int) -> list[_FactsPayload]:
 def rust_markdown_facts_batch(bodies: Sequence[str], executable: Path) -> tuple[MarkdownFacts, ...]:
     """Extract Markdown facts in one coarse Rust subprocess invocation."""
     completed = subprocess.run(  # noqa: S603
-        [executable],
+        [executable, "__engine-facts"],
         input=json.dumps({"documents": bodies}, ensure_ascii=False),
         capture_output=True,
         check=False,
