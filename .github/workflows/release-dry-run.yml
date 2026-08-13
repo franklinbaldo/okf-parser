@@ -76,7 +76,7 @@ jobs:
 
       - name: Install locked build dependencies
         run: |
-          uv sync --frozen --all-groups
+          uv sync --frozen --all-groups --no-install-project
           npm ci --prefix typescript
           npm ci --prefix typescript-duckdb
 
