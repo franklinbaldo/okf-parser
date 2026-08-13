@@ -88,3 +88,4 @@ python-packages = ["okf_parser"]
 strip = true
 locked = true
 sdist-generator = "git"
+exclude = [{ path = ".github/**", format = "sdist" }]
