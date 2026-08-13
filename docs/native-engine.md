@@ -1,7 +1,7 @@
 ---
 type: Documentation
 title: Automatic native engine selection
-description: How okf-parser installs, discovers, and falls back from the Rust okf-core engine
+description: How okf-parser installs, discovers, and falls back from its Rust engine
 ---
 
 # Automatic native engine selection
@@ -20,14 +20,14 @@ import { loadBundle } from "okf-parser";
 const bundle = await loadBundle(root);
 ```
 
-No application code needs to locate `okf-core`.
+No application code needs to locate a Rust executable.
 
 With the default `engine="auto"` policy, resolution is deterministic:
 
 1. an explicit `rust_core` / `rustCore` expert override;
-2. a release-matched native engine installed by the Python or npm distribution;
+2. a release-matched native engine installed by the Python or npm distribution (`okf-parser` for Python, `okf-core` inside the npm platform package);
 3. the `OKF_CORE` environment override;
-4. `okf-core` on `PATH`;
+4. the distribution-specific executable on `PATH`;
 5. the portable Python or TypeScript implementation.
 
 If a selected Rust engine starts and fails, the request fails rather than silently changing engines midway through one load.
@@ -36,7 +36,7 @@ If a selected Rust engine starts and fails, the request fails rather than silent
 
 ## Python packaging
 
-`okf-parser` is the only Python distribution. Its platform wheel contains the release-matched `okf-core` executable alongside the Python package; there is no separate `okf-parser-native` PyPI project or runtime dependency. Maturin installs the executable into the active interpreter's scripts directory, which the loader checks directly, so virtual environments work without deployment-specific paths.
+`okf-parser` is the only Python distribution and `okf-parser` is its only installed entry point. The platform wheel uses that executable for the ordinary CLI, `serve` MCP command, and private Rust-engine operations; there is no separate `okf-parser-native` PyPI project or runtime dependency. Maturin installs the executable into the active interpreter's scripts directory, which the loader checks directly, so virtual environments work without deployment-specific paths.
 
 A source installation builds that same executable as part of building the `okf-parser` wheel. Release automation must test both the platform wheel and source distribution as fresh consumers before publication.
 

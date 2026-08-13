@@ -92,7 +92,7 @@ export async function rustLoadBundle(
   },
 ): Promise<Bundle> {
   options.signal?.throwIfAborted();
-  const args = ["load", root, "--read-concurrency", String(options.readConcurrency)];
+  const args = ["__engine-load", root, "--read-concurrency", String(options.readConcurrency)];
   for (const pattern of options.exclude ?? []) args.push("--exclude", pattern);
   const child = spawn(executable, args, { stdio: ["ignore", "pipe", "pipe"] });
   const stdout: Buffer[] = [];
@@ -169,7 +169,7 @@ export async function rustMarkdownFactsBatch(
   signal?: AbortSignal,
 ): Promise<readonly MarkdownFacts[]> {
   signal?.throwIfAborted();
-  const child = spawn(executable, [], { stdio: ["pipe", "pipe", "pipe"] });
+  const child = spawn(executable, ["__engine-facts"], { stdio: ["pipe", "pipe", "pipe"] });
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
   child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));

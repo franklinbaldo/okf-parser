@@ -1,5 +1,0 @@
-include rust-core/Cargo.toml
-include rust-core/Cargo.lock
-recursive-include rust-core/src *.rs
-include okf-engine/Cargo.toml
-recursive-include okf-engine/src *.rs

@@ -13,7 +13,7 @@ The repository publishes one synchronized protocol version across one Python pro
 - TypeScript `okf-parser-duckdb` on npm;
 - platform npm companion `okf-parser-native-linux-x64` on npm.
 
-There is no `okf-parser-native` PyPI project. The Rust `okf-core` executable is an implementation detail of the `okf-parser` Python distribution and is embedded directly in its platform wheel.
+There is no `okf-parser-native` PyPI project. The Rust engine is an implementation detail of the `okf-parser` Python distribution and is embedded directly in its single `okf-parser` executable.
 
 RFC 0003 defines the production model. PyPI and npm do not offer a distributed transaction, so releases are monotonic, digest-verified and resumable rather than falsely described as atomic.
 
@@ -36,7 +36,7 @@ release/
 └── SHA256SUMS
 ```
 
-The Python wheel must contain exactly one `okf-core` executable in its wheel scripts payload. A fresh consumer install must resolve that executable automatically and successfully load a fixture through the public `load_bundle()` API. The source distribution is independently installed as a consumer to prove that it can build the same integrated package from source.
+The Python wheel must contain exactly one `okf-parser` executable in its wheel scripts payload. A fresh consumer install must resolve that executable automatically and successfully load a fixture through the public `load_bundle()` API. The source distribution is independently installed as a consumer to prove that it can build the same integrated package from source.
 
 The workflow builds each release artifact once, records its package identity, byte size, SHA-256, SHA-512 and npm-compatible SRI integrity, then installs those same files in clean Python and Node consumers. It does not rebuild before upload.
 
@@ -60,9 +60,9 @@ Prereleases are deliberately rejected until npm dist-tag policy is implemented.
 
 ## Python packaging
 
-The root project uses Maturin as its PEP 517 backend with `bindings = "bin"`. The Python import package remains `okf_parser`; the PyPI distribution remains `okf-parser`; the Rust binary target remains `okf-core`.
+The root project uses Maturin as its PEP 517 backend with `bindings = "bin"`. The Python import package and PyPI distribution remain `okf_parser` and `okf-parser`; the sole installed binary target is `okf-parser`.
 
-A platform wheel therefore installs both the ordinary Python package and `okf-core` into the active interpreter environment. Applications do not depend on, import or locate a second Python distribution. `resolve_rust_core()` discovers the executable from the interpreter scripts directory before consulting explicit environment overrides or `PATH`.
+A platform wheel therefore installs the ordinary Python package behind one `okf-parser` command. That executable forwards public CLI and MCP commands to the packaged Python module and handles private native-engine operations itself. Applications do not depend on, import or locate a second Python distribution. `resolve_rust_core()` discovers the same executable from the interpreter scripts directory before consulting explicit environment overrides or `PATH`.
 
 The source distribution contains the Rust sources required to build that same wheel. Publishing a pure-Python selector wheel is deliberately not part of the Python release model.
 

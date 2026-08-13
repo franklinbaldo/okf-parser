@@ -90,7 +90,7 @@ jobs:
           rm -f release/python/.gitignore
           cargo build --release --locked --manifest-path rust-core/Cargo.toml
           mkdir -p native-npm-linux-x64/bin
-          cp target/release/okf-core native-npm-linux-x64/bin/okf-core
+          cp target/release/okf-parser native-npm-linux-x64/bin/okf-core
           chmod +x native-npm-linux-x64/bin/okf-core
           (cd native-npm-linux-x64 && npm pack --pack-destination ../release/native-npm --silent)
           (cd typescript && npm pack --pack-destination ../release/npm --silent)
@@ -110,9 +110,9 @@ jobs:
 
           wheel = Path(os.environ["PYTHON_WHEEL"])
           with zipfile.ZipFile(wheel) as archive:
-              scripts = [name for name in archive.namelist() if name.endswith('.data/scripts/okf-core')]
+              scripts = [name for name in archive.namelist() if name.endswith('.data/scripts/okf-parser')]
               if len(scripts) != 1:
-                  raise SystemExit(f"expected one bundled okf-core script, found {scripts}")
+                  raise SystemExit(f"expected one unified okf-parser script, found {scripts}")
           PY
 
       - name: Verify npm native companion artifact
@@ -154,7 +154,7 @@ jobs:
             uv pip install --python "$environment/bin/python" "$artifact"
             EXPECTED_VERSION="$expected_version" "$environment/bin/python" -c 'import importlib.metadata, os; assert importlib.metadata.version("okf-parser") == os.environ["EXPECTED_VERSION"]'
             "$environment/bin/okf-parser" --help >/dev/null
-            test -x "$environment/bin/okf-core"
+            test -x "$environment/bin/okf-parser"
             mkdir "$environment/fixture"
             printf '%s\n' '---' 'type: Node' '---' '# Node' > "$environment/fixture/node.md"
             FIXTURE="$environment/fixture" "$environment/bin/python" - <<'PY'
@@ -164,7 +164,7 @@ jobs:
           from okf_parser.rust_core import resolve_rust_core
 
           executable = resolve_rust_core()
-          if executable is None or executable.name not in {"okf-core", "okf-core.exe"}:
+          if executable is None or executable.name not in {"okf-parser", "okf-parser.exe"}:
               raise SystemExit(f"bundled native engine was not selected: {executable}")
           bundle = load_bundle(Path(os.environ["FIXTURE"]))
           if bundle.markdown_count != 1:

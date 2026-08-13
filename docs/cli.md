@@ -8,12 +8,12 @@ description: Every CLI command and MCP tool exposed by okf-parser, with flags an
 
 `okf-parser` exposes its command-line interface through Cyclopts
 (`uv run okf-parser <command>`). Inspection operations are also exposed through
-FastMCP (`okf-parser-mcp`, or `okf-parser serve`) and share the same service
+FastMCP (`okf-parser serve`) and share the same service
 functions and payloads where both surfaces exist.
 
 The default MCP profile is commit-disabled and exposes inspection plus faithful
 preview tools. `okf-parser serve --allow-write` adds explicit commit tools; the
-zero-argument `okf-parser-mcp` entry point remains commit-disabled. Tool-level MCP
+default `okf-parser serve` entry point remains commit-disabled. Tool-level MCP
 annotations describe each tool's maximum possible effect and are descriptive hints,
 not an authorization boundary.
 
@@ -250,7 +250,7 @@ MCP tool: `duckdb_export` with `--allow-write`; it also accepts `spec_template`.
 uv run okf-parser serve [--transport stdio|http|sse] [--host HOST] [--port PORT] [--allow-write]
 ```
 
-Runs the MCP server. `stdio` (default) is what `okf-parser-mcp` runs directly;
+Runs the MCP server. `stdio` is the default;
 `http` and `sse` bind `--host` and `--port` for network transports. The default
 profile exposes `check`, `inventory`, `graph`, `schema`, `format_check`,
 `apply_preview`, `init_preview`, and `import_preview`. `--allow-write` additionally

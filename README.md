@@ -222,12 +222,12 @@ binary. For large bundles, build the native engine and pass its path explicitly:
 cargo build --release --manifest-path rust-core/Cargo.toml
 ```
 
-Python accepts `load_bundle(root, rust_core=Path(".../okf-core"))`; TypeScript accepts
+Python accepts `load_bundle(root, rust_core=Path(".../okf-parser"))`; TypeScript accepts
 `loadBundle(root, { rustCore: ".../okf-core" })`. The native process owns discovery,
 bounded parallel reads, YAML/frontmatter, Markdown facts, validation, link resolution,
-and content digests. `okf-core duckdb ROOT DATABASE` additionally materializes the four
-relational tables directly with embedded DuckDB. Omitting the option keeps the portable
-language-native fallback.
+and content digests. The packaged `okf-parser` executable is the single Python command;
+its ordinary subcommands dispatch to the Python CLI while private engine operations stay
+inside the same executable. Omitting the option keeps the portable language-native fallback.
 
 The composite action installs a pinned uv version and executes the same
 `validate_path()` function used by the Python API, CLI, and MCP server.
@@ -249,7 +249,6 @@ the target branch before allowing merge.
 
 ```bash
 uv run okf-parser serve
-uv run okf-parser-mcp
 uv run fastmcp run
 ```
 

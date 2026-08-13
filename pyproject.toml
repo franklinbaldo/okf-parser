@@ -23,10 +23,6 @@ dependencies = [
   "ruamel.yaml>=0.18,<0.20",
 ]
 
-[project.scripts]
-okf-parser = "okf_parser.cli:main"
-okf-parser-mcp = "okf_parser.cli:run_mcp_stdio"
-
 [dependency-groups]
 dev = [
   "pytest>=8,<10",
@@ -37,16 +33,8 @@ dev = [
 ]
 
 [build-system]
-requires = ["setuptools>=80,<83", "setuptools-rust>=1.13,<2"]
-build-backend = "setuptools.build_meta"
-
-[tool.setuptools.packages]
-find = { where = ["src"] }
-
-[[tool.setuptools-rust.bins]]
-target = "okf-core"
-path = "rust-core/Cargo.toml"
-args = ["--locked"]
+requires = ["maturin>=1.10,<2"]
+build-backend = "maturin"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -90,3 +78,13 @@ include = [
 
 [tool.ty.overrides.rules]
 invalid-assignment = "ignore"
+
+[tool.maturin]
+manifest-path = "rust-core/Cargo.toml"
+bindings = "bin"
+module-name = "okf_parser"
+python-source = "src"
+python-packages = ["okf_parser"]
+strip = true
+locked = true
+sdist-generator = "git"

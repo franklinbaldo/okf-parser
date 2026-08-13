@@ -56,7 +56,7 @@ jobs:
           rm -f release/python/.gitignore
           cargo build --release --locked --manifest-path rust-core/Cargo.toml
           mkdir -p native-npm-linux-x64/bin
-          cp target/release/okf-core native-npm-linux-x64/bin/okf-core
+          cp target/release/okf-parser native-npm-linux-x64/bin/okf-core
           chmod +x native-npm-linux-x64/bin/okf-core
           (cd native-npm-linux-x64 && npm pack --pack-destination ../release/native-npm --silent)
           (cd typescript && npm pack --pack-destination ../release/npm --silent)
@@ -78,9 +78,9 @@ jobs:
 
           wheel = Path(os.environ["PYTHON_WHEEL"])
           with zipfile.ZipFile(wheel) as archive:
-              scripts = [name for name in archive.namelist() if name.endswith('.data/scripts/okf-core')]
+              scripts = [name for name in archive.namelist() if name.endswith('.data/scripts/okf-parser')]
               if len(scripts) != 1:
-                  raise SystemExit(f"expected one bundled okf-core script, found {scripts}")
+                  raise SystemExit(f"expected one unified okf-parser script, found {scripts}")
           PY
           listing="$(tar -tzf "$npm_native")"
           grep -qx 'package/bin/okf-core' <<<"$listing"
