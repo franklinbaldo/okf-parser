@@ -51,11 +51,9 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf release
-          mkdir -p release/python release/native-python release/npm release/native-npm
+          mkdir -p release/python release/npm release/native-npm
           uv build --out-dir release/python
-          uv build --wheel native-python-stub --out-dir release/native-python
-          uv build --wheel rust-core --out-dir release/native-python
-          rm -f release/python/.gitignore release/native-python/.gitignore
+          rm -f release/python/.gitignore
           cargo build --release --locked --manifest-path rust-core/Cargo.toml
           mkdir -p native-npm-linux-x64/bin
           cp target/release/okf-core native-npm-linux-x64/bin/okf-core
@@ -64,27 +62,25 @@ jobs:
           (cd typescript && npm pack --pack-destination ../release/npm --silent)
           (cd typescript-duckdb && npm pack --pack-destination ../release/npm --silent)
 
-      - name: Verify companion artifacts
+      - name: Verify bundled native artifacts
         shell: bash
         run: |
           set -euo pipefail
           version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
-          stub=$(find release/native-python -maxdepth 1 -type f -name "okf_parser_native-${version}-py3-none-any.whl" -print -quit)
-          native=$(find release/native-python -maxdepth 1 -type f -name "okf_parser_native-${version}-*.whl" ! -name '*-py3-none-any.whl' -print -quit)
+          python_wheel=$(find release/python -maxdepth 1 -type f -name "okf_parser-${version}-*.whl" -print -quit)
           npm_native="release/native-npm/okf-parser-native-linux-x64-${version}.tgz"
-          test -n "$stub"
-          test -n "$native"
+          test -n "$python_wheel"
           test -f "$npm_native"
-          NATIVE_WHEEL="$native" python - <<'PY'
+          PYTHON_WHEEL="$python_wheel" python - <<'PY'
           import os
           import zipfile
           from pathlib import Path
 
-          wheel = Path(os.environ["NATIVE_WHEEL"])
+          wheel = Path(os.environ["PYTHON_WHEEL"])
           with zipfile.ZipFile(wheel) as archive:
-              scripts = [name for name in archive.namelist() if name.endswith('/scripts/okf-core')]
+              scripts = [name for name in archive.namelist() if name.endswith('.data/scripts/okf-core')]
               if len(scripts) != 1:
-                  raise SystemExit(f"expected one okf-core wheel script, found {scripts}")
+                  raise SystemExit(f"expected one bundled okf-core script, found {scripts}")
           PY
           listing="$(tar -tzf "$npm_native")"
           grep -qx 'package/bin/okf-core' <<<"$listing"
@@ -155,11 +151,6 @@ jobs:
         run: |
           python scripts/release_contract.py verify-local --manifest release/manifest.json
           python scripts/release_contract.py verify-contents --manifest release/manifest.json
-
-      - name: Publish Python native companion first
-        env:
-          UV_PUBLISH_CHECK_URL: https://pypi.org/simple
-        run: uv publish release/native-python/*.whl
 
       - name: Publish Python parser
         env:
