@@ -1,4 +1,4 @@
-name: Generate 0.42.0 version state
+name: Generate 0.42.0 Git blobs
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
     paths: [.github/workflows/generate-version-state.yml]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   generate:
@@ -52,12 +52,26 @@ jobs:
           npm install --prefix typescript --package-lock-only --ignore-scripts
           npm install --prefix typescript-duckdb --package-lock-only --ignore-scripts
           cargo generate-lockfile --manifest-path rust-core/Cargo.toml
-          tar -czf "$RUNNER_TEMP/version-state.tgz" \
-            pyproject.toml uv.lock rust-core/Cargo.toml Cargo.lock \
-            typescript/package.json typescript/package-lock.json typescript/src/version.ts \
-            typescript-duckdb/package.json typescript-duckdb/package-lock.json \
+      - name: Create unattached Git blobs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(
+            pyproject.toml uv.lock rust-core/Cargo.toml Cargo.lock
+            typescript/package.json typescript/package-lock.json typescript/src/version.ts
+            typescript-duckdb/package.json typescript-duckdb/package-lock.json
             native-npm-linux-x64/package.json changelog/0.42.0.md
+          )
+          : > "$RUNNER_TEMP/blobs.tsv"
+          for file in "${files[@]}"; do
+            encoded=$(base64 -w0 "$file")
+            sha=$(gh api --method POST "/repos/$GITHUB_REPOSITORY/git/blobs" \
+              -f content="$encoded" -f encoding=base64 --jq .sha)
+            printf '%s\t%s\n' "$file" "$sha" | tee -a "$RUNNER_TEMP/blobs.tsv"
+          done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: version-state-0.42.0
-          path: ${{ runner.temp }}/version-state.tgz
+          name: version-blobs-0.42.0
+          path: ${{ runner.temp }}/blobs.tsv
