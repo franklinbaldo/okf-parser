@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from okf_parser.bundle import load_bundle
+from okf_parser.bundle import load_bundle, validate_path
 from okf_parser.relational_schema import parse_relational_schema, validate_relations
 
 if TYPE_CHECKING:
@@ -94,3 +94,14 @@ def test_unique_and_foreign_key_allow_absent_nullable_values(tmp_path: Path) -> 
     _write(schema_path, RELATIONAL_SQL)
 
     assert validate_relations(load_bundle(tmp_path), schema_path) == []
+
+
+def test_validate_path_applies_explicit_relational_schema(tmp_path: Path) -> None:
+    _write(tmp_path / "regra.md", _concept("Regra", nome="regra-a"))
+    _write(tmp_path / "fund.md", _concept("Fundamentacao", id="f1", regra="ausente"))
+    _write(tmp_path / "okf.schema.sql", RELATIONAL_SQL)
+
+    report = validate_path(tmp_path, relational_schema=Path("okf.schema.sql"))
+
+    assert not report.is_conformant
+    assert [item.code for item in report.violations] == ["OKF022"]

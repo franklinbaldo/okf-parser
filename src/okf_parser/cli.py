@@ -72,6 +72,7 @@ def check(
     exclude: RepeatableStrings = None,
     require_spec: str | None = None,
     normative_spec: bool = False,
+    relational_schema: str | None = None,
     classify: bool = False,
 ) -> CliResult[JsonPayload]:
     """Validate every Markdown file recursively as OKF v0.2."""
@@ -81,6 +82,7 @@ def check(
         require_spec,
         normative_spec=normative_spec,
         classify=classify,
+        relational_schema=relational_schema,
     )
     return CliResult(payload, 0 if payload["conformant"] else 1)
 
@@ -280,6 +282,7 @@ def mcp_check(
     require_spec: str | None = None,
     *,
     normative_spec: bool = False,
+    relational_schema: str | None = None,
     classify: bool = False,
 ) -> dict[str, object]:
     """Validate every Markdown file recursively as OKF v0.2."""
@@ -289,6 +292,7 @@ def mcp_check(
         require_spec,
         normative_spec=normative_spec,
         classify=classify,
+        relational_schema=relational_schema,
     )
 
 

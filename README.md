@@ -50,6 +50,7 @@ project's scope.
 ```bash
 uv sync
 uv run okf-parser check path/to/bundle
+uv run okf-parser check path/to/bundle --relational-schema okf.schema.sql
 uv run okf-parser inventory path/to/bundle
 uv run okf-parser graph path/to/bundle
 uv run okf-parser format path/to/bundle
@@ -208,7 +209,7 @@ Add the repository as a CI check:
 ```yaml
 steps:
   - uses: actions/checkout@v7
-  - uses: franklinbaldo/okf-parser@v0.41.3
+  - uses: franklinbaldo/okf-parser@v0.42.0
     with:
       path: knowledge
 ```

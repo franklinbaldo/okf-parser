@@ -79,9 +79,16 @@ def check_bundle(
     *,
     normative_spec: bool = False,
     classify: bool = False,
+    relational_schema: str | None = None,
 ) -> dict[str, object]:
     """Validate every Markdown file below a path."""
-    report = validate_path(Path(path), exclude, require_spec, normative_spec=normative_spec)
+    report = validate_path(
+        Path(path),
+        exclude,
+        require_spec,
+        normative_spec=normative_spec,
+        relational_schema=Path(relational_schema) if relational_schema is not None else None,
+    )
     payload: dict[str, object] = {
         "root": str(report.root),
         "conformant": report.is_conformant,
