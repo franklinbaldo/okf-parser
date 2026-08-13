@@ -29,7 +29,6 @@ jobs:
       - run: npm install --package-lock-only --ignore-scripts --prefix typescript-duckdb
       - name: Commit generated state
         run: |
-          rm .github/workflows/tmp-unify-python-wheel.yml
           rm scripts/tmp_unify_python_wheel.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
