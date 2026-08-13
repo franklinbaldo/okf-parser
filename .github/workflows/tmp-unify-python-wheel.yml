@@ -1,0 +1,153 @@
+name: Bootstrap unified Python wheel
+
+on:
+  push:
+    branches:
+      - fix/reuse-trusted-publisher-0.41.3
+
+permissions:
+  contents: write
+
+jobs:
+  rewrite:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: fix/reuse-trusted-publisher-0.41.3
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+      - name: Rewrite packaging and release contract
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import shutil
+
+          version_old = "0.41.2"
+          version_new = "0.41.3"
+
+          pyproject = Path("pyproject.toml")
+          text = pyproject.read_text()
+          text = text.replace('version = "0.41.2"', 'version = "0.41.3"', 1)
+          text = text.replace('  "okf-parser-native==0.41.2",\n', '')
+          text = text.replace('[build-system]\nrequires = ["hatchling"]\nbuild-backend = "hatchling.build"', '[build-system]\nrequires = ["maturin>=1.10,<2"]\nbuild-backend = "maturin"')
+          start = text.find('\n[tool.hatch.build.targets.sdist]')
+          if start != -1:
+              end = text.find('\n[tool.pytest.ini_options]', start)
+              text = text[:start] + text[end:]
+          start = text.find('\n[tool.uv.sources]')
+          if start != -1:
+              text = text[:start].rstrip() + '\n'
+          text += '\n[tool.maturin]\nmanifest-path = "rust-core/Cargo.toml"\nbindings = "bin"\npython-source = "src"\npython-packages = ["okf_parser"]\nstrip = true\nlocked = true\nsdist-generator = "git"\n'
+          pyproject.write_text(text)
+
+          explicit = [
+              "rust-core/Cargo.toml",
+              "Cargo.lock",
+              "typescript/package.json",
+              "typescript/package-lock.json",
+              "typescript/src/version.ts",
+              "typescript-duckdb/package.json",
+              "typescript-duckdb/package-lock.json",
+              "native-npm-linux-x64/package.json",
+              "README.md",
+          ]
+          for name in explicit:
+              path = Path(name)
+              if path.exists():
+                  path.write_text(path.read_text().replace(version_old, version_new))
+
+          release = Path('.github/workflows/release.yml')
+          text = release.read_text()
+          text = text.replace('mkdir -p release/python release/native-python release/npm release/native-npm', 'mkdir -p release/python release/npm release/native-npm')
+          text = text.replace('          uv build --wheel native-python-stub --out-dir release/native-python\n', '')
+          text = text.replace('          uv build --wheel rust-core --out-dir release/native-python\n', '')
+          text = text.replace('          rm -f release/python/.gitignore release/native-python/.gitignore', '          rm -f release/python/.gitignore')
+          old_verify = '''          version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          stub=$(find release/native-python -maxdepth 1 -type f -name "okf_parser_native-${version}-py3-none-any.whl" -print -quit)
+          native=$(find release/native-python -maxdepth 1 -type f -name "okf_parser_native-${version}-*.whl" ! -name '*-py3-none-any.whl' -print -quit)
+          npm_native="release/native-npm/okf-parser-native-linux-x64-${version}.tgz"
+          test -n "$stub"
+          test -n "$native"
+          test -f "$npm_native"
+          NATIVE_WHEEL="$native" python - <<'PY'
+          import os
+          import zipfile
+          from pathlib import Path
+
+          wheel = Path(os.environ["NATIVE_WHEEL"])
+          with zipfile.ZipFile(wheel) as archive:
+              scripts = [name for name in archive.namelist() if name.endswith('/scripts/okf-core')]
+              if len(scripts) != 1:
+                  raise SystemExit(f"expected one okf-core wheel script, found {scripts}")
+          PY
+'''
+          new_verify = '''          version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          python_wheel=$(find release/python -maxdepth 1 -type f -name "okf_parser-${version}-*.whl" -print -quit)
+          npm_native="release/native-npm/okf-parser-native-linux-x64-${version}.tgz"
+          test -n "$python_wheel"
+          test -f "$npm_native"
+          PYTHON_WHEEL="$python_wheel" python - <<'PY'
+          import os
+          import zipfile
+          from pathlib import Path
+
+          wheel = Path(os.environ["PYTHON_WHEEL"])
+          with zipfile.ZipFile(wheel) as archive:
+              scripts = [name for name in archive.namelist() if name.endswith('.data/scripts/okf-core')]
+              if len(scripts) != 1:
+                  raise SystemExit(f"expected one bundled okf-core script, found {scripts}")
+          PY
+'''
+          if old_verify not in text:
+              raise SystemExit('release companion verification block not found')
+          text = text.replace(old_verify, new_verify)
+          publish_native = '''      - name: Publish Python native companion first
+        env:
+          UV_PUBLISH_CHECK_URL: https://pypi.org/simple
+        run: uv publish release/native-python/*.whl
+
+'''
+          text = text.replace(publish_native, '')
+          release.write_text(text)
+
+          shutil.rmtree('native-python-stub')
+          Path('rust-core/pyproject.toml').unlink()
+
+          Path('changelog/0.41.3.md').write_text('''---
+type: Release
+title: okf-parser 0.41.3
+---
+
+# okf-parser 0.41.3
+
+- ships the Rust `okf-core` executable inside the `okf-parser` Python wheel via Maturin;
+- removes the separate `okf-parser-native` PyPI distribution and dependency;
+- keeps `load_bundle(root)` automatic engine discovery unchanged for consumers;
+- publishes only the single `okf-parser` Python project through the existing `pypi` environment.
+''')
+          PY
+
+      - name: Regenerate locks
+        run: |
+          uv lock
+          npm install --package-lock-only --ignore-scripts --prefix typescript
+          npm install --package-lock-only --ignore-scripts --prefix typescript-duckdb
+
+      - name: Remove helper and commit
+        shell: bash
+        run: |
+          rm .github/workflows/tmp-unify-python-wheel.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "release: fold native engine into okf-parser wheel"
+          git push origin HEAD:fix/reuse-trusted-publisher-0.41.3
