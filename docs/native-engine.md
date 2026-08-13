@@ -36,7 +36,9 @@ If a selected Rust engine starts and fails, the request fails rather than silent
 
 ## Python packaging
 
-`okf-parser` depends on the exact same version of `okf-parser-native`. Supported platforms receive a platform wheel containing the prebuilt `okf-core`; unsupported platforms can receive the universal selector stub. The loader checks the active interpreter's scripts directory, so virtual environments work without deployment-specific paths.
+`okf-parser` is the only Python distribution. Its platform wheel contains the release-matched `okf-core` executable alongside the Python package; there is no separate `okf-parser-native` PyPI project or runtime dependency. Maturin installs the executable into the active interpreter's scripts directory, which the loader checks directly, so virtual environments work without deployment-specific paths.
+
+A source installation builds that same executable as part of building the `okf-parser` wheel. Release automation must test both the platform wheel and source distribution as fresh consumers before publication.
 
 ## npm packaging
 
@@ -44,4 +46,4 @@ If a selected Rust engine starts and fails, the request fails rather than silent
 
 Installing with `--omit=optional`, or running on a platform for which no native companion is published, keeps the same `loadBundle()` API and uses the portable TypeScript implementation.
 
-Native companions never compile Rust during package installation or application startup. Release automation builds the executable once and tests the exact packaged artifact in a fresh consumer environment.
+The npm native companion never compiles Rust during package installation or application startup. Release automation builds the executable once and tests the exact packaged artifact in a fresh consumer environment.
