@@ -34,6 +34,7 @@ from okf_parser.parser import (
     resolve_local_target,
     split_optional_frontmatter,
 )
+from okf_parser.relational_schema import validate_relations
 from okf_parser.rust_core import rust_load_bundle
 from okf_parser.type_specs import missing_type_specs
 from okf_parser.typed_relations import TypedRelations, compile_bundle_types
@@ -459,6 +460,7 @@ def validate_path(
     require_spec: str | None = None,
     *,
     normative_spec: bool = False,
+    relational_schema: Path | None = None,
 ) -> ValidationReport:
     """Validate every Markdown file recursively below a path as OKF v0.2.
 
@@ -467,6 +469,13 @@ def validate_path(
     """
     bundle = load_bundle(path, exclude)
     diagnostics = list(bundle.diagnostics)
+    if relational_schema is not None:
+        schema_path = (
+            relational_schema
+            if relational_schema.is_absolute()
+            else bundle.root / relational_schema
+        )
+        diagnostics.extend(validate_relations(bundle, schema_path))
     if require_spec is not None:
         diagnostics.extend(
             missing_type_specs(
