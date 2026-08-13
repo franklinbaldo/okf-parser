@@ -66,9 +66,14 @@ jobs:
           )
           : > "$RUNNER_TEMP/blobs.tsv"
           for file in "${files[@]}"; do
-            encoded=$(base64 -w0 "$file")
-            sha=$(gh api --method POST "/repos/$GITHUB_REPOSITORY/git/blobs" \
-              -f content="$encoded" -f encoding=base64 --jq .sha)
+            jq -Rs '{content: ., encoding: "utf-8"}' "$file" > "$RUNNER_TEMP/blob.json"
+            sha=$(curl --fail-with-body --silent --show-error \
+              -X POST \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              --data-binary @"$RUNNER_TEMP/blob.json" \
+              "https://api.github.com/repos/$GITHUB_REPOSITORY/git/blobs" | jq -r .sha)
             printf '%s\t%s\n' "$file" "$sha" | tee -a "$RUNNER_TEMP/blobs.tsv"
           done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
