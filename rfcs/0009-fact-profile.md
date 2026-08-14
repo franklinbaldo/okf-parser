@@ -49,6 +49,13 @@ The consequences are worth stating plainly:
   an ordering encoded as a rendering convention is a schema in costume, kept
   alive by a bespoke validator.
 
+This repository already voted against the reserved log with its feet. Its own
+history lives in `changelog/`, as **55 concepts of type `Release`** — one document
+per version, individually addressable, queryable, and carrying frontmatter — not
+as date groups inside a `log.md`. The project reached for the concept model the
+moment it needed its own history to be usable, and the spec's answer for
+histories went unused in the one repository that implements the spec.
+
 Under `fact` these documents are not special. `index` and `log` are **types**, so
 a log entry is an ordinary concept with a declared timestamp: ordering becomes
 `ORDER BY` rather than a normative error, "what changed in March" becomes a
@@ -70,6 +77,58 @@ another's declaration.
 `check --require-spec ".okf/specs/{slug}.md"` puts a fact about the bundle's own
 structure in the caller's command line. Every consumer must remember to repeat
 it, and the same bundle validates differently depending on who ran the command.
+
+## Principles
+
+Two commitments decide the arguments this RFC would otherwise have to relitigate
+at every decision.
+
+### Dogfooding
+
+The repository that implements `fact` is a `fact` bundle, and every mechanism the
+profile offers is one this repository uses on itself. A feature nobody here runs
+is a feature nobody here maintains.
+
+Measured against that standard today, the gaps are concrete rather than
+rhetorical. The repository uses eight types — `Architecture`, `BenchmarkResult`,
+`ChangelogEntry`, `Documentation`, `Procedure`, `Project`, `RFC`, `Release` — and
+has **no specification document for any of them**. CI runs a bare
+`okf-parser check .`, so `--require-spec` (0.14.0), the RFC 0006 declared column
+types, and the RFC 0007 relational contract are all shipped, tested, documented,
+and unused by their own author. Two of those eight types, `ChangelogEntry` and
+`Release`, plausibly describe the same thing, which is exactly the drift a
+specification document exists to catch.
+
+Adopting `fact` here is therefore not a demonstration bolted on afterwards. It is
+the first consumer, and its `.fact/` directory is the profile's real conformance
+test.
+
+### Ecosystem incentive
+
+The profile has to be implementable by people who did not write it, or it is a
+private convention with delusions. Three consequences follow, and this RFC treats
+them as constraints rather than aspirations:
+
+- **The specification ships executable conformance fixtures.** `conformance/`
+  already carries shared Python/TypeScript fixtures for exclusion, formatting,
+  frontmatter and schema inference. A third implementation proves itself against
+  those files rather than against this repository's behaviour.
+- **Adapters are the contribution surface.** Decision 9's "many readers, one
+  writer" exists partly so that supporting a foreign dialect never requires
+  touching the core or negotiating with its maintainer.
+- **Type vocabularies are a public good.** URI types (decision 2) let anyone
+  publish a vocabulary at their own domain without permission from this project.
+  A type namespace nobody controls is the difference between an ecosystem and a
+  plugin directory.
+
+There is one honest tension. RFC 0006 and RFC 0007 make the declaration format
+"trusted DuckDB SQL, full stop," which means a conforming implementation must
+embed DuckDB — a heavy demand on a third implementation, and the single largest
+barrier to entry the profile currently imposes. The choice was right for what
+those RFCs needed (a physical type should be DuckDB's own type, not a grammar
+re-derived here), but it is a cost paid in ecosystem breadth and should be
+recorded as such rather than discovered later by whoever tries to write the
+second implementation.
 
 ## Decision
 
