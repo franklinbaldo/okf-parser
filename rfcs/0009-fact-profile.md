@@ -78,6 +78,63 @@ another's declaration.
 structure in the caller's command line. Every consumer must remember to repeat
 it, and the same context validates differently depending on who ran the command.
 
+### The specification over-decides in one place and abstains in the other
+
+The two defects above are not independent. OKF v0.2 spends normative strictness
+on a free-prose file — `log.md` must use `YYYY-MM-DD` level-two headings, they
+must be real dates, they must run newest first, three separate errors — and then
+declines to decide anything at all about the documents carrying structured data,
+where `type` may be any non-empty string and no field is specified.
+
+Both halves are the same mistake pointed in opposite directions. The strictness
+is spent where a schema was never going to help, and withheld where one is the
+entire point. A floor that decides a heading's date format but not what a type
+means has chosen the easy commitments.
+
+### Why a profile now, rather than patience
+
+The obvious alternative is to propose all of this upstream and wait. Three
+things argue against waiting, and only the third is about anyone's competence.
+
+**The steward's tempo is not this project's tempo.** OKF is stewarded inside
+Google Cloud — the specification lives in `GoogleCloudPlatform/knowledge-catalog`
+— and a large vendor moving deliberately through review is behaving correctly for
+a format meant as a stable floor. It is also a tempo no downstream project can
+plan around. Conservatism is a virtue in a floor and an obstacle in a ceiling,
+which is precisely why the two should not be the same document.
+
+**A specification living inside a product repository inherits that product's
+priorities.** This is structural, not an accusation: when the spec and a
+commercial knowledge-catalog service share a home, the questions that get
+answered first are the ones the service needs answered. `fact` needs decisions
+about composition, identity and vocabulary that no service is currently asking
+for. A profile can take them without asking anyone to reprioritize.
+
+**Some of what this RFC needs is not a gap but a reversal.** Removing the
+reserved `index.md` and `log.md` is not an addition upstream could accept
+compatibly; it un-decides something v0.2 already decided. That belongs in a
+profile by construction.
+
+### The obvious objection
+
+[xkcd 927](https://xkcd.com/927/) is the correct first reaction to any document
+that proposes a new format, and it deserves an answer rather than a joke back:
+fourteen competing standards, someone writes a fifteenth to unify them, now there
+are fifteen.
+
+The answer is the asymmetry in the "Relationship to OKF v0.2" section, and it is
+falsifiable rather than rhetorical. `fact` does not compete with OKF for the
+same documents: every OKF bundle is a valid `fact` context unchanged, and
+`fact export --okf` emits a bundle `okflint` and `okf-cli` accept. A reader
+choosing between them is choosing a reading of the same files, not a format for
+new ones — which is what makes this a profile rather than a competitor.
+
+Where the cartoon does land: the moment `fact` accepts a document OKF rejects,
+or emits one OKF cannot read, it *is* a fifteenth standard, whatever the
+introduction claims. That is why decision 14's "many readers, one writer" and
+the OKF-projection promise are load-bearing rather than courtesies. If either
+breaks, the objection is simply correct and this RFC should be withdrawn.
+
 ## Principles
 
 Two commitments decide the arguments this RFC would otherwise have to relitigate
