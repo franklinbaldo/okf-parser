@@ -311,31 +311,40 @@ reference leaving it is absolute.**
 
 ### 6. A fact's identity is not its path
 
-Facts must be reorganizable inside their context without breaking anything. A
-directory that grows from twenty documents into subdirectories is ordinary
-housekeeping, and it must not invalidate a single link.
+Moving a fact can have real effects on its context. A Markdown link points to a
+path, so moving its target may leave that link pointing at a location that no
+longer exists. Stable identity does not make those path-dependent effects
+disappear, and the profile should not pretend otherwise.
 
-Today it invalidates all of them. `concept_id` is derived from the path, so
-moving a document changes its identity, and every link pointing at it breaks
-along with every relation keyed on it. Decision 5's root-anchoring only fixes
-half: it survives the *source* moving, not the *target* moving.
+What a move must not do is turn the target into a different fact merely because
+its location changed. Today `concept_id` is derived from the path, so one
+filesystem operation conflates two distinct events: the fact changes identity,
+and inbound path references may break. Under `fact` those concerns are separate.
 
-A fact therefore carries a **stable id** that survives any move within its
-context, and the relational surfaces key on that id rather than on a path.
+A fact therefore carries a **stable id** that survives a move within its context,
+and relational surfaces key on that id rather than on a path. The path remains
+its authored location, and ordinary Markdown links remain path references. In
+other words, **identity and referential integrity are distinct invariants**: a
+move can preserve the first while violating the second.
 
-The Markdown link target stays a path. This is deliberate and it is a
-concession: an id-shaped target renders as a dead link in every ordinary Markdown
-viewer, and a format whose documents do not read as documents on GitHub has lost
-something worth more than the purity. So the path is how the link is *written*
-and the id is what the link *means* — the parser resolves the path once,
-records the edge by id, and the path becomes a repairable cache of the relation
-rather than the relation itself.
+This distinction gives different operations useful, honest semantics. A plain
+`git mv` moves the file and may leave broken inbound links; those are observable
+inconsistencies in the resulting context and should be reported as such. A
+`fact mv` may offer a stronger transactional operation: move the target and
+rewrite the inbound links it can resolve, with a postcondition that references
+known before the move remain valid. That stronger operation is a convenience
+built on knowledge of the context, not a consequence of stable identity itself.
 
-That repairability is the payoff. `fact mv` moves a document and rewrites every
-inbound path in the context, because it knows the edges by id. A link left stale
-by a plain `git mv` is likewise **repairable** rather than merely reported: the
-target still exists under the same id, so the warning carries a fix instead of a
-complaint. `OKF101` stops being an observation and becomes an action.
+The Markdown link target therefore stays a path. An id-shaped target would render
+as a dead link in ordinary Markdown viewers, and a format whose documents no
+longer read as documents on GitHub has lost something worth more than that
+purity. The stable id tells relational consumers *which fact this is*; the path
+tells Markdown readers *where it is now*.
+
+A stale path may be repairable when the tool has enough evidence to identify the
+moved target, but repair after an arbitrary filesystem change is not guaranteed
+by the id alone. The important guarantee is narrower: changing location does not
+by itself change identity.
 
 Whether the id is authored in frontmatter, derived from the first path and then
 pinned, or minted by `fact init`, is left open — but it is authored data once it
