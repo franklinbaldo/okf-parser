@@ -113,10 +113,10 @@ them as constraints rather than aspirations:
   already carries shared Python/TypeScript fixtures for exclusion, formatting,
   frontmatter and schema inference. A third implementation proves itself against
   those files rather than against this repository's behaviour.
-- **Adapters are the contribution surface.** Decision 11's "many readers, one
+- **Adapters are the contribution surface.** Decision 12's "many readers, one
   writer" exists partly so that supporting a foreign dialect never requires
   touching the core or negotiating with its maintainer.
-- **Type vocabularies are a public good.** URI types (decision 4) let anyone
+- **Type vocabularies are a public good.** URI types (decision 5) let anyone
   publish a vocabulary at their own domain without permission from this project.
   A type namespace nobody controls is the difference between an ecosystem and a
   plugin directory.
@@ -139,7 +139,7 @@ magic, and no Markdown file below the context root is outside the model. A READM
 is a fact. An RFC is a fact. A type's own specification document is a fact.
 
 This is the axiom the rest of the profile follows from, and it is what makes
-decision 9 unavoidable rather than merely tidy.
+decision 10 unavoidable rather than merely tidy.
 
 It also dissolves a problem the current implementation had to build a feature
 around. `README.md` explains that "a repository that keeps OKF knowledge next to
@@ -147,7 +147,7 @@ code, a README and vendored dependencies has no root that validates cleanly,"
 because every unrelated Markdown file raises `OKF001`. That is a consequence of
 treating some `.md` files as data and the rest as trespassers. Once every `.md`
 is a fact, an unrelated file is not invalid — it is a fact whose type nobody
-declared, which decision 6 reports at `warn` and never as an error.
+declared, which decision 7 reports at `warn` and never as an error.
 
 `.factignore` therefore keeps existing, but its meaning changes: it selects
 **scope**, not validity. Excluding a vendored dependency says "these facts are
@@ -157,7 +157,7 @@ cross-context links.
 
 The cost is deliberate: `fact` has almost no parse-level errors. Unreadable
 bytes, malformed YAML, and ambiguity are errors. Everything else is a level on
-decision 6's ladder.
+decision 7's ladder.
 
 ### 2. The names are `fact` and `context`
 
@@ -187,7 +187,7 @@ The public API rename is mechanical:
 | ---------------------------- | --------------------------- |
 | `bundle`                     | `context`                   |
 | `concept`                    | `fact`                      |
-| `concepts` relation          | `facts`                     |
+| `concepts` relation          | `facts`, plus an owning `context` column |
 | `concept_id`, `concept_type` | `fact_id`, `fact_type`      |
 | `ConceptRecord`              | `FactRecord`                |
 | `reserved` relation          | removed by decision 1       |
@@ -225,7 +225,45 @@ running on defaults, reported at `hint`. This repository's own
 `examples/minimal/` is exactly that case, and remains one until it earns a
 marker.
 
-### 4. `type` prefers a URI, ideally a dereferenceable URL
+### 4. A context is always a context *of* something
+
+Context is relative, not absolute. There is no privileged root — only the vantage
+point a caller opened from. Every fact therefore sits in a **chain** of contexts,
+from the nearest enclosing `.fact/` outward, and "the context" of a fact names a
+position in that chain rather than a single directory.
+
+Two relations the word otherwise conflates come apart here:
+
+- **containment** — the fact is inside this directory tree;
+- **membership** — the fact belongs to this context's own set.
+
+A fact contained in a subcontext is *visible* from the outer context and
+*belongs* to the inner one. The `facts` relation therefore carries its owning
+context, and a query scopes by that column instead of by an exclusion pattern.
+
+This dissolves the dilemma `README.md` currently states as unavoidable. Today a
+repository must choose between checking the root, where every unrelated Markdown
+file is noise, and checking each bundle separately, which makes every link
+*between* bundles unresolvable — "the only arrangement under which cross-bundle
+link validation runs at all." With relative contexts there is no choice to make:
+links resolve across the whole tree because the outer vantage point sees it, and
+ownership stays honest because every fact reports which context it belongs to.
+Vendored knowledge is not excluded; it is **attributed**.
+
+Resolution is lexical scoping in the ordinary programming-language sense. A
+prefix, an alias or a rule level declared in an outer `.fact/` is visible to
+every context inside it, and an inner declaration shadows an outer one for its
+own subtree. Nothing is inherited by copying, so an outer context never has to
+enumerate what its subcontexts contain.
+
+One invariant makes vantage-relativity safe: **normative results are
+vantage-invariant.** A fact that is an error inside its own context is an error
+from every context containing it, and a valid fact never becomes invalid because
+someone opened the tree from higher up. Levels may vary — a type whose prefix is
+declared two levels up reads canonical from outside and `warn` from inside,
+which is true and useful information — but conformance may not.
+
+### 5. `type` prefers a URI, ideally a dereferenceable URL
 
 Three spellings are accepted:
 
@@ -237,10 +275,10 @@ type: https://okf.dev/types/Procedure    # full URI
 
 CURIE and full URI are the canonical forms `fact init` and `fact format` emit.
 Every other convention stays readable; how loudly a non-canonical one is
-reported is decision 6's ladder, and the context chooses where it sits on that
+reported is decision 7's ladder, and the context chooses where it sits on that
 ladder.
 
-### 5. Dereferencing is never normative
+### 6. Dereferencing is never normative
 
 A `type` URL that 404s, times out, or is unreachable because the machine is
 offline **does not affect conformance**. Dereferencing is optional enrichment,
@@ -248,7 +286,7 @@ cached under `.fact/cache/`, and no validation path may require it. Making
 context validity depend on someone else's DNS would be a worse defect than
 anything this RFC repairs.
 
-### 6. Permissiveness is a graded ladder, not a binary
+### 7. Permissiveness is a graded ladder, not a binary
 
 A rule that is either silent or fatal cannot express "this works, but there is a
 better way." `fact` diagnostics therefore carry four levels:
@@ -291,7 +329,7 @@ levels are configurable that encoding becomes false, so under `fact` the code
 identifies the **rule**, the level is a separate configurable attribute, and
 `Severity` grows from two values to four.
 
-### 7. Global identity and local name are separate
+### 8. Global identity and local name are separate
 
 A URI identifies a type globally; it is not usable as a table name, a filename,
 or a column name. RFC 0007 defines the relational table name as the exact
@@ -304,7 +342,7 @@ the collision the URI was adopted to remove: `https://a.example/Task` and
 the CURIE's suffix under a declared prefix. Identity is the URI; the local name
 is what reaches DuckDB, paths and reports.
 
-### 8. `.fact/` makes the context self-describing
+### 9. `.fact/` makes the context self-describing
 
 ```text
 .fact/
@@ -321,7 +359,7 @@ This subsumes the `--require-spec` and `--spec-template` flags: a consumer opens
 the directory and discovers the arrangement rather than being told about it. The
 flags remain, for compatibility and for overriding.
 
-### 9. `.fact/` is not a magic zone
+### 10. `.fact/` is not a magic zone
 
 Decisions 1 and 3 admit no exception for the profile's own directory. Documents under
 `.fact/types/` are **ordinary facts**, discovered, parsed and queryable like any
@@ -334,7 +372,7 @@ derives `rotina.schema.sql` beside `rotina.md`.
 Reserving `.fact/` as a region invisible to queries would reproduce exactly the
 `index.md`/`log.md` mistake this RFC exists to correct.
 
-### 10. Compatibility with foreign specifications is three mechanisms, not one
+### 11. Compatibility with foreign specifications is three mechanisms, not one
 
 "Compatible with other specs" collapses three distinct things, and conflating
 them is how a format acquires an unimplementable surface:
@@ -357,7 +395,7 @@ rule for this repository — `docs/architecture.md` already draws exactly this
 boundary between a strict core and source adaptation. This RFC promotes it from
 an internal architecture note to a mechanism the context declares.
 
-### 11. Many readers, one writer
+### 12. Many readers, one writer
 
 A format compatible with everything on both ends is unimplementable. The
 asymmetry is the constraint that keeps `fact` finite: **any number of adapters may
