@@ -130,13 +130,50 @@ re-derived here), but it is a cost paid in ecosystem breadth and should be
 recorded as such rather than discovered later by whoever tries to write the
 second implementation.
 
+## Capabilities unlocked
+
+The decisions below exist to buy five capabilities. Stating them first makes the
+argument run capability → mechanism instead of mechanism → consequence, and gives
+every later decision a review criterion: is it **necessary** for one of these, is
+it **one possible implementation** of something necessary, or is it accidental
+complexity that can be deferred?
+
+1. **A context describes itself.** What its types are, how its vocabulary
+   resolves and how strict it wants to be are properties of the context, readable
+   by opening it — not flags each consumer must remember.
+2. **A fact's identity is independent of its location.** Documents can be
+   reorganized inside a context without invalidating links, relations, or
+   anything keyed on them.
+3. **Vocabularies are globally identifiable and locally projectable.** A type is
+   identified by a URI that anyone can publish, and still lands in a relational
+   surface as a workable local name — without losing distinguishability in the
+   projection.
+4. **Contexts compose without flattening their identity.** An outer context can
+   see and query facts from inner ones while every fact keeps its owning context.
+5. **Many readers, one canonical writer.** Any number of adapters may read
+   foreign dialects; exactly one canonical form is written.
+
+Capability 4 is the one with no counterpart in OKF v0.2, and it is what makes
+vendored knowledge, multi-repository corpora and federated relational queries
+expressible without pretending every fact was authored in one namespace.
+
 ## Decision
 
-### 1. Everything is a `.md`, and every `.md` is a fact
+### 1. Every in-scope Markdown document is a fact
 
-There is no second kind of document. No filename is reserved, no directory is
-magic, and no Markdown file below the context root is outside the model. A README
-is a fact. An RFC is a fact. A type's own specification document is a fact.
+There is no second kind of document. No filename is reserved and no directory is
+magic: within a context's scope, a README is a fact, an RFC is a fact, and a
+type's own specification document is a fact.
+
+The qualifier is load-bearing. The claim is *not* that every `.md` under some
+filesystem root is a fact by virtue of sitting there — that would make
+containment itself an assertion mechanism, so dropping a directory into a tree
+would silently assert everything inside it. Membership in a context is
+intentional. Scope is declared; inside it, uniformity is absolute.
+
+This is the same containment-is-not-membership distinction decision 4 draws for
+subcontexts, applied at the outer edge instead of at an inner boundary. One rule
+covers both: **being inside the tree is not being part of the context.**
 
 This is the axiom the rest of the profile follows from, and it is what makes
 decision 12 unavoidable rather than merely tidy.
@@ -149,11 +186,12 @@ treating some `.md` files as data and the rest as trespassers. Once every `.md`
 is a fact, an unrelated file is not invalid — it is a fact whose type nobody
 declared, which decision 9 reports at `warn` and never as an error.
 
-`.factignore` therefore keeps existing, but its meaning changes: it selects
-**scope**, not validity. Excluding a vendored dependency says "these facts are
-not mine," not "these files are malformed." The distinction matters because the
-current framing forces a choice between an unvalidatable root and unresolvable
-cross-context links.
+`.factignore` therefore keeps existing, and its job becomes the honest one: it
+**defines the context's scope**. It does not separate real facts from special
+documents, because inside the scope there are no special documents. Excluding a
+vendored dependency says "these facts are not mine," never "these files are
+malformed." The distinction matters because the current framing forces a choice
+between an unvalidatable root and unresolvable cross-context links.
 
 The cost is deliberate: `fact` has almost no parse-level errors. Unreadable
 bytes, malformed YAML, and ambiguity are errors. Everything else is a level on
@@ -217,15 +255,41 @@ consequences, each replacing something currently done by hand:
   `.factignore`. Structure replaces configuration for the case that motivated the
   configuration.
 
-The marker is **recommended, not required**, because decision 1 and the
-permissiveness commitment both forbid making it a precondition — no OKF bundle
-has a `.fact/` directory, and every OKF bundle must remain readable. A directory
-with no marker is an **implicit context** rooted where the caller pointed,
-running on defaults, reported at `hint`. This repository's own
-`examples/minimal/` is exactly that case, and remains one until it earns a
-marker.
+Two things are true at once, and the profile is sharper for stating them
+separately rather than blurring them into "recommended":
+
+- **A native `fact` context has `.fact/`.** It is the canonical authored form,
+  the thing `fact init` creates, and the only arrangement in which a context can
+  describe itself at all. A self-describing context without the mechanism that
+  makes it self-describing is a contradiction, not a relaxation.
+- **A directory without `.fact/` is read as an implicit compatibility view.** It
+  is rooted where the caller pointed, runs on defaults, and reads perfectly well
+  — which is what keeps the `OKF → fact` promise total, since no OKF bundle has
+  a `.fact/` directory and every one of them must remain readable.
+
+This is the emit/accept split from the Summary applied to structure instead of
+syntax: markerless input is accepted without complaint, and markerless output is
+never emitted. The compatibility view is a *reading* of someone else's
+arrangement, not an authored form anyone should be producing.
+
+This repository's own `examples/minimal/` is deliberately such a view — it exists
+to show the smallest thing OKF accepts, so giving it a marker would misrepresent
+what it demonstrates.
 
 ### 4. A context is always a context *of* something
+
+**The capability first: contexts compose without flattening their identity.** An
+outer context can see and query facts that inner contexts own, and every fact
+keeps its owning context through the composition. Nothing is merged into one
+namespace, nothing is copied, and no fact loses the answer to "whose is this?"
+
+That is what makes vendored knowledge, multi-repository corpora and federated
+relational queries expressible at all. Today the only way to query across two
+bundles is to treat their union as one bundle, which asserts something false —
+that everything in it was authored together — and destroys the distinction on the
+way in. Everything below (visibility, ownership, inheritance, shadowing, and
+decision 5's link resolution) is machinery derived from this capability, and each
+piece should be judged by whether it serves it.
 
 Context is relative, not absolute. There is no privileged root — only the vantage
 point a caller opened from. Every fact therefore sits in a **chain** of contexts,
@@ -425,9 +489,25 @@ legal DuckDB and indefensible. Worse, truncating to the last segment reintroduce
 the collision the URI was adopted to remove: `https://a.example/Task` and
 `https://b.example/Task` share it.
 
-`.fact/vocabulary.yaml` therefore carries a prefix map, and the **local name** is
-the CURIE's suffix under a declared prefix. Identity is the URI; the local name
-is what reaches DuckDB, paths and reports.
+`.fact/vocabulary.yaml` therefore carries a prefix map, and every type gets a
+**local name** that is *assigned*, never truncated out of the URI. Identity is
+the URI; the local name is what reaches DuckDB, paths and reports.
+
+The rule that keeps the assignment sound: **a default must be collision-free by
+construction, not by luck.** So the default local name is prefix-qualified —
+`a:Task` and `b:Task` become `a_Task` and `b_Task`, and stay distinguishable
+exactly as their URIs are. Taking the CURIE suffix by default would recreate the
+collision the URI was adopted to remove, one paragraph after this decision
+rejects that very move for the last URI segment.
+
+A context may assign an explicit alias in `vocabulary.yaml`, and the bare suffix
+is available that way — `a:Task` as `Task` is a fine thing to write when the
+context has only one `Task` and the author knows it. What is not available is
+*silently* landing there. Two types resolving to one local name without an alias
+is the ambiguity error decision 9's ladder reserves as unsilenceable.
+
+The capability being protected is worth naming: **a global identity can be
+projected into local relational surfaces without losing distinguishability.**
 
 ### 11. `.fact/` makes the context self-describing
 
