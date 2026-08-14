@@ -113,10 +113,10 @@ them as constraints rather than aspirations:
   already carries shared Python/TypeScript fixtures for exclusion, formatting,
   frontmatter and schema inference. A third implementation proves itself against
   those files rather than against this repository's behaviour.
-- **Adapters are the contribution surface.** Decision 13's "many readers, one
+- **Adapters are the contribution surface.** Decision 14's "many readers, one
   writer" exists partly so that supporting a foreign dialect never requires
   touching the core or negotiating with its maintainer.
-- **Type vocabularies are a public good.** URI types (decision 6) let anyone
+- **Type vocabularies are a public good.** URI types (decision 7) let anyone
   publish a vocabulary at their own domain without permission from this project.
   A type namespace nobody controls is the difference between an ecosystem and a
   plugin directory.
@@ -139,7 +139,7 @@ magic, and no Markdown file below the context root is outside the model. A READM
 is a fact. An RFC is a fact. A type's own specification document is a fact.
 
 This is the axiom the rest of the profile follows from, and it is what makes
-decision 11 unavoidable rather than merely tidy.
+decision 12 unavoidable rather than merely tidy.
 
 It also dissolves a problem the current implementation had to build a feature
 around. `README.md` explains that "a repository that keeps OKF knowledge next to
@@ -147,7 +147,7 @@ code, a README and vendored dependencies has no root that validates cleanly,"
 because every unrelated Markdown file raises `OKF001`. That is a consequence of
 treating some `.md` files as data and the rest as trespassers. Once every `.md`
 is a fact, an unrelated file is not invalid — it is a fact whose type nobody
-declared, which decision 8 reports at `warn` and never as an error.
+declared, which decision 9 reports at `warn` and never as an error.
 
 `.factignore` therefore keeps existing, but its meaning changes: it selects
 **scope**, not validity. Excluding a vendored dependency says "these facts are
@@ -157,7 +157,7 @@ cross-context links.
 
 The cost is deliberate: `fact` has almost no parse-level errors. Unreadable
 bytes, malformed YAML, and ambiguity are errors. Everything else is a level on
-decision 8's ladder.
+decision 9's ladder.
 
 ### 2. The names are `fact` and `context`
 
@@ -286,29 +286,62 @@ could not be moved without rewriting its contents. Anchoring to the nearest
 extracted out of one, or published on its own, and its internal links keep
 meaning the same thing.
 
-A link that escapes its nearest context is not broken — it is an **outward
-reference**. It resolves from any vantage point containing both ends and does not
-resolve from inside the subcontext alone. This is exactly the case decision 4's
-invariant was written for: an unresolved link is advisory in OKF v0.2 and stays
-advisory here, so the difference between the two vantage points is a level, never
-conformance. The alternative — forbidding outward references — would buy
-portability by making cross-context knowledge inexpressible, which is the
-arrangement this profile exists to escape.
+**A path that climbs out of its nearest context is an aberration, not a feature.**
+`../../../etc.md` states a fact about where the context happens to sit in
+someone's filesystem, which is not knowledge and does not survive the context
+being moved, vendored or published. The canonical writer never emits one, and
+`fact format` rewrites it into the absolute form of the same target.
 
-An absolute link is the way to refer outward **without** paying that cost. It
+It is reported at `warn` rather than `error`, and the reason is the ladder's own
+rule: an escaping path is unambiguous and readable, so calling it an error would
+make level track distaste instead of distance from canonical. A context that has
+finished tidying sets `--fail-on warn` and gets the stricter behaviour without
+the profile pretending the file could not be understood.
+
+Referring outward is therefore what the absolute form is for. It
 names its target globally, so it means the same thing at every position in every
-tree — the same property decision 6 buys for types, through the same mechanism.
+tree — the same property decision 7 buys for types, through the same mechanism.
 It is also subject to the same rule as a type URI: dereferencing it is never
 normative, and an absolute link nobody can fetch is advisory, exactly as an
 unresolved relative link is.
 
 Relocatability is therefore a property a context either has or lacks, and it is
 checkable rather than aspirational: **a context is relocatable exactly when every
-reference leaving it is absolute.** An outward path reference is reported at
-`info` — the cost is real, the choice is legitimate, and the repair is usually to
-spell the same target absolutely.
+reference leaving it is absolute.**
 
-### 6. `type` prefers a URI, ideally a dereferenceable URL
+### 6. A fact's identity is not its path
+
+Facts must be reorganizable inside their context without breaking anything. A
+directory that grows from twenty documents into subdirectories is ordinary
+housekeeping, and it must not invalidate a single link.
+
+Today it invalidates all of them. `concept_id` is derived from the path, so
+moving a document changes its identity, and every link pointing at it breaks
+along with every relation keyed on it. Decision 5's root-anchoring only fixes
+half: it survives the *source* moving, not the *target* moving.
+
+A fact therefore carries a **stable id** that survives any move within its
+context, and the relational surfaces key on that id rather than on a path.
+
+The Markdown link target stays a path. This is deliberate and it is a
+concession: an id-shaped target renders as a dead link in every ordinary Markdown
+viewer, and a format whose documents do not read as documents on GitHub has lost
+something worth more than the purity. So the path is how the link is *written*
+and the id is what the link *means* — the parser resolves the path once,
+records the edge by id, and the path becomes a repairable cache of the relation
+rather than the relation itself.
+
+That repairability is the payoff. `fact mv` moves a document and rewrites every
+inbound path in the context, because it knows the edges by id. A link left stale
+by a plain `git mv` is likewise **repairable** rather than merely reported: the
+target still exists under the same id, so the warning carries a fix instead of a
+complaint. `OKF101` stops being an observation and becomes an action.
+
+Whether the id is authored in frontmatter, derived from the first path and then
+pinned, or minted by `fact init`, is left open — but it is authored data once it
+exists, never recomputed from location.
+
+### 7. `type` prefers a URI, ideally a dereferenceable URL
 
 Three spellings are accepted:
 
@@ -320,10 +353,10 @@ type: https://okf.dev/types/Procedure    # full URI
 
 CURIE and full URI are the canonical forms `fact init` and `fact format` emit.
 Every other convention stays readable; how loudly a non-canonical one is
-reported is decision 8's ladder, and the context chooses where it sits on that
+reported is decision 9's ladder, and the context chooses where it sits on that
 ladder.
 
-### 7. Dereferencing is never normative
+### 8. Dereferencing is never normative
 
 A `type` URL that 404s, times out, or is unreachable because the machine is
 offline **does not affect conformance**. Dereferencing is optional enrichment,
@@ -331,7 +364,7 @@ cached under `.fact/cache/`, and no validation path may require it. Making
 context validity depend on someone else's DNS would be a worse defect than
 anything this RFC repairs.
 
-### 8. Permissiveness is a graded ladder, not a binary
+### 9. Permissiveness is a graded ladder, not a binary
 
 A rule that is either silent or fatal cannot express "this works, but there is a
 better way." `fact` diagnostics therefore carry four levels:
@@ -374,7 +407,7 @@ levels are configurable that encoding becomes false, so under `fact` the code
 identifies the **rule**, the level is a separate configurable attribute, and
 `Severity` grows from two values to four.
 
-### 9. Global identity and local name are separate
+### 10. Global identity and local name are separate
 
 A URI identifies a type globally; it is not usable as a table name, a filename,
 or a column name. RFC 0007 defines the relational table name as the exact
@@ -387,7 +420,7 @@ the collision the URI was adopted to remove: `https://a.example/Task` and
 the CURIE's suffix under a declared prefix. Identity is the URI; the local name
 is what reaches DuckDB, paths and reports.
 
-### 10. `.fact/` makes the context self-describing
+### 11. `.fact/` makes the context self-describing
 
 ```text
 .fact/
@@ -404,7 +437,7 @@ This subsumes the `--require-spec` and `--spec-template` flags: a consumer opens
 the directory and discovers the arrangement rather than being told about it. The
 flags remain, for compatibility and for overriding.
 
-### 11. `.fact/` is not a magic zone
+### 12. `.fact/` is not a magic zone
 
 Decisions 1 and 3 admit no exception for the profile's own directory. Documents under
 `.fact/types/` are **ordinary facts**, discovered, parsed and queryable like any
@@ -417,7 +450,7 @@ derives `rotina.schema.sql` beside `rotina.md`.
 Reserving `.fact/` as a region invisible to queries would reproduce exactly the
 `index.md`/`log.md` mistake this RFC exists to correct.
 
-### 12. Compatibility with foreign specifications is three mechanisms, not one
+### 13. Compatibility with foreign specifications is three mechanisms, not one
 
 "Compatible with other specs" collapses three distinct things, and conflating
 them is how a format acquires an unimplementable surface:
@@ -440,7 +473,7 @@ rule for this repository — `docs/architecture.md` already draws exactly this
 boundary between a strict core and source adaptation. This RFC promotes it from
 an internal architecture note to a mechanism the context declares.
 
-### 13. Many readers, one writer
+### 14. Many readers, one writer
 
 A format compatible with everything on both ends is unimplementable. The
 asymmetry is the constraint that keeps `fact` finite: **any number of adapters may
