@@ -93,27 +93,23 @@ means has chosen the easy commitments.
 
 ### Why a profile now, rather than patience
 
-The obvious alternative is to propose all of this upstream and wait. Three
-things argue against waiting, and only the third is about anyone's competence.
+The obvious alternative is to propose all of this upstream and wait. The
+argument against waiting is architectural, and it needs no claim about anyone's
+motives.
 
-**The steward's tempo is not this project's tempo.** OKF is stewarded inside
-Google Cloud — the specification lives in `GoogleCloudPlatform/knowledge-catalog`
-— and a large vendor moving deliberately through review is behaving correctly for
-a format meant as a stable floor. It is also a tempo no downstream project can
-plan around. Conservatism is a virtue in a floor and an obstacle in a ceiling,
-which is precisely why the two should not be the same document.
+**A floor and a ceiling want opposite tempos.** OKF's value is that it is a
+conservative interoperability floor, and conservatism is exactly right for that
+job: a floor that changed quickly would not be one. This project needs the
+opposite — a fast experimental ceiling for composition, identity and richer
+self-description, revised as often as the experiments demand. The two properties
+cannot live in one document, and asking the floor to move at the ceiling's pace
+would damage the thing that makes it worth building on.
 
-**A specification living inside a product repository inherits that product's
-priorities.** This is structural, not an accusation: when the spec and a
-commercial knowledge-catalog service share a home, the questions that get
-answered first are the ones the service needs answered. `fact` needs decisions
-about composition, identity and vocabulary that no service is currently asking
-for. A profile can take them without asking anyone to reprioritize.
-
-**Some of what this RFC needs is not a gap but a reversal.** Removing the
-reserved `index.md` and `log.md` is not an addition upstream could accept
-compatibly; it un-decides something v0.2 already decided. That belongs in a
-profile by construction.
+**Some of what this RFC needs is a reversal, not a gap.** Removing the reserved
+`index.md` and `log.md` is not an addition upstream could accept compatibly; it
+un-decides something v0.2 already decided. A proposal of that shape is better
+explored in a profile, with running code behind it, before any upstream
+conversation is worth having.
 
 ### The obvious objection
 
@@ -129,11 +125,22 @@ same documents: every OKF bundle is a valid `fact` context unchanged, and
 choosing between them is choosing a reading of the same files, not a format for
 new ones — which is what makes this a profile rather than a competitor.
 
-Where the cartoon does land: the moment `fact` accepts a document OKF rejects,
-or emits one OKF cannot read, it *is* a fifteenth standard, whatever the
-introduction claims. That is why decision 14's "many readers, one writer" and
-the OKF-projection promise are load-bearing rather than courtesies. If either
-breaks, the objection is simply correct and this RFC should be withdrawn.
+Accepting *more* than OKF is not the failure mode — it is what a permissive
+superset is for, and decision 1 does it deliberately when an in-scope document
+with no declared `type` stays readable with an advisory diagnostic instead of
+failing to parse. The promise that actually carries weight is narrower, and it
+has two halves:
+
+- **`OKF → fact` is total.** Every valid OKF bundle is accepted unchanged.
+- **`fact → OKF` is defined where it is claimed.** Where the canonical model
+  projects to OKF, `fact export --okf` emits a bundle `okflint` and `okf-cli`
+  accept.
+
+The cartoon wins if either half breaks — if some OKF bundle stops being readable,
+or if producers are asked to abandon OKF-readable documents to participate. Then
+`fact` is a fifteenth serialization whatever the introduction claims, and this
+RFC should be withdrawn. Accepting a document OKF would reject is not that
+failure; it is the profile working as designed.
 
 ## Principles
 
@@ -173,10 +180,13 @@ them as constraints rather than aspirations:
 - **Adapters are the contribution surface.** Decision 14's "many readers, one
   writer" exists partly so that supporting a foreign dialect never requires
   touching the core or negotiating with its maintainer.
-- **Type vocabularies are a public good.** URI types (decision 7) let anyone
-  publish a vocabulary at their own domain without permission from this project.
-  A type namespace nobody controls is the difference between an ecosystem and a
-  plugin directory.
+- **Vocabularies are portable and self-describing.** A richer `type` references
+  its own specification, preferably as a context-local relative reference such as
+  `.fact/specs/Procedure.md` (decision 7), so a vocabulary travels with the
+  context that uses it and needs no registry, no domain and no permission from
+  this project. Publishing that context later gives those references an absolute
+  base without changing a single authored `type` — global publication is an
+  available consequence rather than the mechanism.
 
 There is one honest tension. RFC 0006 and RFC 0007 make the declaration format
 "trusted DuckDB SQL, full stop," which means a conforming implementation must
@@ -198,13 +208,16 @@ complexity that can be deferred?
 1. **A context describes itself.** What its types are, how its vocabulary
    resolves and how strict it wants to be are properties of the context, readable
    by opening it — not flags each consumer must remember.
-2. **A fact's identity is independent of its location.** Documents can be
-   reorganized inside a context without invalidating links, relations, or
-   anything keyed on them.
-3. **Vocabularies are globally identifiable and locally projectable.** A type is
-   identified by a URI that anyone can publish, and still lands in a relational
-   surface as a workable local name — without losing distinguishability in the
-   projection.
+2. **A fact's identity is independent of its location.** Moving a document does
+   not make it a different fact, so relations keyed on identity survive the move.
+   Referential integrity is a *separate* invariant and a move may well break it:
+   `fact mv` can preserve both, a plain `git mv` need not.
+3. **Vocabularies are self-describing and portable, and stay locally
+   projectable.** A `type` may remain an ordinary OKF string; the canonical
+   `fact` form prefers a resolvable reference to the type's specification, with
+   context-local relative references preferred and absolute URIs equally valid
+   as references. Whichever form is authored, relational surfaces use a
+   convenient local symbol without losing which specification it refers to.
 4. **Contexts compose without flattening their identity.** An outer context can
    see and query facts from inner ones while every fact keeps its owning context.
 5. **Many readers, one canonical writer.** Any number of adapters may read
@@ -371,18 +384,30 @@ links resolve across the whole tree because the outer vantage point sees it, and
 ownership stays honest because every fact reports which context it belongs to.
 Vendored knowledge is not excluded; it is **attributed**.
 
-Resolution is lexical scoping in the ordinary programming-language sense. A
-prefix, an alias or a rule level declared in an outer `.fact/` is visible to
-every context inside it, and an inner declaration shadows an outer one for its
-own subtree. Nothing is inherited by copying, so an outer context never has to
-enumerate what its subcontexts contain.
+**Composition preserves meaning, not only ownership.** A context resolves its
+own type identities through its own `.fact/vocabulary.yaml` and nothing else. An
+enclosing context does not reach inward: an outer prefix or alias never changes
+what an inner `type` reference denotes, because that would make the same
+authored document mean different things depending on which ancestor a caller
+happened to open.
+Ownership surviving composition while meaning does not would be a shallow kind
+of survival.
 
-One invariant makes vantage-relativity safe: **normative results are
-vantage-invariant.** A fact that is an error inside its own context is an error
-from every context containing it, and a valid fact never becomes invalid because
-someone opened the tree from higher up. Levels may vary — a type whose prefix is
-declared two levels up reads canonical from outside and `warn` from inside,
-which is true and useful information — but conformance may not.
+Outer declarations are therefore **projection**, not interpretation. When an
+outer context queries inner facts it may alias their local names into its own
+relational surface, apply its own reporting policy, and present them however it
+finds useful — all at the query layer, over facts whose identities were already
+fixed by the context that owns them. Nothing is inherited by copying either, so
+an outer context never has to enumerate what its subcontexts contain.
+
+The invariant this buys is stronger than the one an earlier draft settled for:
+**interpretation is vantage-invariant, and so is conformance.** A fact means the
+same thing from every vantage point that can see it, an error inside its own
+context is an error from every context containing it, and a valid fact never
+becomes invalid because someone opened the tree from higher up. What varies with
+vantage is presentation — which local name a fact lands under in *this* query,
+under *this* caller's reporting policy — and presentation was never the thing
+worth protecting.
 
 ### 5. Links resolve against the nearest context
 
@@ -471,28 +496,52 @@ Whether the id is authored in frontmatter, derived from the first path and then
 pinned, or minted by `fact init`, is left open — but it is authored data once it
 exists, never recomputed from location.
 
-### 7. `type` prefers a URI, ideally a dereferenceable URL
-
-Three spellings are accepted:
+### 7. `type` prefers a reference to the type's specification
 
 ```yaml
-type: Procedure                          # OKF-style bare string
-type: fact:Procedure                     # CURIE resolved through the context
-type: https://okf.dev/types/Procedure    # full URI
+type: Procedure                                # OKF form — valid, and stays valid
+type: .fact/specs/Procedure.md                 # canonical: context-local reference
+type: https://example.org/specs/Procedure.md   # also a valid reference
 ```
 
-CURIE and full URI are the canonical forms `fact init` and `fact format` emit.
-Every other convention stays readable; how loudly a non-canonical one is
-reported is decision 9's ladder, and the context chooses where it sits on that
-ladder.
+The canonical form is a **URI-reference** in the RFC 3986 sense, which covers
+both the relative and the absolute spelling, and the relative one is preferred.
+What a richer `type` buys is not a global namespace but an answer to "what is
+this type?" that the context can resolve on its own.
 
-### 8. Dereferencing is never normative
+**The location is not the semantics.** An absolute URL is a perfectly good
+reference, and it is not preferred merely for being global: reaching a
+specification over HTTP says nothing about the type that reaching it through the
+filesystem does not. Preferring the relative form follows from decision 5's
+relocatability argument — a context whose vocabulary references travel with it
+can be vendored, extracted or published without rewriting a single `type`, and
+publishing it later gives those same references an absolute base for free.
 
-A `type` URL that 404s, times out, or is unreachable because the machine is
-offline **does not affect conformance**. Dereferencing is optional enrichment,
-cached under `.fact/cache/`, and no validation path may require it. Making
-context validity depend on someone else's DNS would be a worse defect than
-anything this RFC repairs.
+`type: Procedure` remains valid, because decision 1's permissiveness and the
+`OKF → fact` promise both require it. How loudly a non-canonical spelling is
+reported is decision 9's ladder, and the context chooses where it sits.
+
+### 8. Resolving a reference and fetching one are different operations
+
+Conflating them is easy and costly, so the profile separates them by name:
+
+- **Resolution** turns a `type` reference into a location, against the context
+  that owns the fact. It is local, deterministic, offline, and part of what makes
+  a context self-describing. `.fact/specs/Procedure.md` resolves the same way on
+  every machine, forever.
+- **Dereferencing** fetches whatever the resolved location points at — a file
+  read for a relative reference, a network request for an absolute URL.
+
+**Network dereferencing is never required for conformance.** A `type` URL that
+404s, times out, or is unreachable because the machine is offline does not affect
+whether the context is valid. Remote fetching is optional enrichment, cached
+under `.fact/cache/`, and no validation path may require it: making context
+validity depend on someone else's DNS would be a worse defect than anything this
+RFC repairs.
+
+A missing *local* specification is not a network question at all. It is the
+`--require-spec` rule that already exists, reported at a level under decision 9
+rather than by failing to parse.
 
 ### 9. Permissiveness is a graded ladder, not a binary
 
@@ -509,13 +558,14 @@ better way." `fact` diagnostics therefore carry four levels:
 The rule that keeps the assignment from being arbitrary: **a level measures
 distance from canonical, not gravity of sin.** Applied to `type`:
 
-| authored `type`                              | level   | why                                       |
-| -------------------------------------------- | ------- | ----------------------------------------- |
-| `https://okf.dev/types/Procedure`            | —       | canonical                                 |
-| `fact:Procedure` under a declared prefix     | —       | canonical                                 |
-| `Procedure`, declared in `.fact/types/`      | `info`  | meaning is local but recoverable          |
-| `Procedure`, undeclared                      | `warn`  | nothing in the context says what it means  |
-| two types sharing one local name             | `error` | ambiguity, not style                      |
+| authored `type`                                  | level   | why                                         |
+| ------------------------------------------------ | ------- | ------------------------------------------- |
+| `.fact/specs/Procedure.md`, resolving             | —       | canonical                                   |
+| `https://example.org/specs/Procedure.md`          | —       | a valid reference form                      |
+| `Procedure`, with a specification in the context  | `info`  | meaning is recoverable, just not referenced |
+| `Procedure`, with no specification anywhere       | `warn`  | nothing in the context says what it means   |
+| a reference that does not resolve locally         | `warn`  | authored intent cannot be recovered         |
+| two types sharing one local name                  | `error` | ambiguity, not style                        |
 
 The last row is the load-bearing one. Ambiguity survives maximal permissiveness
 because no amount of tolerance tells a consumer which of two types a declaration
@@ -537,34 +587,36 @@ levels are configurable that encoding becomes false, so under `fact` the code
 identifies the **rule**, the level is a separate configurable attribute, and
 `Severity` grows from two values to four.
 
-### 10. Global identity and local name are separate
+### 10. A type reference and its relational name are separate
 
-A URI identifies a type globally; it is not usable as a table name, a filename,
-or a column name. RFC 0007 defines the relational table name as the exact
-authored `type` value, and `CREATE TABLE "https://okf.dev/types/Procedure"` is
-legal DuckDB and indefensible. Worse, truncating to the last segment reintroduces
-the collision the URI was adopted to remove: `https://a.example/Task` and
-`https://b.example/Task` share it.
+A reference answers "which specification is this?"; a relational name is what a
+table, a column or a report can actually be called. `.fact/specs/Task.md` is a
+fine reference and an indefensible DuckDB identifier, and RFC 0007 currently
+makes the table name the exact authored `type` value.
 
-`.fact/vocabulary.yaml` therefore carries a prefix map, and every type gets a
-**local name** that is *assigned*, never truncated out of the URI. Identity is
-the URI; the local name is what reaches DuckDB, paths and reports.
+So every type gets a **local name** that is *declared*, never derived by
+truncating its reference. The natural place to declare it is the referenced
+specification itself — the document already describing the type is where it says
+what it is called relationally — with `.fact/vocabulary.yaml` available for types
+whose specification is not yours to edit. A plain OKF `type: Procedure` is
+already its own local name and needs nothing.
 
-The rule that keeps the assignment sound: **a default must be collision-free by
-construction, not by luck.** So the default local name is prefix-qualified —
-`a:Task` and `b:Task` become `a_Task` and `b_Task`, and stay distinguishable
-exactly as their URIs are. Taking the CURIE suffix by default would recreate the
-collision the URI was adopted to remove, one paragraph after this decision
-rejects that very move for the last URI segment.
+The rule that keeps this sound: **a default must be collision-free by
+construction, not by luck.** Truncating to the last path segment would give
+`vendor/a/.fact/specs/Task.md` and `vendor/b/.fact/specs/Task.md` the same
+`Task`, recreating exactly the collision a reference exists to resolve. Two types
+landing on one local name without an explicit declaration is the ambiguity error
+decision 9's ladder reserves as unsilenceable.
 
-A context may assign an explicit alias in `vocabulary.yaml`, and the bare suffix
-is available that way — `a:Task` as `Task` is a fine thing to write when the
-context has only one `Task` and the author knows it. What is not available is
-*silently* landing there. Two types resolving to one local name without an alias
-is the ambiguity error decision 9's ladder reserves as unsilenceable.
+Prefix qualification (`a_Task`, `b_Task`) is a useful default *for imported
+vocabularies*, where a context composes types it did not author and needs
+distinguishable names without editing anyone's specification. It is a convenience
+at that boundary, not the type model.
 
-The capability being protected is worth naming: **a global identity can be
-projected into local relational surfaces without losing distinguishability.**
+The capability being protected is narrow and worth stating exactly: **a rich type
+reference can resolve to a specification while relational surfaces use a
+convenient local symbol, without losing which specification that symbol refers
+to.**
 
 ### 11. `.fact/` makes the context self-describing
 
@@ -573,8 +625,8 @@ projected into local relational surfaces without losing distinguishability.**
   vocabulary.yaml           # prefix map, foreign vocabulary aliases
   rules.yaml                # per-rule diagnostic levels
   adapters.yaml             # declared source adapters
-  types/<name>.md           # the type's specification document
-  types/<name>.schema.sql   # RFC 0006 declared column types
+  specs/<name>.md           # the type's specification, referenced by `type`
+  specs/<name>.schema.sql   # RFC 0006 declared column types
   schema.sql                # RFC 0007 context-wide relational contract
   cache/                    # dereferenced remote specifications, offline-first
 ```
@@ -586,7 +638,7 @@ flags remain, for compatibility and for overriding.
 ### 12. `.fact/` is not a magic zone
 
 Decisions 1 and 3 admit no exception for the profile's own directory. Documents under
-`.fact/types/` are **ordinary facts**, discovered, parsed and queryable like any
+`.fact/specs/` are **ordinary facts**, discovered, parsed and queryable like any
 other. The specification of a type is a fact about a type.
 
 The axiom is that every `.md` is a fact, not that every file is Markdown.
@@ -656,3 +708,5 @@ reads any OKF bundle and can emit one that `okflint` and `okf-cli` accept.
 - Whether the `.fact/vocabulary.yaml` prefix map should adopt JSON-LD `@context`
   syntax outright rather than a lookalike.
 - Which foreign vocabulary ships as a built-in alias set, if any.
+- Whether the specifications directory is `.fact/specs/` as written throughout,
+  or another name; the choice is deliberate only in being context-local.
