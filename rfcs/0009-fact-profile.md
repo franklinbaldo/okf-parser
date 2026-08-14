@@ -16,10 +16,10 @@ This RFC proposes `fact`: a profile that keeps every OKF bundle valid, moves the
 strictness to where the data is, and makes a bundle describe itself instead of
 depending on flags its consumers must remember to pass.
 
-`fact` is **opinionated in what it emits and permissive in what it accepts**.
-Every rule below that tightens something is advisory by default and promotable
-to normative by an explicit flag, following the precedent `--require-spec` and
-`--normative-spec` already set in this project.
+`fact` is **opinionated in what it emits and permissive in what it accepts**. It
+recognizes exactly one canonical form and reports every other convention on a
+graded ladder rather than rejecting it, so adopting the profile is a gradient a
+bundle walks at its own pace instead of a cliff it falls off.
 
 ## Motivation
 
@@ -73,7 +73,34 @@ it, and the same bundle validates differently depending on who ran the command.
 
 ## Decision
 
-### 1. `type` prefers a URI, ideally a dereferenceable URL
+### 1. Everything is a `.md`, and every `.md` is a fact
+
+There is no second kind of document. No filename is reserved, no directory is
+magic, and no Markdown file below the bundle root is outside the model. A README
+is a fact. An RFC is a fact. A type's own specification document is a fact.
+
+This is the axiom the rest of the profile follows from, and it is what makes
+decision 7 unavoidable rather than merely tidy.
+
+It also dissolves a problem the current implementation had to build a feature
+around. `README.md` explains that "a repository that keeps OKF knowledge next to
+code, a README and vendored dependencies has no root that validates cleanly,"
+because every unrelated Markdown file raises `OKF001`. That is a consequence of
+treating some `.md` files as data and the rest as trespassers. Once every `.md`
+is a fact, an unrelated file is not invalid — it is a fact whose type nobody
+declared, which decision 4 reports at `warn` and never as an error.
+
+`.factignore` therefore keeps existing, but its meaning changes: it selects
+**scope**, not validity. Excluding a vendored dependency says "these facts are
+not mine," not "these files are malformed." The distinction matters because the
+current framing forces a choice between an unvalidatable root and unresolvable
+cross-bundle links.
+
+The cost is deliberate: `fact` has almost no parse-level errors. Unreadable
+bytes, malformed YAML, and ambiguity are errors. Everything else is a level on
+decision 4's ladder.
+
+### 2. `type` prefers a URI, ideally a dereferenceable URL
 
 Three spellings are accepted:
 
@@ -83,12 +110,12 @@ type: fact:Procedure                     # CURIE resolved through the context
 type: https://okf.dev/types/Procedure    # full URI
 ```
 
-A bare string is accepted with an advisory diagnostic and is never an error.
 CURIE and full URI are the canonical forms `fact init` and `fact format` emit.
-`--normative-uri` promotes the advisory to an error for a bundle that has
-finished adopting.
+Every other convention stays readable; how loudly a non-canonical one is
+reported is decision 4's ladder, and the bundle chooses where it sits on that
+ladder.
 
-### 2. Dereferencing is never normative
+### 3. Dereferencing is never normative
 
 A `type` URL that 404s, times out, or is unreachable because the machine is
 offline **does not affect conformance**. Dereferencing is optional enrichment,
@@ -96,7 +123,50 @@ cached under `.fact/cache/`, and no validation path may require it. Making
 bundle validity depend on someone else's DNS would be a worse defect than
 anything this RFC repairs.
 
-### 3. Global identity and local name are separate
+### 4. Permissiveness is a graded ladder, not a binary
+
+A rule that is either silent or fatal cannot express "this works, but there is a
+better way." `fact` diagnostics therefore carry four levels:
+
+| level   | meaning                                                            |
+| ------- | ------------------------------------------------------------------ |
+| `error` | the bundle is ambiguous or unreadable; no configuration silences it |
+| `warn`  | well-formed, but the intent cannot be recovered by a consumer       |
+| `info`  | well-formed and recoverable, but not the canonical convention       |
+| `hint`  | canonical, with a stylistic improvement available                   |
+
+The rule that keeps the assignment from being arbitrary: **a level measures
+distance from canonical, not gravity of sin.** Applied to `type`:
+
+| authored `type`                              | level   | why                                       |
+| -------------------------------------------- | ------- | ----------------------------------------- |
+| `https://okf.dev/types/Procedure`            | —       | canonical                                 |
+| `fact:Procedure` under a declared prefix     | —       | canonical                                 |
+| `Procedure`, declared in `.fact/types/`      | `info`  | meaning is local but recoverable          |
+| `Procedure`, undeclared                      | `warn`  | nothing in the bundle says what it means   |
+| two types sharing one local name             | `error` | ambiguity, not style                      |
+
+The last row is the load-bearing one. Ambiguity survives maximal permissiveness
+because no amount of tolerance tells a consumer which of two types a declaration
+belongs to — which is why RFC 0006 already raises on a shared derived path.
+
+Levels are per-rule and declared in `.fact/context.yaml`, so a bundle states its
+own adoption stage instead of every consumer passing flags. CI needs one knob,
+`--fail-on <level>`, rather than one flag per rule; `--normative-spec` and the
+`--normative-uri` an earlier draft of this RFC proposed are what that
+proliferation looks like.
+
+**A rule may never be introduced at `error` in a minor release.** New rules enter
+at `info` or `warn` and are promoted only on a major version. Without that,
+"permissive" is a promise broken by the next release that adds a check.
+
+This has a consequence for the existing diagnostic codes. `OKF0xx` currently
+means error and `OKF1xx` means warning — the numbering encodes severity. Once
+levels are configurable that encoding becomes false, so under `fact` the code
+identifies the **rule**, the level is a separate configurable attribute, and
+`Severity` grows from two values to four.
+
+### 5. Global identity and local name are separate
 
 A URI identifies a type globally; it is not usable as a table name, a filename,
 or a column name. RFC 0007 defines the relational table name as the exact
@@ -109,11 +179,11 @@ the collision the URI was adopted to remove: `https://a.example/Task` and
 the CURIE's suffix under a declared prefix. Identity is the URI; the local name
 is what reaches DuckDB, paths and reports.
 
-### 4. `.fact/` makes the bundle self-describing
+### 6. `.fact/` makes the bundle self-describing
 
 ```text
 .fact/
-  context.yaml              # prefix map; foreign vocabulary aliases; declared adapters
+  context.yaml              # prefix map; foreign vocabulary aliases; rule levels; adapters
   types/<name>.md           # the type's specification document
   types/<name>.schema.sql   # RFC 0006 declared column types
   schema.sql                # RFC 0007 bundle relational contract
@@ -124,14 +194,20 @@ This subsumes the `--require-spec` and `--spec-template` flags: a consumer opens
 the directory and discovers the arrangement rather than being told about it. The
 flags remain, for compatibility and for overriding.
 
-### 5. `.fact/` is not a magic zone
+### 7. `.fact/` is not a magic zone
 
-Documents under `.fact/types/` are **ordinary concepts**, discovered, parsed and
-queryable like any other. The specification of a type is a fact about a type.
+Decision 1 admits no exception for the profile's own directory. Documents under
+`.fact/types/` are **ordinary facts**, discovered, parsed and queryable like any
+other. The specification of a type is a fact about a type.
+
+The axiom is that every `.md` is a fact, not that every file is Markdown.
+`context.yaml`, `schema.sql` and `cache/` are sidecars, not documents, and they
+carry no facts of their own — the same arrangement RFC 0006 already uses when it
+derives `rotina.schema.sql` beside `rotina.md`.
 Reserving `.fact/` as a region invisible to queries would reproduce exactly the
 `index.md`/`log.md` mistake this RFC exists to correct.
 
-### 6. Compatibility with foreign specifications is three mechanisms, not one
+### 8. Compatibility with foreign specifications is three mechanisms, not one
 
 "Compatible with other specs" collapses three distinct things, and conflating
 them is how a format acquires an unimplementable surface:
@@ -154,7 +230,7 @@ rule for this repository — `docs/architecture.md` already draws exactly this
 boundary between a strict core and source adaptation. This RFC promotes it from
 an internal architecture note to a mechanism the bundle declares.
 
-### 7. Many readers, one writer
+### 9. Many readers, one writer
 
 A format compatible with everything on both ends is unimplementable. The
 asymmetry is the constraint that keeps `fact` finite: **any number of adapters may
