@@ -7,7 +7,6 @@ from pathlib import Path
 from okf_parser.bundle import load_bundle, validate_path
 from okf_parser.relational_schema import parse_relational_schema, validate_relations
 
-
 RELATIONAL_SQL = """
 CREATE TABLE "Regra" (
     nome VARCHAR UNIQUE
