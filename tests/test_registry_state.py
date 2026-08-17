@@ -88,7 +88,12 @@ def _fetcher(
     return fetch
 
 
-def _pypi_payload(*, include_sdist: bool = True, wheel_digest: str | None = None) -> object:
+def _pypi_payload(
+    *,
+    include_sdist: bool = True,
+    wheel_digest: str | None = None,
+    extra_files: list[tuple[str, str]] | None = None,
+) -> object:
     files = [
         {
             "filename": f"okf_parser-{VERSION}-py3-none-any.whl",
@@ -102,6 +107,8 @@ def _pypi_payload(*, include_sdist: bool = True, wheel_digest: str | None = None
                 "digests": {"sha256": "b" * 64},
             }
         )
+    for filename, digest in extra_files or []:
+        files.append({"filename": filename, "digests": {"sha256": digest}})
     return {"urls": files}
 
 
@@ -270,5 +277,44 @@ def test_malformed_registry_json_is_unverifiable() -> None:
 def test_invalid_manifest_is_rejected_before_network_access() -> None:
     manifest = _manifest()
     manifest["artifacts"] = []
-    with pytest.raises(RegistryStateError, match="incomplete"):
+    with pytest.raises(RegistryStateError, match="missing an npm package"):
         inspect_registry_state(manifest, fetch=_fetcher({}))
+
+
+def _artifacts(manifest: dict[str, object]) -> list[dict[str, object]]:
+    raw = manifest["artifacts"]
+    assert isinstance(raw, list)
+    return [cast("dict[str, object]", item) for item in raw]
+
+
+def test_manifest_missing_sdist_is_rejected_before_network_access() -> None:
+    manifest = _manifest()
+    artifacts = _artifacts(manifest)
+    wheel = next(item for item in artifacts if item["kind"] == "python-wheel")
+    second_wheel = {**wheel, "kind": "python-wheel-second-platform"}
+    manifest["artifacts"] = [
+        *(item for item in artifacts if item["kind"] != "python-sdist"),
+        second_wheel,
+    ]
+    with pytest.raises(RegistryStateError, match="missing the python-sdist"):
+        inspect_registry_state(manifest, fetch=_fetcher({}))
+
+
+def test_manifest_accepts_multiple_wheel_kinds() -> None:
+    """One PyPI okf-parser package with several platform wheels, not one."""
+    manifest = _manifest()
+    artifacts = _artifacts(manifest)
+    wheel = next(item for item in artifacts if item["kind"] == "python-wheel")
+    second = dict(wheel)
+    second["kind"] = "python-wheel-second-platform"
+    second["filename"] = f"okf_parser-{VERSION}-py3-none-win_amd64.whl"
+    manifest["artifacts"] = [*artifacts, second]
+    routes = _expected_routes()
+    routes[PYPI_VERSION_URL] = _result(
+        PYPI_VERSION_URL,
+        200,
+        _pypi_payload(extra_files=[(second["filename"], "a" * 64)]),
+    )
+    report = inspect_registry_state(manifest, fetch=_fetcher(routes))
+    assert report["complete"] is True
+    assert report["safe_to_publish"] is True

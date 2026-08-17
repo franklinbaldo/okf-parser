@@ -111,6 +111,15 @@ def _string(mapping: dict[str, object], key: str, label: str) -> str:
     return value
 
 
+# Not a fixed enum here on purpose: registry_state.py stays decoupled from
+# release_contract.py's exact wheel-kind names (one per supported platform,
+# e.g. "python-wheel-linux-x86_64") so adding/removing a target platform
+# never requires touching this file. Any kind other than the two npm
+# packages is treated as a PyPI artifact for okf-parser.
+_NPM_KINDS: Final = {"npm-parser", "npm-duckdb"}
+_MIN_PYPI_ARTIFACTS: Final = 2  # at least one wheel + the sdist
+
+
 def _artifact_index(manifest: dict[str, object]) -> tuple[str, dict[str, Artifact]]:
     version = manifest.get("version")
     artifacts = manifest.get("artifacts")
@@ -125,9 +134,13 @@ def _artifact_index(manifest: dict[str, object]) -> tuple[str, dict[str, Artifac
         if kind in indexed:
             _fail(f"duplicate manifest artifact kind {kind!r}")
         indexed[kind] = item
-    expected = {"python-wheel", "python-sdist", "npm-parser", "npm-duckdb"}
-    if set(indexed) != expected:
-        _fail("manifest artifact set is incomplete")
+    if not _NPM_KINDS.issubset(indexed):
+        _fail("manifest artifact set is missing an npm package")
+    pypi_kinds = set(indexed) - _NPM_KINDS
+    if len(pypi_kinds) < _MIN_PYPI_ARTIFACTS:
+        _fail("manifest artifact set is missing a PyPI wheel or sdist")
+    if not any(kind == "python-sdist" for kind in pypi_kinds):
+        _fail("manifest artifact set is missing the python-sdist")
     return version, indexed
 
 
@@ -173,8 +186,9 @@ def _unverifiable_entry(
 
 def _pypi_expected_files(artifacts: dict[str, Artifact]) -> dict[str, str]:
     expected: dict[str, str] = {}
-    for kind in ("python-wheel", "python-sdist"):
-        item = artifacts[kind]
+    for kind, item in artifacts.items():
+        if kind in _NPM_KINDS:
+            continue
         expected[_string(item, "filename", kind)] = _string(item, "sha256", kind)
     return expected
 
