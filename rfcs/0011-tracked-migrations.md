@@ -2,22 +2,28 @@
 type: RFC
 title: Tracked bundle migrations
 status: proposed
-description: Add an idempotent, ledger-tracked migrate command that runs a schema-evolving apply script at most once per bundle, verified by content hash rather than by inferring re-application from the ALTER's catalog side effect.
+description: Add an idempotent, chain-tracked migrate command that runs a schema-evolving apply script at most once per bundle, per concept type, ordered the way Alembic orders revisions — verified by content hash and an explicit depends_on link rather than by inferring re-application from the ALTER's catalog side effect.
 ---
 
 # RFC 0011: Tracked bundle migrations
 
 ## Summary
 
-Add `okf-parser migrate <bundle> <id> --sql "..."` — the same leading-ALTER
-+ trailing-UPDATE contract `apply` already accepts (RFC 0005), but recorded
-in a persistent, bundle-local ledger keyed by `id` so running it again is
-always safe: unchanged `sql` for a known `id` is a no-op success, changed
-`sql` for a known `id` is a rejected integrity error, and an unknown `id`
-runs the script exactly as `apply` would and then records it. The ledger
-entry is itself an ordinary OKF concept (`type: Migration`), so it is
-readable, diffable, and greppable the same way as everything else in a
-bundle — no side-channel state file, no reserved binary format.
+Add `okf-parser migrate <bundle> <id> --for-type "<type>" --depends-on
+<id|(none)> --sql "..."` — the same leading-ALTER + trailing-UPDATE
+contract `apply` already accepts (RFC 0005), but recorded in a persistent,
+bundle-local, **per-type chain**, the same shape as Alembic's
+`revision`/`down_revision`: unchanged `sql` for a known `id` is a no-op
+success; changed `sql` for a known `id` is a rejected integrity error;
+`--depends-on` naming anything other than that type's current chain tip
+(including `(none)` when the type already has one) is a rejected ordering
+error, attempted before the script ever runs; and an unknown `id` whose
+`--depends-on` matches the tip runs the script exactly as `apply` would
+and then extends the chain. The ledger entry is itself an ordinary OKF
+concept (`type: Migration`), so it is readable, diffable, and greppable
+the same way as everything else in a bundle — no side-channel state file,
+no reserved binary format, and the type's migration history is the chain
+itself, not a flag on an otherwise-unordered set of ids.
 
 ## Motivation
 
@@ -52,16 +58,31 @@ motivated #151/#152 — has to read the whole bundle first, itself, only to
 decide whether to send the `ALTER` at all. That bookkeeping belongs to the
 parser, once, not to every consumer.
 
+A flat set of `id`s checked only by hash (an earlier draft of this RFC)
+still leaves a second failure mode open: nothing stops two callers, or
+one caller run twice against diverged bundle copies, from applying the
+*same set* of migrations in a *different order* — silently reordered
+`ADD COLUMN`s land the same final schema, but a rename followed by a
+retype is not commutative with the reverse order in general. Alembic
+closes this with `down_revision`: every revision names exactly the one
+revision it was authored on top of, so the tool can refuse to apply a
+revision whose declared parent is not the current tip, and "what has run,
+in what order" is a linked list, not a set. `migrate` adopts the same
+shape, scoped per concept type (`apply`'s own single-type-per-script
+invariant already makes "type" the natural unit a chain belongs to —
+there is no single global schema version to be tip of).
+
 ## Non-goals
 
-- A general workflow/DAG engine, dependency ordering between migrations,
-  or a `migrate up`/`down` pair. `migrate` runs exactly the one migration
-  named by `id`; a caller sequences its own migrations, the same way it
-  already sequences its own `apply` calls.
+- A general workflow/DAG engine, branching, or a `migrate up`/`down`
+  pair. Per type, the chain is linear — one tip, one next migration — the
+  same restriction Alembic places on a single branch. `migrate` runs
+  exactly the one migration named by `id`; a caller sequences its own
+  calls, the same way it already sequences its own `apply` calls.
 - Retroactively making arbitrary `apply` scripts idempotent. `apply`'s
   contract (RFC 0005) does not change. `migrate` is a second entry point
   built from the same primitives, not a mode switch on `apply`.
-- Cross-bundle migration state. The ledger lives inside the bundle it
+- Cross-bundle migration state. The chain lives inside the bundle it
   migrates; there is no registry of "migrations run across every bundle
   I've ever touched."
 
@@ -73,7 +94,9 @@ A migration record is a normal OKF document:
 ---
 type: Migration
 id: add-campo-novo
-sql_sha256: 3f9a2b...   # sha256 of the exact --sql text, hex-encoded
+for_type: Tipo
+depends_on: rename-campo-antigo   # previous migration id for *this* for_type, or omitted for the first
+sql_sha256: 3f9a2b...             # sha256 of the exact --sql text, hex-encoded
 ran_at: 2026-08-17T19:04:00Z
 ---
 ```
@@ -81,7 +104,11 @@ ran_at: 2026-08-17T19:04:00Z
 stored at a fixed, conventional path derived from `id`:
 `migrations/<id>.md` (the id, not a slug of the SQL, so the filename is
 stable across content-preserving edits to the SQL's whitespace — which
-`sql_sha256` still catches as a content change).
+`sql_sha256` still catches as a content change). `id` is global across the
+bundle (a migration touching one type must still not collide in name with
+one touching another), but `depends_on` only ever names another migration
+sharing the same `for_type` — the chain-tip lookup below filters by
+`for_type` before it looks at `depends_on` at all.
 
 This is a deliberate choice over a reserved binary/JSON state file or a
 DuckDB table living only in the ephemeral in-memory catalog `apply`
@@ -109,33 +136,55 @@ already tears down after every run:
 ## Command contract
 
 ```
-okf-parser migrate <bundle> <id> --sql "<leading ALTERs>; <trailing UPDATE>" [--write]
+okf-parser migrate <bundle> <id> --for-type "<type>" \
+  --depends-on <previous-id-or-omit-for-the-first> \
+  --sql "<leading ALTERs>; <trailing UPDATE>" [--write]
 ```
 
 Same `--sql` grammar `apply` accepts: zero or more leading
 `ALTER TABLE ... ADD/DROP/RENAME COLUMN` statements, then exactly one
-trailing `UPDATE`. Same `--write`/dry-run split as `apply` and `import`:
-without `--write`, nothing is touched, the result reports what *would*
-happen.
+trailing `UPDATE` against `--for-type`'s table (the pre-existing "script
+touched more than one type" check already rejects a script whose `ALTER`/
+`UPDATE` names a different table). Same `--write`/dry-run split as `apply`
+and `import`: without `--write`, nothing is touched, the result reports
+what *would* happen — including which chain-order outcome it would be.
 
 ### Decision, before any bundle mutation is attempted
 
 1. Load the bundle's `Migration` concepts (a normal `load_bundle` +
-   `concept_type == "Migration"` filter — no new bundle-loading code).
-2. No concept with this `id` exists → **run** (see below), then record.
-3. A concept with this `id` exists and its `sql_sha256` equals
-   `sha256(sql)` → **no-op success**. `{"succeeded": true, "written":
-   false, "already_applied": true, "ran_at": "<recorded timestamp>"}`.
-   Nothing is read from or written to the bundle beyond the ledger
-   lookup itself — deliberately cheaper than materializing every type's
-   table only to find there's nothing to do.
-4. A concept with this `id` exists and its `sql_sha256` differs →
-   **integrity error**, no bundle mutation attempted:
-   `{"succeeded": false, "error": "migration \"<id>\" already ran with
-   different SQL (recorded sha256 <a>, given <b>)"}`. A migration is
-   identified by `id`; the same `id` must always mean the same operation,
-   the same way a real migration tool (Alembic, Flyway, ...) refuses to
-   silently re-diverge history.
+   `concept_type == "Migration"` filter — no new bundle-loading code) and
+   index them by `id`, plus the subset with `for_type == --for-type`.
+2. **A concept with this `id` already exists.** Its `for_type` and
+   `depends_on` must equal what was just given (an `id` names one
+   operation permanently, not just one SQL text) — a mismatch on either
+   is an integrity error, same shape as a `sql_sha256` mismatch below.
+   Then:
+   - `sql_sha256` equals `sha256(sql)` → **no-op success**.
+     `{"succeeded": true, "written": false, "already_applied": true,
+     "ran_at": "<recorded timestamp>"}`. Nothing else about the bundle is
+     read — deliberately cheaper than materializing `--for-type`'s table
+     only to find there's nothing to do.
+   - `sql_sha256` differs → **integrity error**, no bundle mutation
+     attempted: `{"succeeded": false, "error": "migration \"<id>\"
+     already ran with different SQL (recorded sha256 <a>, given <b>)"}`.
+3. **No concept with this `id` exists.** Compute `--for-type`'s current
+   chain tip: the one `Migration` concept with that `for_type` that no
+   other such concept's `depends_on` names (the chain has exactly one row
+   with no incoming edge, or the type has no migrations yet — anything
+   else, a fork or a cycle, is a pre-existing corruption this step
+   reports rather than silently resolves). Then:
+   - `--depends-on` names that tip (or the type has no migrations yet and
+     `--depends-on` was omitted) → **run** (see below), then extend the
+     chain.
+   - Anything else — names a migration that is not the tip, names one
+     under a different `for_type`, omits `--depends-on` when a tip
+     already exists, or names one when the type has none yet — is a
+     **rejected ordering error**, no bundle mutation attempted:
+     `{"succeeded": false, "error": "migration \"<id>\" declares
+     depends_on <given>, but the current tip for type \"<for_type>\" is
+     <tip-or-none>"}`. This is the check that makes reordering or
+     skipping a migration fail loudly instead of landing an
+     order-dependent schema silently.
 
 ### Run, when the id is unknown
 
@@ -184,11 +233,15 @@ reject, not silently overwrite.
 
 ## What `migrate` deliberately does not solve
 
-- **Concurrent migrations with different ids.** Two `migrate` invocations
-  racing on the same bundle are caught by the existing preview-token /
-  manifest-freshness conflict check (RFC 0005) the same as two concurrent
-  `apply` calls — one wins, the other reports a conflict and must retry.
-  No new locking primitive.
+- **Concurrent migrations racing for the same chain tip.** Two `migrate`
+  invocations both computing `--for-type`'s tip before either has written
+  can both believe they extend it. The existing preview-token /
+  manifest-freshness conflict check (RFC 0005) still catches this — the
+  loser's write-time recheck sees the winner's new `migrations/<id>.md`
+  that was not in its snapshot and reports a conflict, the same as two
+  concurrent `apply` calls racing on any other file. No new locking
+  primitive; the tip-mismatch check above handles *authoring* order, this
+  existing mechanism handles *racing* order.
 - **Rollback.** A migration's `UPDATE`/`ALTER` is forward-only, same as
   `apply`. Undoing one is authoring and running a new migration with a
   new `id`, the ordinary way schema history works in this model.
