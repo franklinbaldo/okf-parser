@@ -12,6 +12,8 @@ from typing import TYPE_CHECKING, cast
 import pytest
 
 from scripts.release_contract import (
+    KINDS,
+    WHEEL_KINDS,
     BuildContext,
     ContractError,
     build_manifest,
@@ -87,6 +89,17 @@ NPM_MEMBERS = (
     "dist/cli.js",
     "dist/mcp.js",
 )
+# One concrete, glob-matching filename per platform wheel kind — see
+# WHEEL_PATTERNS in scripts/release_contract.py for the patterns these must
+# satisfy. Real CI fills in the exact manylinux/macOS policy numbers; tests
+# only need *a* filename each pattern accepts.
+WHEEL_FILENAMES: dict[str, str] = {
+    "python-wheel-linux-x86_64": f"okf_parser-{VERSION}-py3-none-manylinux_2_28_x86_64.whl",
+    "python-wheel-linux-aarch64": f"okf_parser-{VERSION}-py3-none-manylinux_2_28_aarch64.whl",
+    "python-wheel-windows-x86_64": f"okf_parser-{VERSION}-py3-none-win_amd64.whl",
+    "python-wheel-macos-x86_64": f"okf_parser-{VERSION}-py3-none-macosx_10_12_x86_64.whl",
+    "python-wheel-macos-arm64": f"okf_parser-{VERSION}-py3-none-macosx_11_0_arm64.whl",
+}
 
 
 def _write_artifacts(release: Path, extra: dict[str, tuple[str, ...]] | None = None) -> None:
@@ -95,14 +108,15 @@ def _write_artifacts(release: Path, extra: dict[str, tuple[str, ...]] | None = N
     npm_dir = release / "npm"
     python_dir.mkdir(parents=True)
     npm_dir.mkdir()
-    wheel = python_dir / f"okf_parser-{VERSION}-py3-none-any.whl"
-    with zipfile.ZipFile(wheel, mode="w") as archive:
-        archive.writestr(
-            f"okf_parser-{VERSION}.dist-info/METADATA",
-            f"Metadata-Version: 2.4\nName: okf-parser\nVersion: {VERSION}\n",
-        )
-        for member in WHEEL_MEMBERS + additions.get("python-wheel", ()):
-            archive.writestr(member, "content\n")
+    for kind in WHEEL_KINDS:
+        wheel = python_dir / WHEEL_FILENAMES[kind]
+        with zipfile.ZipFile(wheel, mode="w") as archive:
+            archive.writestr(
+                f"okf_parser-{VERSION}.dist-info/METADATA",
+                f"Metadata-Version: 2.4\nName: okf-parser\nVersion: {VERSION}\n",
+            )
+            for member in WHEEL_MEMBERS + additions.get(kind, ()):
+                archive.writestr(member, "content\n")
     root = f"okf_parser-{VERSION}"
     with tarfile.open(python_dir / f"okf_parser-{VERSION}.tar.gz", mode="w:gz") as archive:
         _tar_member(
@@ -162,7 +176,7 @@ def test_manifest_records_and_reverifies_exact_artifacts(tmp_path: Path) -> None
     manifest = _build(tmp_path)
     artifacts = manifest["artifacts"]
     assert isinstance(artifacts, list)
-    assert len(artifacts) == 4
+    assert len(artifacts) == len(KINDS)
     assert verify_local(tmp_path, tmp_path / "release" / "manifest.json") == manifest
 
 
@@ -213,14 +227,14 @@ def test_verify_contents_accepts_complete_distributions(tmp_path: Path) -> None:
     assert report["version"] == VERSION
     artifacts = report["artifacts"]
     assert isinstance(artifacts, dict)
-    assert set(artifacts) == {"python-wheel", "python-sdist", "npm-parser", "npm-duckdb"}
+    assert set(artifacts) == set(KINDS)
 
 
 def test_verify_contents_rejects_missing_module(tmp_path: Path) -> None:
     _write_source(tmp_path)
     release = tmp_path / "release"
     _write_artifacts(release)
-    wheel = release / "python" / f"okf_parser-{VERSION}-py3-none-any.whl"
+    wheel = release / "python" / WHEEL_FILENAMES["python-wheel-linux-x86_64"]
     with zipfile.ZipFile(wheel) as archive:
         kept = [name for name in archive.namelist() if not name.endswith("cli.py")]
         contents = {name: archive.read(name) for name in kept}
@@ -239,7 +253,7 @@ def test_verify_contents_rejects_missing_module(tmp_path: Path) -> None:
         ("python-sdist", "src/okf_parser/__pycache__/cli.pyc", "excluded directory"),
         ("npm-parser", "src/index.ts", "source-only or development path"),
         ("npm-duckdb", ".npmrc", "excluded file name"),
-        ("python-wheel", "okf_parser/signing.pem", "excluded file type"),
+        ("python-wheel-linux-x86_64", "okf_parser/signing.pem", "excluded file type"),
     ],
 )
 def test_verify_contents_rejects_unshippable_members(

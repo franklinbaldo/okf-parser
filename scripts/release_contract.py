@@ -25,11 +25,44 @@ ACTION_REF: Final = re.compile(
 PROTOCOL_VERSION: Final = re.compile(
     r'^export const PROTOCOL_VERSION = "(?P<version>[^"]+)";\s*$', re.MULTILINE
 )
-KINDS: Final = ("python-wheel", "python-sdist", "npm-parser", "npm-duckdb")
-Kind = Literal["python-wheel", "python-sdist", "npm-parser", "npm-duckdb"]
+# One `bindings="bin"` maturin wheel per supported platform — no separate
+# `okf-parser-native` companion package (RFC: single public `okf-parser`
+# distribution, Rust embedded). Each wheel is `py3-none-<platform tag>`,
+# never `py3-none-any`: PyPI rejects unqualified `linux_x86_64`/`macosx_*`
+# platform tags on binary wheels (only `manylinux_*`/`musllinux_*` are
+# accepted for Linux), which is exactly what silently broke the v0.41.3
+# release — see okf-parser#147. The wheel-pattern glob below is
+# deliberately loose on the exact manylinux policy number
+# (`manylinux*` not `manylinux_2_28`) so bumping the manylinux container
+# image in the workflow doesn't also require editing this contract.
+WHEEL_KINDS: Final = (
+    "python-wheel-linux-x86_64",
+    "python-wheel-linux-aarch64",
+    "python-wheel-windows-x86_64",
+    "python-wheel-macos-x86_64",
+    "python-wheel-macos-arm64",
+)
+WHEEL_PATTERNS: Final[dict[str, str]] = {
+    "python-wheel-linux-x86_64": "okf_parser-{version}-py3-none-manylinux*_x86_64.whl",
+    "python-wheel-linux-aarch64": "okf_parser-{version}-py3-none-manylinux*_aarch64.whl",
+    "python-wheel-windows-x86_64": "okf_parser-{version}-py3-none-win_amd64.whl",
+    "python-wheel-macos-x86_64": "okf_parser-{version}-py3-none-macosx_*_x86_64.whl",
+    "python-wheel-macos-arm64": "okf_parser-{version}-py3-none-macosx_*_arm64.whl",
+}
+KINDS: Final = (*WHEEL_KINDS, "python-sdist", "npm-parser", "npm-duckdb")
+Kind = Literal[
+    "python-wheel-linux-x86_64",
+    "python-wheel-linux-aarch64",
+    "python-wheel-windows-x86_64",
+    "python-wheel-macos-x86_64",
+    "python-wheel-macos-arm64",
+    "python-sdist",
+    "npm-parser",
+    "npm-duckdb",
+]
 Artifact = dict[str, object]
 ROOT_PREFIXES: Final[dict[str, str | None]] = {
-    "python-wheel": None,
+    **dict.fromkeys(WHEEL_KINDS),
     "python-sdist": "okf_parser-{version}/",
     "npm-parser": "package/",
     "npm-duckdb": "package/",
@@ -110,11 +143,12 @@ class ContentPolicy:
     forbidden_prefixes: tuple[str, ...] = ()
 
 
+_WHEEL_CONTENT_POLICY: Final = ContentPolicy(
+    required=("okf_parser/__init__.py", "okf_parser/cli.py", "okf_parser/parser.py"),
+    forbidden_prefixes=("tests/", "scripts/", "typescript/", "typescript-duckdb/"),
+)
 CONTENT_POLICIES: Final[dict[str, ContentPolicy]] = {
-    "python-wheel": ContentPolicy(
-        required=("okf_parser/__init__.py", "okf_parser/cli.py", "okf_parser/parser.py"),
-        forbidden_prefixes=("tests/", "scripts/", "typescript/", "typescript-duckdb/"),
-    ),
+    **dict.fromkeys(WHEEL_KINDS, _WHEEL_CONTENT_POLICY),
     "python-sdist": ContentPolicy(
         required=("PKG-INFO", "README.md", "pyproject.toml", "src/okf_parser/__init__.py"),
         forbidden_prefixes=(),
@@ -289,11 +323,14 @@ def verify_source(root: Path, tag: str | None = None) -> SourceContract:
 
 def _expected(version: str) -> tuple[ExpectedArtifact, ...]:
     return (
-        ExpectedArtifact(
-            "python-wheel",
-            "okf-parser",
-            "python",
-            pattern=f"okf_parser-{version}-*.whl",
+        *(
+            ExpectedArtifact(
+                kind,
+                "okf-parser",
+                "python",
+                pattern=WHEEL_PATTERNS[kind].format(version=version),
+            )
+            for kind in WHEEL_KINDS
         ),
         ExpectedArtifact(
             "python-sdist",
@@ -385,7 +422,7 @@ def _tar_names(path: Path, kind: Kind) -> list[str]:
 
 
 def _archive_names(path: Path, kind: Kind) -> list[str]:
-    if kind == "python-wheel":
+    if kind in WHEEL_KINDS:
         try:
             with zipfile.ZipFile(path) as archive:
                 return [item.filename for item in archive.infolist() if not item.is_dir()]
@@ -457,7 +494,7 @@ def verify_contents(root: Path, manifest_path: Path) -> dict[str, object]:
 
 
 def _identity(path: Path, kind: Kind) -> tuple[str, str]:
-    if kind == "python-wheel":
+    if kind in WHEEL_KINDS:
         return _wheel_identity(path)
     data = _tar_metadata(path, kind)
     if kind == "python-sdist":
