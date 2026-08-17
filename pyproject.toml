@@ -1,6 +1,6 @@
 [project]
 name = "okf-parser"
-version = "0.42.1"
+version = "0.42.2"
 description = "Relational inspection and validation for Open Knowledge Format bundles"
 readme = "README.md"
 requires-python = ">=3.12"
