@@ -103,7 +103,7 @@ The registry command performs anonymous HTTPS reads only. It compares the manife
 
 ## Production publication
 
-`.github/workflows/release.yml` runs only for stable `vX.Y.Z` tag pushes. It builds and verifies the release set, uploads the exact tested artifact tree, and gives registry publication to a separate job using the GitHub `pypi` environment and OIDC trusted publishing.
+`.github/workflows/publish.yml` runs only for stable `vX.Y.Z` tag pushes. It builds and verifies the release set, uploads the exact tested artifact tree, and gives registry publication to a separate job using the GitHub `pypi` environment and OIDC trusted publishing.
 
 Publication order is:
 
@@ -113,6 +113,6 @@ Publication order is:
 4. publish the npm DuckDB adapter;
 5. create the GitHub Release only after all registry publication steps succeed.
 
-The workflow does not use a long-lived PyPI token. The PyPI Trusted Publisher must match repository `franklinbaldo/okf-parser`, workflow `release.yml`, and GitHub environment `pypi`.
+The workflow does not use a long-lived PyPI token. The PyPI Trusted Publisher must match repository `franklinbaldo/okf-parser`, workflow `publish.yml`, and GitHub environment `pypi`.
 
 npm publication follows the same no-overwrite rule and should use npm Trusted Publishing. A retry first checks whether an exact package version already exists and skips immutable state that has already been published.

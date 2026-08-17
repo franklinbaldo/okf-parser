@@ -4,7 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/release-dry-run.yml"
-      - ".github/workflows/release.yml"
+      - ".github/workflows/publish.yml"
       - "changelog/**"
       - "docs/releasing.md"
       - "native-npm-linux-x64/**"
