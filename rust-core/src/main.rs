@@ -6,7 +6,7 @@ use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process::{Command as ProcessCommand, ExitStatus};
 #[derive(Parser)]
-#[command(name = "okf-parser", version, about = "Native OKF engine")]
+#[command(name = "okf-parser", version = env!("CARGO_PKG_VERSION"), about = "Native OKF engine")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
