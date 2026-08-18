@@ -54,8 +54,6 @@ def harden_release_workflow(path: str, *, public_smoke: bool) -> None:
         "          args: --release --locked --out dist --compatibility pypi\n",
     )
 
-    # The build image already supplies a working pip. Avoid pulling an unpinned
-    # newer pip into a release gate before installing the exact wheel.
     text = text.replace('          "$bin/python" -m pip install --quiet --upgrade pip\n', "")
 
     smoke_line = '          "$bin/okf-parser" duckdb "$RUNNER_TEMP/fixture" "$RUNNER_TEMP/bundle.duckdb"\n'
@@ -71,13 +69,13 @@ def harden_release_workflow(path: str, *, public_smoke: bool) -> None:
         raise RuntimeError(f"{path}: native npm build block changed")
     text = text.replace(old_native, new_native)
 
-    verify_anchor = """          listing="$(tar -tzf "$npm_native")"\n          grep -qx 'package/bin/okf-core' <<<"$listing"\n          grep -qx 'package/package.json' <<<"$listing"\n"""
-    if text.count(verify_anchor) != 1:
-        raise RuntimeError(f"{path}: native npm verification block changed")
-    verify_reuse = verify_anchor + """          wheel=$(find release/python -maxdepth 1 -type f -name "okf_parser-${version}-py3-none-manylinux*_x86_64.whl" -print -quit)\n          python scripts/native_from_wheel.py verify "$wheel" "$npm_native"\n"""
-    text = text.replace(verify_anchor, verify_reuse)
-
     if public_smoke:
+        verify_anchor = """          listing="$(tar -tzf "$npm_native")"\n          grep -qx 'package/bin/okf-core' <<<"$listing"\n          grep -qx 'package/package.json' <<<"$listing"\n"""
+        if text.count(verify_anchor) != 1:
+            raise RuntimeError(f"{path}: publish native npm verification block changed")
+        verify_reuse = verify_anchor + """          wheel=$(find release/python -maxdepth 1 -type f -name "okf_parser-${version}-py3-none-manylinux*_x86_64.whl" -print -quit)\n          python scripts/native_from_wheel.py verify "$wheel" "$npm_native"\n"""
+        text = text.replace(verify_anchor, verify_reuse)
+
         old_matrix = "        os: [ubuntu-latest, windows-latest, macos-14]\n"
         new_matrix = (
             "        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-15, macos-15-intel]\n"
@@ -96,6 +94,12 @@ def harden_release_workflow(path: str, *, public_smoke: bool) -> None:
             "      - name: Re-smoke the host wheel without a Rust toolchain\n",
         )
     else:
+        verify_anchor = """          native_listing="$(tar -tzf "$native")"\n          grep -qx 'package/bin/okf-core' <<<"$native_listing"\n          grep -qx 'package/package.json' <<<"$native_listing"\n"""
+        if text.count(verify_anchor) != 1:
+            raise RuntimeError(f"{path}: dry-run native npm verification block changed")
+        verify_reuse = verify_anchor + """          wheel=$(find release/python -maxdepth 1 -type f -name "okf_parser-${expected_version}-py3-none-manylinux*_x86_64.whl" -print -quit)\n          python scripts/native_from_wheel.py verify "$wheel" "$native"\n"""
+        text = text.replace(verify_anchor, verify_reuse)
+
         old_comment = """        # Only the manylinux x86_64 wheel is installable on this (ubuntu-latest\n        # x86_64) runner — the Windows/macOS/aarch64 wheels are verified for\n        # structure above, not by installing them here (cross-platform install\n        # smoke tests run in okf-parser#147's actual release.yml, on runners\n        # matching each wheel's platform). The sdist install below is the one\n"""
         new_comment = """        # Every platform wheel is already installed and exercised in its native\n        # build job above. This aggregate job rechecks the host x86_64 wheel and\n        # the sdist as consumers; the sdist install below is the one\n"""
         if text.count(old_comment) != 1:
@@ -185,7 +189,7 @@ def update_release_contract_tests() -> None:
             raise RuntimeError(f"{path}: test anchor occurs {count} times: {old[:60]!r}")
         text = text.replace(old, new)
 
-    anchor = """def test_verify_source_rejects_protocol_drift(tmp_path: Path) -> None:\n"""
+    anchor = "def test_verify_source_rejects_protocol_drift(tmp_path: Path) -> None:\n"
     test = """def test_verify_source_rejects_stale_native_optional_dependency(tmp_path: Path) -> None:\n    _write_source(tmp_path)\n    parser_path = tmp_path / "typescript" / "package.json"\n    parser = json.loads(parser_path.read_text(encoding="utf-8"))\n    parser["optionalDependencies"]["okf-parser-native-linux-x64"] = "1.2.2"\n    parser_path.write_text(json.dumps(parser), encoding="utf-8")\n    with pytest.raises(ContractError, match="native optional dependency"):\n        verify_source(tmp_path)\n\n\n"""
     if text.count(anchor) != 1:
         raise RuntimeError(f"{path}: protocol test anchor changed")
