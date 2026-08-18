@@ -1,6 +1,6 @@
 [package]
 name = "okf-core"
-version = "0.42.5"
+version = "0.42.6"
 edition = "2024"
 license = "MIT"
 description = "Native OKF CLI and compatibility adapters"
@@ -9,9 +9,16 @@ description = "Native OKF CLI and compatibility adapters"
 name = "okf-parser"
 path = "src/main.rs"
 
+[features]
+default = ["bundled-duckdb"]
+# Compile DuckDB from source (safe default for local/dev builds). CI wheel
+# jobs disable this (--no-default-features) and set DUCKDB_DOWNLOAD_LIB=1
+# to link a prebuilt dynamic library instead (see rfcs and issue #154).
+bundled-duckdb = ["duckdb/bundled"]
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-duckdb = { version = "1.10505.0", features = ["bundled"] }
+duckdb = { version = "1.10505.0", default-features = false }
 okf-engine = { path = "../okf-engine", version = "0.39.1" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

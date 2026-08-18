@@ -1,6 +1,6 @@
 {
   "name": "okf-parser-native-linux-x64",
-  "version": "0.42.5",
+  "version": "0.42.6",
   "description": "Linux x64 native okf-core engine for okf-parser",
   "license": "MIT",
   "os": ["linux"],

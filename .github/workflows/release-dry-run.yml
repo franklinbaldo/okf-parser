@@ -54,7 +54,8 @@ jobs:
         with:
           target: ${{ matrix.target }}
           manylinux: 2_28
-          args: --release --locked --out dist
+          args: --release --locked --out dist --no-default-features
+          docker-options: -e DUCKDB_DOWNLOAD_LIB=1
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -72,9 +73,11 @@ jobs:
 
       - name: Build Windows wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        env:
+          DUCKDB_DOWNLOAD_LIB: "1"
         with:
           target: x64
-          args: --release --locked --out dist
+          args: --release --locked --out dist --no-default-features
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -96,9 +99,11 @@ jobs:
 
       - name: Build macOS wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        env:
+          DUCKDB_DOWNLOAD_LIB: "1"
         with:
           target: ${{ matrix.target }}
-          args: --release --locked --out dist
+          args: --release --locked --out dist --no-default-features
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
