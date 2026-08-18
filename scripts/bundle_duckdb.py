@@ -35,6 +35,7 @@ import zipfile
 from pathlib import Path
 
 _SCRIPT_SUFFIXES = (".data/scripts/okf-parser", ".data/scripts/okf-parser.exe")
+_DIAGNOSTIC_PREVIEW_BYTES = 2000
 
 
 def _record_hash(data: bytes) -> str:
@@ -66,9 +67,10 @@ def _check_native_binary(binary_path: Path, platform: str) -> None:
         return
     data = binary_path.read_bytes()
     if not data.startswith(expected):
+        preview = data[:_DIAGNOSTIC_PREVIEW_BYTES]
         message = (
             f"expected a native binary at {binary_path} for platform {platform!r}, "
-            f"got {len(data)} bytes starting with {data[:16]!r}"
+            f"got {len(data)} bytes:\n{preview!r}"
         )
         raise SystemExit(message)
 
@@ -135,6 +137,9 @@ def bundle(wheel_path: Path, lib_path: Path, platform: str) -> None:
     """Add `lib_path` next to the packaged executable and fix its rpath."""
     with zipfile.ZipFile(wheel_path) as source:
         names = source.namelist()
+        sys.stderr.write(f"wheel entries in {wheel_path.name}:\n")
+        for name in names:
+            sys.stderr.write(f"  {name} ({source.getinfo(name).file_size} bytes)\n")
         script_entry = _find_script_entry(names)
         record_entry = _find_record_entry(names)
         entries = {name: (source.getinfo(name), source.read(name)) for name in names}
