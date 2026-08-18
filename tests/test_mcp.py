@@ -117,7 +117,7 @@ def test_mcp_public_schemas_keep_aliases_and_preview_write_pairs_match() -> None
     assert "digests" in tools["inventory"].inputSchema["properties"]
 
     schema_format = tools["schema"].inputSchema["properties"]["format"]
-    assert schema_format["enum"] == ["json", "zod", "pydantic"]
+    assert schema_format["enum"] == ["json", "zod", "pydantic", "graphql"]
     assert "spec_template" in tools["duckdb_export"].inputSchema["properties"]
 
 
