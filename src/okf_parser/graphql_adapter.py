@@ -12,7 +12,6 @@ from datetime import date, datetime
 from decimal import Decimal
 from importlib import import_module
 from pathlib import Path
-from types import ModuleType
 from typing import TYPE_CHECKING
 from uuid import UUID
 
@@ -31,6 +30,8 @@ from okf_parser.schema_contract import (
 from okf_parser.schema_export import build_schema_contracts
 
 if TYPE_CHECKING:
+    from types import ModuleType
+
     from graphql import GraphQLSchema
 
 _GRAPHQL_NAME_RE = re.compile(r"^[_A-Za-z][_0-9A-Za-z]*$")
@@ -54,10 +55,11 @@ _GENERIC_FIELDS = frozenset(
 _GRAPHQL_INSTALL_MESSAGE = (
     "GraphQL execution requires the optional dependency; install okf-parser[graphql]"
 )
+_MAX_PAGE_SIZE = 1000
 _PAGINATION_MESSAGE = "GraphQL pagination requires 0 <= offset and 1 <= first <= 1000"
 
 
-class GraphQLAdapterUnavailable(RuntimeError):
+class GraphQLAdapterUnavailableError(RuntimeError):
     """Raised when executable GraphQL support is requested without its extra."""
 
 
@@ -90,7 +92,7 @@ def _graphql_module() -> ModuleType:
     try:
         return import_module("graphql")
     except ModuleNotFoundError as exc:
-        raise GraphQLAdapterUnavailable(_GRAPHQL_INSTALL_MESSAGE) from exc
+        raise GraphQLAdapterUnavailableError(_GRAPHQL_INSTALL_MESSAGE) from exc
 
 
 def _ascii_identifier(value: str, prefix: str) -> str:
@@ -175,26 +177,21 @@ def _is_graphql_int(node: ScalarNode) -> bool:
 def _scalar_graphql_type(node: ScalarNode) -> str:
     declared = node.declared_type
     if declared is not None:
-        family = declared.family
-        if family == "string":
-            return "String"
-        if family == "boolean":
-            return "Boolean"
-        if family == "integer":
+        if declared.family == "integer":
             return "Int" if _is_graphql_int(node) else "BigInt"
-        if family == "float":
-            return "Float"
-        if family == "decimal":
-            return "Decimal"
-        if family == "date":
-            return "Date"
-        if family in {"timestamp", "timestamptz"}:
-            return "DateTime"
-        if family == "uuid":
-            return "UUID"
-        return "JSON"
+        declared_types = {
+            "string": "String",
+            "boolean": "Boolean",
+            "float": "Float",
+            "decimal": "Decimal",
+            "date": "Date",
+            "timestamp": "DateTime",
+            "timestamptz": "DateTime",
+            "uuid": "UUID",
+        }
+        return declared_types.get(declared.family, "JSON")
 
-    kinds = {
+    observed_types = {
         "string": "String",
         "boolean": "Boolean",
         "integer": "BigInt",
@@ -202,7 +199,7 @@ def _scalar_graphql_type(node: ScalarNode) -> str:
         "date": "Date",
         "datetime": "DateTime",
     }
-    return kinds[node.kind]
+    return observed_types[node.kind]
 
 
 def _node_graphql_type(node: ContractNode) -> str:
@@ -358,18 +355,20 @@ def _typed_values(
 
 def _json_ready(value: object) -> object:
     if value is None or isinstance(value, (str, bool, int)):
-        return value
-    if isinstance(value, float):
-        return None if math.isnan(value) else value
-    if isinstance(value, Decimal):
-        return str(value)
-    if isinstance(value, (date, datetime, UUID)):
-        return value.isoformat() if hasattr(value, "isoformat") else str(value)
-    if isinstance(value, Mapping):
-        return {str(key): _json_ready(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_ready(item) for item in value]
-    return str(value)
+        result = value
+    elif isinstance(value, float):
+        result = None if math.isnan(value) else value
+    elif isinstance(value, Decimal):
+        result = str(value)
+    elif isinstance(value, (date, datetime, UUID)):
+        result = value.isoformat() if hasattr(value, "isoformat") else str(value)
+    elif isinstance(value, Mapping):
+        result = {str(key): _json_ready(item) for key, item in value.items()}
+    elif isinstance(value, (list, tuple)):
+        result = [_json_ready(item) for item in value]
+    else:
+        result = str(value)
+    return result
 
 
 def _graphql_value(value: object, node: ContractNode) -> object:
@@ -379,11 +378,6 @@ def _graphql_value(value: object, node: ContractNode) -> object:
         if not isinstance(value, (list, tuple)):
             return _json_ready(value)
         return [_graphql_value(item, node.item) for item in value]
-    if isinstance(node, ScalarNode):
-        scalar = _scalar_graphql_type(node)
-        if scalar in {"BigInt", "Decimal", "Date", "DateTime", "UUID"}:
-            return _json_ready(value)
-        return _json_ready(value)
     return _json_ready(value)
 
 
@@ -463,7 +457,7 @@ class _Runtime:
         offset_raw = arguments.get("offset", 0)
         first = first_raw if isinstance(first_raw, int) else 50
         offset = offset_raw if isinstance(offset_raw, int) else 0
-        if first < 1 or first > 1000 or offset < 0:
+        if first < 1 or first > _MAX_PAGE_SIZE or offset < 0:
             raise ValueError(_PAGINATION_MESSAGE)
         return first, offset
 
@@ -539,6 +533,7 @@ class GraphQLReadAdapter:
         casts: Sequence[str] = (),
         spec_template: str | None = None,
     ) -> None:
+        """Build a host-embeddable read-only schema for one OKF bundle snapshot."""
         bundle = load_bundle(Path(path), exclude)
         contracts = build_schema_contracts(
             path,
@@ -592,7 +587,7 @@ def build_graphql_schema(
 
 
 __all__ = [
-    "GraphQLAdapterUnavailable",
+    "GraphQLAdapterUnavailableError",
     "GraphQLNameCollisionError",
     "GraphQLReadAdapter",
     "GraphQLResult",
