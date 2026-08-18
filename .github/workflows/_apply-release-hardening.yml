@@ -3,18 +3,22 @@ name: Apply release hardening
 on:
   push:
     branches: [perf/release-pipeline-hardening]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
 
 jobs:
   apply:
+    if: github.head_ref == 'perf/release-pipeline-hardening' || github.ref_name == 'perf/release-pipeline-hardening'
     runs-on: ubuntu-latest
     steps:
       - name: Check out branch
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          ref: perf/release-pipeline-hardening
 
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
