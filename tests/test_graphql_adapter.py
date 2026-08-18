@@ -243,5 +243,5 @@ def test_graphql_type_name_collisions_fail_explicitly(tmp_path: Path) -> None:
     (tmp_path / "a.md").write_text('---\ntype: "Ação"\n---\n# A\n', encoding="utf-8")
     (tmp_path / "b.md").write_text("---\ntype: Acao\n---\n# B\n", encoding="utf-8")
 
-    with pytest.raises(GraphQLNameCollisionError, match="Ação.*Acao|Acao.*Ação"):
+    with pytest.raises(GraphQLNameCollisionError, match=r"Ação.*Acao|Acao.*Ação"):
         export_graphql_sdl(str(tmp_path))
