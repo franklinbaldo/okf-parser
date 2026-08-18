@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import dataclass
+from importlib.metadata import version as _package_version
 from typing import Annotated, Literal, cast
 
 from cyclopts import App, Parameter
@@ -61,6 +62,7 @@ def _render_cli_result(result: object) -> None:
 app = App(
     name="okf-parser",
     help="Validate and inspect OKF bundles with Ibis and NetworkX.",
+    version=_package_version("okf-parser"),
     result_action=_render_cli_result,
 )
 
