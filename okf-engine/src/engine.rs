@@ -108,10 +108,10 @@ fn traversable(entry: &DirEntry) -> bool {
 fn exclusions(root: &Path, patterns: &[String]) -> Result<Gitignore, String> {
     let mut builder = GitignoreBuilder::new(root);
     let file = root.join(".okfignore");
-    if file.is_file() {
-        if let Some(error) = builder.add(file) {
-            return Err(error.to_string());
-        }
+    if file.is_file()
+        && let Some(error) = builder.add(file)
+    {
+        return Err(error.to_string());
     }
     for pattern in patterns {
         builder.add_line(None, pattern).map_err(|e| e.to_string())?;
@@ -206,7 +206,8 @@ fn split_source(text: &str) -> Option<(&str, &str)> {
     }
     None
 }
-fn optional(text: &str) -> Result<(Option<Map<String, Value>>, &str), String> {
+type OptionalFrontmatter<'a> = (Option<Map<String, Value>>, &'a str);
+fn optional(text: &str) -> Result<OptionalFrontmatter<'_>, String> {
     let v = text.strip_prefix('\u{feff}').unwrap_or(text);
     if !v.starts_with("---") {
         return Ok((None, v));

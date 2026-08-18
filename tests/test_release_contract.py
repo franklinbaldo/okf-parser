@@ -38,12 +38,24 @@ BUILD_CONTEXT = BuildContext(
 def _write_source(root: Path, *, protocol_version: str = VERSION) -> None:
     (root / "typescript" / "src").mkdir(parents=True)
     (root / "typescript-duckdb").mkdir()
+    (root / "native-npm-linux-x64").mkdir()
     (root / "changelog").mkdir()
     (root / "pyproject.toml").write_text(
         '[project]\nname = "okf-parser"\nversion = "1.2.3"\n', encoding="utf-8"
     )
     (root / "typescript" / "package.json").write_text(
-        json.dumps({"name": "okf-parser", "version": VERSION}), encoding="utf-8"
+        json.dumps(
+            {
+                "name": "okf-parser",
+                "version": VERSION,
+                "optionalDependencies": {"okf-parser-native-linux-x64": VERSION},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (root / "native-npm-linux-x64" / "package.json").write_text(
+        json.dumps({"name": "okf-parser-native-linux-x64", "version": VERSION}),
+        encoding="utf-8",
     )
     (root / "typescript-duckdb" / "package.json").write_text(
         json.dumps(
@@ -81,6 +93,7 @@ def _tar_member(archive: tarfile.TarFile, name: str, data: bytes) -> None:
 
 WHEEL_MEMBERS = ("okf_parser/__init__.py", "okf_parser/cli.py", "okf_parser/parser.py")
 SDIST_MEMBERS = ("README.md", "pyproject.toml", "src/okf_parser/__init__.py")
+NPM_NATIVE_MEMBERS = ("README.md", "bin/okf-core")
 NPM_MEMBERS = (
     "README.md",
     "LICENSE",
@@ -106,8 +119,10 @@ def _write_artifacts(release: Path, extra: dict[str, tuple[str, ...]] | None = N
     additions = extra or {}
     python_dir = release / "python"
     npm_dir = release / "npm"
+    native_dir = release / "native-npm"
     python_dir.mkdir(parents=True)
     npm_dir.mkdir()
+    native_dir.mkdir()
     for kind in WHEEL_KINDS:
         wheel = python_dir / WHEEL_FILENAMES[kind]
         with zipfile.ZipFile(wheel, mode="w") as archive:
@@ -126,6 +141,16 @@ def _write_artifacts(release: Path, extra: dict[str, tuple[str, ...]] | None = N
         )
         for member in SDIST_MEMBERS + additions.get("python-sdist", ()):
             _tar_member(archive, f"{root}/{member}", b"content\n")
+    with tarfile.open(
+        native_dir / f"okf-parser-native-linux-x64-{VERSION}.tgz", mode="w:gz"
+    ) as archive:
+        _tar_member(
+            archive,
+            "package/package.json",
+            json.dumps({"name": "okf-parser-native-linux-x64", "version": VERSION}).encode(),
+        )
+        for member in NPM_NATIVE_MEMBERS + additions.get("npm-native", ()):
+            _tar_member(archive, f"package/{member}", b"content\n")
     kinds = {"okf-parser": "npm-parser", "okf-parser-duckdb": "npm-duckdb"}
     for package, kind in kinds.items():
         with tarfile.open(npm_dir / f"{package}-{VERSION}.tgz", mode="w:gz") as archive:
@@ -156,6 +181,16 @@ def test_verify_source_rejects_stale_documented_action_version(tmp_path: Path) -
         "- uses: franklinbaldo/okf-parser@v1.2.2\n", encoding="utf-8"
     )
     with pytest.raises(ContractError, match="GitHub Action example"):
+        verify_source(tmp_path)
+
+
+def test_verify_source_rejects_stale_native_optional_dependency(tmp_path: Path) -> None:
+    _write_source(tmp_path)
+    parser_path = tmp_path / "typescript" / "package.json"
+    parser = json.loads(parser_path.read_text(encoding="utf-8"))
+    parser["optionalDependencies"]["okf-parser-native-linux-x64"] = "1.2.2"
+    parser_path.write_text(json.dumps(parser), encoding="utf-8")
+    with pytest.raises(ContractError, match="native optional dependency"):
         verify_source(tmp_path)
 
 
@@ -253,6 +288,7 @@ def test_verify_contents_rejects_missing_module(tmp_path: Path) -> None:
         ("python-sdist", "src/okf_parser/__pycache__/cli.pyc", "excluded directory"),
         ("npm-parser", "src/index.ts", "source-only or development path"),
         ("npm-duckdb", ".npmrc", "excluded file name"),
+        ("npm-native", ".npmrc", "excluded file name"),
         ("python-wheel-linux-x86_64", "okf_parser/signing.pem", "excluded file type"),
     ],
 )

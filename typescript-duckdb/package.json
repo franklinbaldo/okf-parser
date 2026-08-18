@@ -1,6 +1,6 @@
 {
   "name": "okf-parser-duckdb",
-  "version": "0.42.7",
+  "version": "0.42.8",
   "description": "DuckDB materialization adapter for the TypeScript okf-parser package",
   "type": "module",
   "license": "MIT",
@@ -10,7 +10,7 @@
   "bin": {"okf-parser-ts-duckdb": "./dist/cli.js"},
   "scripts": {"build": "tsc -p tsconfig.build.json", "check": "tsc -p tsconfig.json --noEmit", "test": "vitest run", "test:watch": "vitest", "prepack": "npm run build"},
   "dependencies": {"@duckdb/node-api": "1.5.5-r.1"},
-  "peerDependencies": {"okf-parser": "^0.42.7"},
+  "peerDependencies": {"okf-parser": "^0.42.8"},
   "devDependencies": {"@types/node": "^24.0.0", "okf-parser": "file:../typescript", "typescript": "^5.9.0", "vitest": "^3.2.4"},
   "keywords": ["okf", "open-knowledge-format", "duckdb", "analytics", "typescript"],
   "repository": {"type": "git", "url": "git+https://github.com/franklinbaldo/okf-parser.git", "directory": "typescript-duckdb"}
