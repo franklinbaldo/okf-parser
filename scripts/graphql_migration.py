@@ -63,7 +63,7 @@ replace_once(
     "src/okf_parser/__init__.py",
     "from okf_parser.ingestion import DocumentEnvelope, IngestionCapability, ingest_documents\n",
     "from okf_parser.graphql_adapter import (\n"
-    "    GraphQLAdapterUnavailable,\n"
+    "    GraphQLAdapterUnavailableError,\n"
     "    GraphQLNameCollisionError,\n"
     "    GraphQLReadAdapter,\n"
     "    GraphQLResult,\n"
@@ -75,7 +75,7 @@ replace_once(
 replace_once(
     "src/okf_parser/__init__.py",
     '    "IngestionCapability",\n',
-    '    "GraphQLAdapterUnavailable",\n'
+    '    "GraphQLAdapterUnavailableError",\n'
     '    "GraphQLNameCollisionError",\n'
     '    "GraphQLReadAdapter",\n'
     '    "GraphQLResult",\n'
