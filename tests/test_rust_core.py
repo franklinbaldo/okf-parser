@@ -47,6 +47,23 @@ def test_native_engine_matches_python_and_digest_vectors(tmp_path: Path) -> None
         assert by_path[f"case-{index}.md"]["parsed_digest"] == case["parsed_digest"]
 
 
+def _has_duckdb_export() -> bool:
+    """Whether this executable carries the optional duckdb-export feature."""
+    if _EXECUTABLE is None:
+        return False
+    completed = subprocess.run(  # noqa: S603
+        [_EXECUTABLE, "__engine-duckdb", "--help"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return completed.returncode == 0
+
+
+@pytest.mark.skipif(
+    not _has_duckdb_export(),
+    reason="executable built without the optional duckdb-export feature",
+)
 def test_native_engine_materializes_duckdb(tmp_path: Path) -> None:
     root = tmp_path / "bundle"
     root.mkdir()

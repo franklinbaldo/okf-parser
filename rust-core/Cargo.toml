@@ -1,6 +1,6 @@
 [package]
 name = "okf-core"
-version = "0.42.6"
+version = "0.42.7"
 edition = "2024"
 license = "MIT"
 description = "Native OKF CLI and compatibility adapters"
@@ -10,15 +10,17 @@ name = "okf-parser"
 path = "src/main.rs"
 
 [features]
-default = ["bundled-duckdb"]
-# Compile DuckDB from source (safe default for local/dev builds). CI wheel
-# jobs disable this (--no-default-features) and set DUCKDB_DOWNLOAD_LIB=1
-# to link a prebuilt dynamic library instead (see rfcs and issue #154).
-bundled-duckdb = ["duckdb/bundled"]
+default = []
+# The private __engine-duckdb subcommand, off by default. The published
+# okf-parser DuckDB export runs in Python against the `duckdb` distribution
+# this package already depends on, so shipping a second DuckDB inside this
+# executable only duplicated it -- and dragged a C++ amalgamation build, or
+# a dynamic library needing per-platform loader work, into every wheel.
+duckdb-export = ["dep:duckdb"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-duckdb = { version = "1.10505.0", default-features = false }
+duckdb = { version = "1.10505.0", features = ["bundled"], optional = true }
 okf-engine = { path = "../okf-engine", version = "0.39.1" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

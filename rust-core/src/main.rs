@@ -1,3 +1,4 @@
+#[cfg(feature = "duckdb-export")]
 mod database;
 mod engine;
 use clap::{Parser, Subcommand};
@@ -23,6 +24,7 @@ enum Command {
         #[arg(long, default_value_t = 32)]
         read_concurrency: usize,
     },
+    #[cfg(feature = "duckdb-export")]
     #[command(name = "__engine-duckdb", hide = true)]
     Duckdb {
         root: PathBuf,
@@ -41,6 +43,7 @@ enum Command {
 struct Legacy {
     documents: Vec<String>,
 }
+#[cfg(feature = "duckdb-export")]
 #[derive(Serialize)]
 struct ResultData<'a> {
     database: String,
@@ -76,6 +79,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 &engine::load_bundle(&root, &exclude, read_concurrency)?,
             )?;
         }
+        #[cfg(feature = "duckdb-export")]
         Command::Duckdb {
             root,
             database,
@@ -148,10 +152,11 @@ fn python_cli() -> Result<ExitStatus, Box<dyn std::error::Error>> {
 }
 
 fn main() {
+    let subcommand = std::env::args().nth(1);
     let internal = matches!(
-        std::env::args().nth(1).as_deref(),
-        Some("__engine-facts" | "__engine-load" | "__engine-duckdb")
-    );
+        subcommand.as_deref(),
+        Some("__engine-facts" | "__engine-load")
+    ) || (cfg!(feature = "duckdb-export") && subcommand.as_deref() == Some("__engine-duckdb"));
     if internal {
         if let Err(error) = run() {
             eprintln!("okf-parser: {error}");
