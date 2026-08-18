@@ -24,7 +24,9 @@ title: Alpha
 custo: 12.50
 big: 9223372036854775807
 dia: 2026-08-18
+quando: 2026-08-18T12:34:56
 uid: 123e4567-e89b-12d3-a456-426614174000
+optional: only-alpha
 tags:
   - um
   - dois
@@ -32,6 +34,7 @@ tags:
 # Alpha
 
 [Beta](b.md)
+[Missing](missing.md)
 """,
         encoding="utf-8",
     )
@@ -42,6 +45,7 @@ title: Beta
 custo: 3.25
 big: 7
 dia: 2026-08-19
+quando: 2026-08-19T08:00:00
 uid: 123e4567-e89b-12d3-a456-426614174001
 tags:
   - tres
@@ -57,6 +61,7 @@ tags:
         "custo DECIMAL(18,2), "
         "big BIGINT, "
         "dia DATE, "
+        "quando TIMESTAMP, "
         "uid UUID, "
         "tags VARCHAR[]"
         ");\n",
@@ -77,8 +82,10 @@ def test_graphql_sdl_is_deterministic_and_read_only(tmp_path: Path) -> None:
     assert "custo: Decimal!" in first
     assert "big: BigInt!" in first
     assert "dia: Date!" in first
+    assert "quando: DateTime!" in first
     assert "uid: UUID!" in first
     assert "tags: [String!]!" in first
+    assert "optional: JSON" in first
     assert "type Mutation" not in first
 
 
@@ -96,11 +103,14 @@ def test_graphql_adapter_queries_typed_relations_links_and_pagination(tmp_path: 
             title
             links { targetId exists }
             reverseLinks { sourceId }
+            diagnostics { code severity }
             ... on RotinaConcept {
               custo
               big
               dia
+              quando
               uid
+              optional
               tags
             }
           }
@@ -120,9 +130,12 @@ def test_graphql_adapter_queries_typed_relations_links_and_pagination(tmp_path: 
     assert concept["custo"] == "12.50"
     assert concept["big"] == "9223372036854775807"
     assert concept["dia"] == "2026-08-18"
+    assert concept["quando"] == "2026-08-18T12:34:56"
     assert concept["uid"] == "123e4567-e89b-12d3-a456-426614174000"
+    assert concept["optional"] == "only-alpha"
     assert concept["tags"] == ["um", "dois"]
-    assert concept["links"][0]["exists"] is True
+    assert sorted(link["exists"] for link in concept["links"]) == [False, True]
+    assert {diagnostic["code"] for diagnostic in concept["diagnostics"]} == {"OKF101"}
 
     concept_id = concept["id"]
     by_id = adapter.execute(
@@ -140,6 +153,26 @@ def test_graphql_adapter_queries_typed_relations_links_and_pagination(tmp_path: 
     assert by_id.errors == ()
     assert by_id.data == {"concept": {"id": concept_id, "path": "a.md", "custo": "12.50"}}
 
+    reverse = adapter.execute(
+        """
+        query {
+          concept(id: "b") {
+            path
+            reverseLinks { sourceId }
+            ... on RotinaConcept { optional }
+          }
+        }
+        """
+    )
+    assert reverse.errors == ()
+    assert reverse.data == {
+        "concept": {
+            "path": "b.md",
+            "reverseLinks": [{"sourceId": "a"}],
+            "optional": None,
+        }
+    }
+
     filtered = adapter.execute(
         """
         query {
@@ -149,6 +182,15 @@ def test_graphql_adapter_queries_typed_relations_links_and_pagination(tmp_path: 
     )
     assert filtered.errors == ()
     assert filtered.data == {"concepts": []}
+
+
+def test_graphql_empty_bundle_is_queryable(tmp_path: Path) -> None:
+    adapter = GraphQLReadAdapter(str(tmp_path))
+
+    result = adapter.execute("{ concepts { id } }")
+
+    assert result.errors == ()
+    assert result.data == {"concepts": []}
 
 
 def test_graphql_pagination_fails_closed_outside_bounds(tmp_path: Path) -> None:
@@ -194,4 +236,12 @@ type: Note
     )
 
     with pytest.raises(GraphQLNameCollisionError, match=r"Note\.a-b|Note\.a b"):
+        export_graphql_sdl(str(tmp_path))
+
+
+def test_graphql_type_name_collisions_fail_explicitly(tmp_path: Path) -> None:
+    (tmp_path / "a.md").write_text('---\ntype: "Ação"\n---\n# A\n', encoding="utf-8")
+    (tmp_path / "b.md").write_text("---\ntype: Acao\n---\n# B\n", encoding="utf-8")
+
+    with pytest.raises(GraphQLNameCollisionError, match="Ação.*Acao|Acao.*Ação"):
         export_graphql_sdl(str(tmp_path))
