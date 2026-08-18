@@ -195,5 +195,5 @@ type: Note
         encoding="utf-8",
     )
 
-    with pytest.raises(GraphQLNameCollisionError, match="Note.a-b|Note.a b"):
+    with pytest.raises(GraphQLNameCollisionError, match=r"Note\.a-b|Note\.a b"):
         export_graphql_sdl(str(tmp_path))
