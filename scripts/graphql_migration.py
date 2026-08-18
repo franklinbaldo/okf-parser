@@ -128,7 +128,12 @@ changelog = Path("changelog/0.43.0.md")
 if changelog.exists():
     raise RuntimeError("changelog/0.43.0.md already exists")
 changelog.write_text(
-    """# 0.43.0
+    """---
+type: Release
+title: okf-parser 0.43.0
+---
+
+# okf-parser 0.43.0
 
 - Add deterministic GraphQL SDL generation from the shared `TypeContract`.
 - Add the optional `okf-parser[graphql]` embedded read-only executable adapter.
