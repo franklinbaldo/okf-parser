@@ -83,7 +83,8 @@ def test_graphql_sdl_is_deterministic_and_read_only(tmp_path: Path) -> None:
     assert "quando: DateTime!" in first
     assert "uid: UUID!" in first
     assert "tags: [String!]!" in first
-    assert "optional: JSON" in first
+    assert "optional: String" in first
+    assert "optional: String!" not in first
     assert "type Mutation" not in first
 
 
