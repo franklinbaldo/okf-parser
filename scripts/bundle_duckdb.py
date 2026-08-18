@@ -58,8 +58,24 @@ def _find_script_entry(names: list[str]) -> str:
     return matches[0]
 
 
+def _check_native_binary(binary_path: Path, platform: str) -> None:
+    """Fail with a clear diagnostic instead of a cryptic patchelf/install_name_tool error."""
+    magic_by_platform = {"linux": b"\x7fELF", "macos": (b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe")}
+    expected = magic_by_platform.get(platform)
+    if expected is None:
+        return
+    data = binary_path.read_bytes()
+    if not data.startswith(expected):
+        message = (
+            f"expected a native binary at {binary_path} for platform {platform!r}, "
+            f"got {len(data)} bytes starting with {data[:16]!r}"
+        )
+        raise SystemExit(message)
+
+
 def _patch_rpath(binary_path: Path, platform: str) -> None:
     """Rewrite the executable's rpath to look next to itself, not the build cache."""
+    _check_native_binary(binary_path, platform)
     if platform == "linux":
         subprocess.run(  # noqa: S603 -- fixed argv, trusted local tool, no untrusted input
             ["patchelf", "--set-rpath", "$ORIGIN", str(binary_path)],  # noqa: S607
