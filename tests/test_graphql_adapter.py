@@ -72,10 +72,8 @@ tags:
 
 def test_graphql_sdl_is_deterministic_and_read_only(tmp_path: Path) -> None:
     template = _bundle(tmp_path)
-
     first = export_graphql_sdl(str(tmp_path), spec_template=template)
     second = export_graphql_sdl(str(tmp_path), spec_template=template)
-
     assert first == second
     assert "interface Concept" in first
     assert 'type RotinaConcept implements Concept @okfType(name: "Rotina")' in first
@@ -92,7 +90,6 @@ def test_graphql_sdl_is_deterministic_and_read_only(tmp_path: Path) -> None:
 def test_graphql_adapter_queries_typed_relations_links_and_pagination(tmp_path: Path) -> None:
     template = _bundle(tmp_path)
     adapter = GraphQLReadAdapter(str(tmp_path), spec_template=template)
-
     result = adapter.execute(
         """
         query {
@@ -117,10 +114,9 @@ def test_graphql_adapter_queries_typed_relations_links_and_pagination(tmp_path: 
         }
         """
     )
-
     assert result.errors == ()
     assert result.data is not None
-    concepts = cast(list[dict[str, object]], result.data["concepts"])
+    concepts = cast("list[dict[str, object]]", result.data["concepts"])
     assert len(concepts) == 1
     concept = concepts[0]
     assert concept["path"] == "a.md"
@@ -132,12 +128,12 @@ def test_graphql_adapter_queries_typed_relations_links_and_pagination(tmp_path: 
     assert concept["uid"] == "123e4567-e89b-12d3-a456-426614174000"
     assert concept["optional"] == "only-alpha"
     assert concept["tags"] == ["um", "dois"]
-    links = cast(list[dict[str, object]], concept["links"])
-    diagnostics = cast(list[dict[str, object]], concept["diagnostics"])
-    assert sorted(cast(bool, link["exists"]) for link in links) == [False, True]
-    assert {cast(str, diagnostic["code"]) for diagnostic in diagnostics} == {"OKF101"}
+    links = cast("list[dict[str, object]]", concept["links"])
+    diagnostics = cast("list[dict[str, object]]", concept["diagnostics"])
+    assert sorted(cast("bool", link["exists"]) for link in links) == [False, True]
+    assert {cast("str", diagnostic["code"]) for diagnostic in diagnostics} == {"OKF101"}
 
-    concept_id = cast(str, concept["id"])
+    concept_id = cast("str", concept["id"])
     by_id = adapter.execute(
         """
         query($id: ID!) {
@@ -172,7 +168,6 @@ def test_graphql_adapter_queries_typed_relations_links_and_pagination(tmp_path: 
             "optional": None,
         }
     }
-
     filtered = adapter.execute(
         """
         query {
@@ -186,9 +181,7 @@ def test_graphql_adapter_queries_typed_relations_links_and_pagination(tmp_path: 
 
 def test_graphql_empty_bundle_is_queryable(tmp_path: Path) -> None:
     adapter = GraphQLReadAdapter(str(tmp_path))
-
     result = adapter.execute("{ concepts { id } }")
-
     assert result.errors == ()
     assert result.data == {"concepts": []}
 
@@ -196,9 +189,7 @@ def test_graphql_empty_bundle_is_queryable(tmp_path: Path) -> None:
 def test_graphql_pagination_fails_closed_outside_bounds(tmp_path: Path) -> None:
     _bundle(tmp_path)
     adapter = GraphQLReadAdapter(str(tmp_path))
-
     result = adapter.execute("{ concepts(first: 1001) { id } }")
-
     assert result.data is None
     assert result.errors
     assert "pagination requires" in result.errors[0]
@@ -215,9 +206,7 @@ type: "Ação"
 """,
         encoding="utf-8",
     )
-
     sdl = export_graphql_sdl(str(tmp_path))
-
     assert 'type AcaoConcept implements Concept @okfType(name: "Ação")' in sdl
     assert 'field_id: String! @okfField(name: "id")' in sdl
     assert 'field_bad_name: String! @okfField(name: "bad-name")' in sdl
@@ -234,7 +223,6 @@ type: Note
 """,
         encoding="utf-8",
     )
-
     with pytest.raises(GraphQLNameCollisionError, match=r"Note\.a-b|Note\.a b"):
         export_graphql_sdl(str(tmp_path))
 
@@ -242,6 +230,5 @@ type: Note
 def test_graphql_type_name_collisions_fail_explicitly(tmp_path: Path) -> None:
     (tmp_path / "a.md").write_text('---\ntype: "Ação"\n---\n# A\n', encoding="utf-8")
     (tmp_path / "b.md").write_text("---\ntype: Acao\n---\n# B\n", encoding="utf-8")
-
     with pytest.raises(GraphQLNameCollisionError, match=r"Ação.*Acao|Acao.*Ação"):
         export_graphql_sdl(str(tmp_path))
