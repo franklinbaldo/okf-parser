@@ -104,23 +104,42 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+// The environment's interpreter, searched from the executable's own location.
+// Two layouts exist: the executable directly in the environment's scripts
+// directory (sibling python), and maturin's vendored layout where the real
+// binary lives in site-packages/okf_parser.scripts/ — several levels below
+// the environment root — because bundling an external dynamic library moves
+// it there. Walking every ancestor covers both without guessing which one
+// this build used.
+fn find_python(executable: &std::path::Path) -> Option<std::ffi::OsString> {
+    let candidates: &[&[&str]] = if cfg!(windows) {
+        &[&["python.exe"], &["Scripts", "python.exe"]]
+    } else {
+        &[&["python"], &["bin", "python"], &["bin", "python3"]]
+    };
+    for dir in executable.ancestors().skip(1) {
+        for parts in candidates {
+            let mut candidate = dir.to_path_buf();
+            for part in *parts {
+                candidate.push(part);
+            }
+            if candidate.is_file() {
+                return Some(candidate.into_os_string());
+            }
+        }
+    }
+    None
+}
+
 fn python_cli() -> Result<ExitStatus, Box<dyn std::error::Error>> {
     let executable = std::env::current_exe()?;
-    let scripts = executable
-        .parent()
-        .ok_or("okf-parser executable has no parent directory")?;
-    let sibling = if cfg!(windows) {
-        scripts.join("python.exe")
-    } else {
-        scripts.join("python")
-    };
-    let python = if sibling.is_file() {
-        sibling.into_os_string()
-    } else if cfg!(windows) {
-        "python".into()
-    } else {
-        "python3".into()
-    };
+    let python = find_python(&executable).unwrap_or_else(|| {
+        if cfg!(windows) {
+            "python".into()
+        } else {
+            "python3".into()
+        }
+    });
     Ok(ProcessCommand::new(python)
         .arg("-m")
         .arg("okf_parser.cli")
