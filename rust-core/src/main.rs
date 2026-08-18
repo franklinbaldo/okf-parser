@@ -1,5 +1,3 @@
-#[cfg(feature = "duckdb-export")]
-mod database;
 mod engine;
 use clap::{Parser, Subcommand};
 use serde::{Deserialize, Serialize};
@@ -24,36 +22,10 @@ enum Command {
         #[arg(long, default_value_t = 32)]
         read_concurrency: usize,
     },
-    #[cfg(feature = "duckdb-export")]
-    #[command(name = "__engine-duckdb", hide = true)]
-    Duckdb {
-        root: PathBuf,
-        database: PathBuf,
-        #[arg(long, default_value = "okf")]
-        schema: String,
-        #[arg(long)]
-        overwrite: bool,
-        #[arg(long = "exclude")]
-        exclude: Vec<String>,
-        #[arg(long, default_value_t = 32)]
-        read_concurrency: usize,
-    },
 }
 #[derive(Deserialize)]
 struct Legacy {
     documents: Vec<String>,
-}
-#[cfg(feature = "duckdb-export")]
-#[derive(Serialize)]
-struct ResultData<'a> {
-    database: String,
-    schema: &'a str,
-    root: &'a str,
-    conformant: bool,
-    markdown_count: usize,
-    concept_count: usize,
-    link_count: usize,
-    diagnostic_count: usize,
 }
 fn run() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
@@ -79,42 +51,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 &engine::load_bundle(&root, &exclude, read_concurrency)?,
             )?;
         }
-        #[cfg(feature = "duckdb-export")]
-        Command::Duckdb {
-            root,
-            database,
-            schema,
-            overwrite,
-            exclude,
-            read_concurrency,
-        } => {
-            let bundle = engine::load_bundle(&root, &exclude, read_concurrency)?;
-            database::materialize(&database, &schema, &bundle, overwrite)?;
-            serde_json::to_writer(
-                io::stdout().lock(),
-                &ResultData {
-                    database: database.to_string_lossy().into(),
-                    schema: &schema,
-                    root: &bundle.root,
-                    conformant: !bundle.diagnostics.iter().any(|v| v.severity == "error"),
-                    markdown_count: bundle.markdown_count,
-                    concept_count: bundle.concepts.len(),
-                    link_count: bundle.links.len(),
-                    diagnostic_count: bundle.diagnostics.len(),
-                },
-            )?;
-        }
     }
     Ok(())
 }
 
 // The environment's interpreter, searched from the executable's own location.
-// Two layouts exist: the executable directly in the environment's scripts
-// directory (sibling python), and maturin's vendored layout where the real
-// binary lives in site-packages/okf_parser.scripts/ — several levels below
-// the environment root — because bundling an external dynamic library moves
-// it there. Walking every ancestor covers both without guessing which one
-// this build used.
+// A sibling interpreter covers the ordinary layout, where installers place
+// this executable in the environment's own scripts directory. Walking the
+// remaining ancestors covers layouts that place it deeper, which packaging
+// tools do when they relocate a binary; it costs nothing when the sibling
+// is already there.
 fn find_python(executable: &std::path::Path) -> Option<std::ffi::OsString> {
     let candidates: &[&[&str]] = if cfg!(windows) {
         &[&["python.exe"], &["Scripts", "python.exe"]]
@@ -152,11 +98,10 @@ fn python_cli() -> Result<ExitStatus, Box<dyn std::error::Error>> {
 }
 
 fn main() {
-    let subcommand = std::env::args().nth(1);
     let internal = matches!(
-        subcommand.as_deref(),
+        std::env::args().nth(1).as_deref(),
         Some("__engine-facts" | "__engine-load")
-    ) || (cfg!(feature = "duckdb-export") && subcommand.as_deref() == Some("__engine-duckdb"));
+    );
     if internal {
         if let Err(error) = run() {
             eprintln!("okf-parser: {error}");
