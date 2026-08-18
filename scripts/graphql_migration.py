@@ -88,3 +88,40 @@ replace_once(
     '    "export_graphql_sdl",\n'
     '    "ingest_documents",\n',
 )
+
+OLD_VERSION = "0.42.8"
+NEW_VERSION = "0.43.0"
+VERSION_FILES = (
+    "pyproject.toml",
+    "rust-core/Cargo.toml",
+    "typescript/package.json",
+    "typescript/src/version.ts",
+    "typescript-duckdb/package.json",
+    "native-npm-linux-x64/package.json",
+    "README.md",
+)
+for version_path in VERSION_FILES:
+    target = Path(version_path)
+    text = target.read_text(encoding="utf-8")
+    if OLD_VERSION not in text:
+        raise RuntimeError(f"{version_path}: version anchor {OLD_VERSION} not found")
+    target.write_text(text.replace(OLD_VERSION, NEW_VERSION), encoding="utf-8")
+
+changelog = Path("changelog/0.43.0.md")
+if changelog.exists():
+    raise RuntimeError("changelog/0.43.0.md already exists")
+changelog.write_text(
+    """# 0.43.0
+
+- Add deterministic GraphQL SDL generation from the shared `TypeContract`.
+- Add the optional `okf-parser[graphql]` embedded read-only executable adapter.
+- Resolve `concept` and bounded, stably ordered `concepts` queries over canonical Ibis relations.
+- Reuse public RFC 0006 typed relations for declared scalar/list values, including exact
+  BigInt, Decimal, Date, DateTime, UUID and JSON projection policies.
+- Expose forward/reverse links, diagnostics, source/parsed digests and raw frontmatter.
+- Fail explicitly on GraphQL naming collisions and preserve authored type/field provenance
+  through SDL directives.
+- Keep GraphQL transport host-owned: no HTTP server and no mutations are introduced.
+""",
+    encoding="utf-8",
+)
