@@ -3,12 +3,15 @@ name: Repair native npm lock
 on:
   push:
     branches: [perf/release-pipeline-hardening]
+  pull_request:
+    branches: [main]
 
 permissions:
   contents: write
 
 jobs:
   repair:
+    if: github.head_ref == 'perf/release-pipeline-hardening' || github.ref_name == 'perf/release-pipeline-hardening'
     runs-on: ubuntu-latest
     steps:
       - name: Check out branch
