@@ -1047,7 +1047,7 @@ dependencies = [
 
 [[package]]
 name = "okf-core"
-version = "0.42.3"
+version = "0.42.4"
 dependencies = [
  "clap",
  "duckdb",
