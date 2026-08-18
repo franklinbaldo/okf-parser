@@ -1,6 +1,6 @@
 mod engine;
 use clap::{Parser, Subcommand};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process::{Command as ProcessCommand, ExitStatus};

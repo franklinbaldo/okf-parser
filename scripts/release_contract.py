@@ -49,7 +49,7 @@ WHEEL_PATTERNS: Final[dict[str, str]] = {
     "python-wheel-macos-x86_64": "okf_parser-{version}-py3-none-macosx_*_x86_64.whl",
     "python-wheel-macos-arm64": "okf_parser-{version}-py3-none-macosx_*_arm64.whl",
 }
-KINDS: Final = (*WHEEL_KINDS, "python-sdist", "npm-parser", "npm-duckdb")
+KINDS: Final = (*WHEEL_KINDS, "python-sdist", "npm-parser", "npm-duckdb", "npm-native")
 Kind = Literal[
     "python-wheel-linux-x86_64",
     "python-wheel-linux-aarch64",
@@ -59,6 +59,7 @@ Kind = Literal[
     "python-sdist",
     "npm-parser",
     "npm-duckdb",
+    "npm-native",
 ]
 Artifact = dict[str, object]
 ROOT_PREFIXES: Final[dict[str, str | None]] = {
@@ -66,6 +67,7 @@ ROOT_PREFIXES: Final[dict[str, str | None]] = {
     "python-sdist": "okf_parser-{version}/",
     "npm-parser": "package/",
     "npm-duckdb": "package/",
+    "npm-native": "package/",
 }
 FORBIDDEN_DIRECTORIES: Final = frozenset(
     {
@@ -176,6 +178,10 @@ CONTENT_POLICIES: Final[dict[str, ContentPolicy]] = {
         ),
         forbidden_prefixes=("src/", "test/", "scripts/", "tsconfig"),
     ),
+    "npm-native": ContentPolicy(
+        required=("package.json", "README.md", "bin/okf-core"),
+        forbidden_prefixes=("src/", "test/", "scripts/", "tsconfig"),
+    ),
 }
 
 
@@ -269,7 +275,12 @@ def _verify_npm_manifest(path: Path, package: str, version: str) -> dict[str, ob
 
 def _verify_npm_contract(root: Path, version: str) -> None:
     parser_path = root / "typescript" / "package.json"
-    _verify_npm_manifest(parser_path, "okf-parser", version)
+    parser = _verify_npm_manifest(parser_path, "okf-parser", version)
+    optional = _mapping(parser.get("optionalDependencies"), "optionalDependencies")
+    if _string(optional, "okf-parser-native-linux-x64", "optionalDependencies") != version:
+        _fail(f"native optional dependency must be {version}")
+    native_path = root / "native-npm-linux-x64" / "package.json"
+    _verify_npm_manifest(native_path, "okf-parser-native-linux-x64", version)
     adapter_path = root / "typescript-duckdb" / "package.json"
     adapter = _verify_npm_manifest(adapter_path, "okf-parser-duckdb", version)
     peers = _mapping(adapter.get("peerDependencies"), "peerDependencies")
@@ -349,6 +360,12 @@ def _expected(version: str) -> tuple[ExpectedArtifact, ...]:
             "okf-parser-duckdb",
             "npm",
             filename=f"okf-parser-duckdb-{version}.tgz",
+        ),
+        ExpectedArtifact(
+            "npm-native",
+            "okf-parser-native-linux-x64",
+            "native-npm",
+            filename=f"okf-parser-native-linux-x64-{version}.tgz",
         ),
     )
 
@@ -545,7 +562,7 @@ def _artifact_record(
 def _reject_unexpected(release: Path, expected_paths: set[Path]) -> None:
     actual_paths = {
         path.resolve()
-        for name in ("python", "npm")
+        for name in ("python", "npm", "native-npm")
         for path in (release / name).iterdir()
         if path.is_file()
     }

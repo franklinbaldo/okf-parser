@@ -1,11 +1,18 @@
 {
   "name": "okf-parser-native-linux-x64",
-  "version": "0.42.7",
+  "version": "0.42.8",
   "description": "Linux x64 native okf-core engine for okf-parser",
   "license": "MIT",
-  "os": ["linux"],
-  "cpu": ["x64"],
-  "files": ["bin/okf-core", "README.md"],
+  "os": [
+    "linux"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "files": [
+    "bin/okf-core",
+    "README.md"
+  ],
   "bin": {
     "okf-core": "bin/okf-core"
   },
