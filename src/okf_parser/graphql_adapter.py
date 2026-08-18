@@ -378,9 +378,16 @@ def _graphql_value(value: object, node: ContractNode) -> object:
         if not isinstance(value, (list, tuple)):
             return _json_ready(value)
         return [_graphql_value(item, node.item) for item in value]
-    if isinstance(node, ScalarNode) and _scalar_graphql_type(node) == "BigInt":
-        return str(value)
-    return _json_ready(value)
+    result = _json_ready(value)
+    if isinstance(node, ScalarNode):
+        scalar = _scalar_graphql_type(node)
+        if scalar == "BigInt":
+            result = str(value)
+        elif scalar == "Date" and isinstance(value, datetime):
+            result = value.date().isoformat()
+        elif scalar == "Date" and isinstance(value, date):
+            result = value.isoformat()
+    return result
 
 
 class _Runtime:

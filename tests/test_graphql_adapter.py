@@ -138,9 +138,7 @@ def test_graphql_adapter_queries_typed_relations_links_and_pagination(tmp_path: 
         {"id": concept_id},
     )
     assert by_id.errors == ()
-    assert by_id.data == {
-        "concept": {"id": concept_id, "path": "a.md", "custo": "12.50"}
-    }
+    assert by_id.data == {"concept": {"id": concept_id, "path": "a.md", "custo": "12.50"}}
 
     filtered = adapter.execute(
         """
