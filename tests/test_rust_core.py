@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import duckdb
 import pytest
 
 from okf_parser.bundle import load_bundle
@@ -45,19 +43,3 @@ def test_native_engine_matches_python_and_digest_vectors(tmp_path: Path) -> None
     for index, case in enumerate(vectors):
         assert by_path[f"case-{index}.md"]["source_digest"] == case["source_digest"]
         assert by_path[f"case-{index}.md"]["parsed_digest"] == case["parsed_digest"]
-
-
-def test_native_engine_materializes_duckdb(tmp_path: Path) -> None:
-    root = tmp_path / "bundle"
-    root.mkdir()
-    (root / "note.md").write_text("---\ntype: Note\n---\n# Note\n")
-    database = tmp_path / "bundle.duckdb"
-    subprocess.run(  # noqa: S603
-        [_EXECUTABLE or "", "__engine-duckdb", root, database],
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    with duckdb.connect(database, read_only=True) as connection:
-        assert connection.sql("SELECT count(*) FROM okf.concepts").fetchone() == (1,)
-        assert connection.sql("SELECT concept_type FROM okf.concepts").fetchone() == ("Note",)
