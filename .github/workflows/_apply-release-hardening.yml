@@ -58,11 +58,16 @@ jobs:
           uv run pytest tests/test_release_contract.py tests/test_native_from_wheel.py
           uv run python scripts/release_contract.py verify-source
 
-      - name: Remove migration-only files and commit result
+      - name: Commit validated non-workflow result
         shell: bash
         run: |
           set -euo pipefail
-          rm -f .github/scripts/apply_release_hardening.py .github/scripts/native_from_wheel_source.py .github/scripts/clippy_cleanup.py .github/workflows/_apply-release-hardening.yml
+          mkdir -p .release-hardening-workflows
+          cp .github/workflows/publish.yml .release-hardening-workflows/publish.yml
+          cp .github/workflows/release-dry-run.yml .release-hardening-workflows/release-dry-run.yml
+          cp .github/workflows/rust-engine.yml .release-hardening-workflows/rust-engine.yml
+          git checkout HEAD -- .github/workflows/publish.yml .github/workflows/release-dry-run.yml .github/workflows/rust-engine.yml
+          rm -f .github/scripts/apply_release_hardening.py .github/scripts/native_from_wheel_source.py .github/scripts/clippy_cleanup.py
           git add -A
           git diff --cached --check
           git config user.name github-actions[bot]
