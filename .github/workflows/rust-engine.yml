@@ -42,7 +42,7 @@ jobs:
         run: |
           set -euo pipefail
           cp typescript/package.json "$RUNNER_TEMP/package.json"
-          npm install --package-lock-only --ignore-scripts --prefix typescript --save-optional ../native-npm-linux-x64
+          npm install --package-lock-only --ignore-scripts --prefix typescript --save-optional ./native-npm-linux-x64
           cp "$RUNNER_TEMP/package.json" typescript/package.json
           npm ci --ignore-scripts --prefix typescript
           git diff --exit-code -- typescript/package.json
