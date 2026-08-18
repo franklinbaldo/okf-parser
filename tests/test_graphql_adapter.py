@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 
@@ -120,11 +120,9 @@ def test_graphql_adapter_queries_typed_relations_links_and_pagination(tmp_path: 
 
     assert result.errors == ()
     assert result.data is not None
-    concepts = result.data["concepts"]
-    assert isinstance(concepts, list)
+    concepts = cast(list[dict[str, object]], result.data["concepts"])
     assert len(concepts) == 1
     concept = concepts[0]
-    assert isinstance(concept, dict)
     assert concept["path"] == "a.md"
     assert concept["type"] == "Rotina"
     assert concept["custo"] == "12.50"
@@ -134,10 +132,12 @@ def test_graphql_adapter_queries_typed_relations_links_and_pagination(tmp_path: 
     assert concept["uid"] == "123e4567-e89b-12d3-a456-426614174000"
     assert concept["optional"] == "only-alpha"
     assert concept["tags"] == ["um", "dois"]
-    assert sorted(link["exists"] for link in concept["links"]) == [False, True]
-    assert {diagnostic["code"] for diagnostic in concept["diagnostics"]} == {"OKF101"}
+    links = cast(list[dict[str, object]], concept["links"])
+    diagnostics = cast(list[dict[str, object]], concept["diagnostics"])
+    assert sorted(cast(bool, link["exists"]) for link in links) == [False, True]
+    assert {cast(str, diagnostic["code"]) for diagnostic in diagnostics} == {"OKF101"}
 
-    concept_id = concept["id"]
+    concept_id = cast(str, concept["id"])
     by_id = adapter.execute(
         """
         query($id: ID!) {
