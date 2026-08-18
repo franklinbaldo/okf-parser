@@ -14,6 +14,23 @@ def replace_once(path: str, old: str, new: str) -> None:
 
 
 replace_once(
+    "src/okf_parser/graphql_adapter.py",
+    '    if isinstance(node, ScalarNode) and _scalar_graphql_type(node) == "BigInt":\n'
+    "        return str(value)\n"
+    "    return _json_ready(value)\n",
+    "    result = _json_ready(value)\n"
+    "    if isinstance(node, ScalarNode):\n"
+    "        scalar = _scalar_graphql_type(node)\n"
+    '        if scalar == "BigInt":\n'
+    "            result = str(value)\n"
+    '        elif scalar == "Date" and isinstance(value, datetime):\n'
+    "            result = value.date().isoformat()\n"
+    '        elif scalar == "Date" and isinstance(value, date):\n'
+    "            result = value.isoformat()\n"
+    "    return result\n",
+)
+
+replace_once(
     "pyproject.toml",
     "\n[dependency-groups]\ndev = [\n",
     '\n[project.optional-dependencies]\ngraphql = ["graphql-core>=3.2,<4"]\n\n'
