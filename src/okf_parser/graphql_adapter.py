@@ -271,7 +271,6 @@ def render_graphql_sdl(contracts: Sequence[TypeContract]) -> str:
         "}",
         "",
     ]
-
     generic_lines = [
         "  id: ID!",
         "  logicalKey: String",
@@ -302,7 +301,6 @@ def render_graphql_sdl(contracts: Sequence[TypeContract]) -> str:
                     f"  {projected.graphql_name}: {field_type} @okfField(name: {original})"
                 )
         lines.extend(["}", ""])
-
     lines.extend(
         [
             "type Query {",
@@ -339,7 +337,6 @@ def _typed_values(
 ) -> dict[str, dict[str, dict[str, object]]]:
     if spec_template is None:
         return {}
-
     values: dict[str, dict[str, dict[str, object]]] = {}
     with bundle.compile_types(spec_template) as typed:
         for concept_type in typed:
@@ -360,8 +357,12 @@ def _json_ready(value: object) -> object:
         result = None if math.isnan(value) else value
     elif isinstance(value, Decimal):
         result = str(value)
-    elif isinstance(value, (date, datetime, UUID)):
-        result = value.isoformat() if hasattr(value, "isoformat") else str(value)
+    elif isinstance(value, datetime):
+        result = value.isoformat()
+    elif isinstance(value, date):
+        result = value.isoformat()
+    elif isinstance(value, UUID):
+        result = str(value)
     elif isinstance(value, Mapping):
         result = {str(key): _json_ready(item) for key, item in value.items()}
     elif isinstance(value, (list, tuple)):
@@ -415,7 +416,6 @@ class _Runtime:
             target_id = row["target_id"]
             if isinstance(target_id, str):
                 self.links_by_target.setdefault(target_id, []).append(link)
-
         self.diagnostics_by_path: dict[str, list[dict[str, object]]] = {}
         for diagnostic in bundle.validate():
             self.diagnostics_by_path.setdefault(diagnostic.path, []).append(
@@ -438,15 +438,11 @@ class _Runtime:
         record: dict[str, object] = {
             "__typename": self.projection.type_names[concept_type],
             "id": concept_id,
-            "logicalKey": (
-                row.get("logical_key") if isinstance(row.get("logical_key"), str) else None
-            ),
+            "logicalKey": row.get("logical_key") if isinstance(row.get("logical_key"), str) else None,
             "path": path,
             "type": concept_type,
             "title": row.get("title") if isinstance(row.get("title"), str) else None,
-            "description": (
-                row.get("description") if isinstance(row.get("description"), str) else None
-            ),
+            "description": row.get("description") if isinstance(row.get("description"), str) else None,
             "sourceDigest": str(row["source_digest"]),
             "parsedDigest": str(row["parsed_digest"]),
             "body": str(row["body"]),
@@ -519,7 +515,6 @@ def _build_executable_schema(sdl: str, runtime: _Runtime) -> GraphQLSchema:
     if query_type is None or concept_type is None:
         message = "generated GraphQL schema is missing Query or Concept"
         raise RuntimeError(message)
-
     query_type.fields["concept"].resolve = runtime.resolve_concept
     query_type.fields["concepts"].resolve = runtime.resolve_concepts
 
