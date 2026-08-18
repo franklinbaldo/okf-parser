@@ -32,18 +32,6 @@ jobs:
           args: --release --locked --out dist --no-default-features
           docker-options: -e DUCKDB_DOWNLOAD_LIB=1
 
-      - name: Bundle prebuilt libduckdb into wheel
-        shell: bash
-        run: |
-          set -euo pipefail
-          sudo chown -R "$(id -u):$(id -g)" dist target 2>/dev/null || true
-          sudo apt-get update -qq && sudo apt-get install -y -qq patchelf
-          lib=$(find target -path '*/duckdb-download/*' -name 'libduckdb.so' -print -quit)
-          test -n "$lib"
-          for wheel in dist/*.whl; do
-            python3 scripts/bundle_duckdb.py --wheel "$wheel" --lib "$lib" --platform linux
-          done
-
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wheel-linux-${{ matrix.target }}
@@ -63,16 +51,6 @@ jobs:
         with:
           target: x64
           args: --release --locked --out dist --no-default-features
-
-      - name: Bundle prebuilt libduckdb into wheel
-        shell: bash
-        run: |
-          set -euo pipefail
-          lib=$(find target -path '*/duckdb-download/*' -name 'duckdb.dll' -print -quit)
-          test -n "$lib"
-          for wheel in dist/*.whl; do
-            python scripts/bundle_duckdb.py --wheel "$wheel" --lib "$lib" --platform windows
-          done
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -97,16 +75,6 @@ jobs:
         with:
           target: ${{ matrix.target }}
           args: --release --locked --out dist --no-default-features
-
-      - name: Bundle prebuilt libduckdb into wheel
-        shell: bash
-        run: |
-          set -euo pipefail
-          lib=$(find target -path '*/duckdb-download/*' -name 'libduckdb.dylib' -print -quit)
-          test -n "$lib"
-          for wheel in dist/*.whl; do
-            python3 scripts/bundle_duckdb.py --wheel "$wheel" --lib "$lib" --platform macos
-          done
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
