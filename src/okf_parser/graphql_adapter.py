@@ -438,11 +438,15 @@ class _Runtime:
         record: dict[str, object] = {
             "__typename": self.projection.type_names[concept_type],
             "id": concept_id,
-            "logicalKey": row.get("logical_key") if isinstance(row.get("logical_key"), str) else None,
+            "logicalKey": (
+                row.get("logical_key") if isinstance(row.get("logical_key"), str) else None
+            ),
             "path": path,
             "type": concept_type,
             "title": row.get("title") if isinstance(row.get("title"), str) else None,
-            "description": row.get("description") if isinstance(row.get("description"), str) else None,
+            "description": (
+                row.get("description") if isinstance(row.get("description"), str) else None
+            ),
             "sourceDigest": str(row["source_digest"]),
             "parsedDigest": str(row["parsed_digest"]),
             "body": str(row["body"]),
