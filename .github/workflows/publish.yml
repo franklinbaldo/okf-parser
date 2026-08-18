@@ -16,33 +16,36 @@ concurrency:
 jobs:
   wheels-linux:
     name: Build wheel (linux-${{ matrix.target }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        target: [x86_64, aarch64]
+        include:
+          - target: x86_64
+            runner: ubuntu-latest
+          - target: aarch64
+            runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Build manylinux wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          maturin-version: v1.14.1
           target: ${{ matrix.target }}
           manylinux: 2_28
-          args: --release --locked --out dist
+          args: --release --locked --out dist --compatibility pypi
 
       - name: Prove the executable does not link DuckDB
         shell: bash
         run: python3 scripts/check_no_duckdb_link.py dist/*.whl
 
       - name: Install and exercise the wheel
-        if: matrix.target == 'x86_64'
         shell: bash
         run: |
           set -euo pipefail
           python3 -m venv "$RUNNER_TEMP/smoke"
           if [ -d "$RUNNER_TEMP/smoke/Scripts" ]; then bin="$RUNNER_TEMP/smoke/Scripts"; else bin="$RUNNER_TEMP/smoke/bin"; fi
-          "$bin/python" -m pip install --quiet --upgrade pip
           "$bin/python" -m pip install --quiet dist/*.whl
           mkdir -p "$RUNNER_TEMP/fixture"
           {
@@ -54,6 +57,13 @@ jobs:
           "$bin/okf-parser" --version
           "$bin/okf-parser" check "$RUNNER_TEMP/fixture"
           "$bin/okf-parser" duckdb "$RUNNER_TEMP/fixture" "$RUNNER_TEMP/bundle.duckdb"
+          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$bin/python" - <<'PY'
+          import os
+          import duckdb
+
+          with duckdb.connect(os.environ["BUNDLE"], read_only=True) as connection:
+              assert connection.sql("SELECT concept_type FROM okf.concepts").fetchone() == ("Note",)
+          PY
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -70,8 +80,9 @@ jobs:
       - name: Build Windows wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          maturin-version: v1.14.1
           target: x64
-          args: --release --locked --out dist
+          args: --release --locked --out dist --compatibility pypi
 
       - name: Prove the executable does not link DuckDB
         shell: bash
@@ -83,7 +94,6 @@ jobs:
           set -euo pipefail
           python3 -m venv "$RUNNER_TEMP/smoke"
           if [ -d "$RUNNER_TEMP/smoke/Scripts" ]; then bin="$RUNNER_TEMP/smoke/Scripts"; else bin="$RUNNER_TEMP/smoke/bin"; fi
-          "$bin/python" -m pip install --quiet --upgrade pip
           "$bin/python" -m pip install --quiet dist/*.whl
           mkdir -p "$RUNNER_TEMP/fixture"
           {
@@ -95,6 +105,13 @@ jobs:
           "$bin/okf-parser" --version
           "$bin/okf-parser" check "$RUNNER_TEMP/fixture"
           "$bin/okf-parser" duckdb "$RUNNER_TEMP/fixture" "$RUNNER_TEMP/bundle.duckdb"
+          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$bin/python" - <<'PY'
+          import os
+          import duckdb
+
+          with duckdb.connect(os.environ["BUNDLE"], read_only=True) as connection:
+              assert connection.sql("SELECT concept_type FROM okf.concepts").fetchone() == ("Note",)
+          PY
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -119,8 +136,9 @@ jobs:
       - name: Build macOS wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          maturin-version: v1.14.1
           target: ${{ matrix.target }}
-          args: --release --locked --out dist
+          args: --release --locked --out dist --compatibility pypi
 
       - name: Prove the executable does not link DuckDB
         shell: bash
@@ -132,7 +150,6 @@ jobs:
           set -euo pipefail
           python3 -m venv "$RUNNER_TEMP/smoke"
           if [ -d "$RUNNER_TEMP/smoke/Scripts" ]; then bin="$RUNNER_TEMP/smoke/Scripts"; else bin="$RUNNER_TEMP/smoke/bin"; fi
-          "$bin/python" -m pip install --quiet --upgrade pip
           "$bin/python" -m pip install --quiet dist/*.whl
           mkdir -p "$RUNNER_TEMP/fixture"
           {
@@ -144,6 +161,13 @@ jobs:
           "$bin/okf-parser" --version
           "$bin/okf-parser" check "$RUNNER_TEMP/fixture"
           "$bin/okf-parser" duckdb "$RUNNER_TEMP/fixture" "$RUNNER_TEMP/bundle.duckdb"
+          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$bin/python" - <<'PY'
+          import os
+          import duckdb
+
+          with duckdb.connect(os.environ["BUNDLE"], read_only=True) as connection:
+              assert connection.sql("SELECT concept_type FROM okf.concepts").fetchone() == ("Note",)
+          PY
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -160,6 +184,7 @@ jobs:
       - name: Build sdist
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          maturin-version: v1.14.1
           command: sdist
           args: --out dist
 
@@ -220,11 +245,11 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p release/npm release/native-npm
-          cargo build --release --locked --manifest-path rust-core/Cargo.toml
-          mkdir -p native-npm-linux-x64/bin
-          cp target/release/okf-parser native-npm-linux-x64/bin/okf-core
-          chmod +x native-npm-linux-x64/bin/okf-core
+          mkdir -p release/npm release/native-npm native-npm-linux-x64/bin
+          version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          wheel=$(find release/python -maxdepth 1 -type f -name "okf_parser-${version}-py3-none-manylinux*_x86_64.whl" -print -quit)
+          test -n "$wheel"
+          python scripts/native_from_wheel.py extract "$wheel" native-npm-linux-x64/bin/okf-core
           (cd native-npm-linux-x64 && npm pack --pack-destination ../release/native-npm --silent)
           (cd typescript && npm pack --pack-destination ../release/npm --silent)
           (cd typescript-duckdb && npm pack --pack-destination ../release/npm --silent)
@@ -256,6 +281,8 @@ jobs:
           listing="$(tar -tzf "$npm_native")"
           grep -qx 'package/bin/okf-core' <<<"$listing"
           grep -qx 'package/package.json' <<<"$listing"
+          wheel=$(find release/python -maxdepth 1 -type f -name "okf_parser-${version}-py3-none-manylinux*_x86_64.whl" -print -quit)
+          python scripts/native_from_wheel.py verify "$wheel" "$npm_native"
 
       - name: Generate immutable manifest
         shell: bash
@@ -276,7 +303,7 @@ jobs:
       - name: Inspect public registry state
         run: python -m scripts.registry_state --manifest release/manifest.json --output release/registry-state.json
 
-      - name: Smoke test each wheel installs without a Rust toolchain
+      - name: Re-smoke the host wheel without a Rust toolchain
         shell: bash
         run: |
           set -euo pipefail
@@ -384,7 +411,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-14]
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-15, macos-15-intel]
     steps:
       - name: Wait for PyPI index propagation
         shell: bash
@@ -408,6 +435,17 @@ jobs:
           if [ -f .smoke/bin/activate ]; then . .smoke/bin/activate; else . .smoke/Scripts/activate; fi
           pip install --quiet "okf-parser==${version}"
           okf-parser --version
+          mkdir -p "$RUNNER_TEMP/public-fixture"
+          printf '%s\n' '---' 'type: Note' '---' '# Note' > "$RUNNER_TEMP/public-fixture/note.md"
+          okf-parser check "$RUNNER_TEMP/public-fixture" >/dev/null
+          okf-parser duckdb "$RUNNER_TEMP/public-fixture" "$RUNNER_TEMP/public.duckdb" >/dev/null
+          BUNDLE="$RUNNER_TEMP/public.duckdb" python - <<'PY'
+          import os
+          import duckdb
+
+          with duckdb.connect(os.environ["BUNDLE"], read_only=True) as connection:
+              assert connection.sql("SELECT concept_type FROM okf.concepts").fetchone() == ("Note",)
+          PY
 
   finalize:
     name: Finalize GitHub release
