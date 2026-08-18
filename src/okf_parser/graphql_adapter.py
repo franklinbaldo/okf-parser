@@ -357,9 +357,7 @@ def _json_ready(value: object) -> object:
         result = None if math.isnan(value) else value
     elif isinstance(value, Decimal):
         result = str(value)
-    elif isinstance(value, datetime):
-        result = value.isoformat()
-    elif isinstance(value, date):
+    elif isinstance(value, (date, datetime)):
         result = value.isoformat()
     elif isinstance(value, UUID):
         result = str(value)
