@@ -33,12 +33,21 @@ def _normalized_ref(bundle: Bundle, reference: str | Path) -> tuple[str, str]:
     return concept_id, f"{concept_id}.md"
 
 
+def _record_from_relation_row(row: dict[str, object]) -> ConceptRecord:
+    """Restore nullable strings after an Ibis/pandas round-trip."""
+    normalized = dict(row)
+    for field in ("title", "description"):
+        if not isinstance(normalized.get(field), str):
+            normalized[field] = None
+    return ConceptRecord.model_validate(normalized)
+
+
 def _index(bundle: Bundle) -> tuple[dict[str, ConceptRecord], dict[str, ConceptRecord]]:
     """Materialize parser-owned concept records once for deterministic lookup."""
     by_id: dict[str, ConceptRecord] = {}
     by_path: dict[str, ConceptRecord] = {}
     for row in bundle.concepts.execute().to_dict(orient="records"):
-        record = ConceptRecord.model_validate(row)
+        record = _record_from_relation_row(row)
         by_id[record.concept_id] = record
         by_path[record.path] = record
     return by_id, by_path
