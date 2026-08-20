@@ -93,6 +93,21 @@ def test_resolve_relations_follows_bundle_concepts_and_filters_type(
     assert resolved[0].frontmatter["resource"] == "https://example.invalid/data"
 
 
+def test_resolve_relations_rejects_forged_source_record(tmp_path: Path) -> None:
+    _write(tmp_path / "index.md", "# Bundle\n")
+    _write(
+        tmp_path / "ready.md",
+        "---\ntype: article-ready\nsources:\n  - resource: source.md\n---\nOriginal body.\n",
+    )
+    _write(tmp_path / "source.md", "---\ntype: source\n---\nSource.\n")
+    bundle = load_bundle(tmp_path, engine="python")
+    ready = concept(bundle, "ready.md")
+    forged = ready.model_copy(update={"body": "Forged body.\n"})
+
+    with pytest.raises(ValueError, match="does not belong to bundle"):
+        resolve_relations(bundle, forged)
+
+
 def test_resolve_relations_rejects_unknown_local_concept(tmp_path: Path) -> None:
     _write(tmp_path / "index.md", "# Bundle\n")
     _write(
