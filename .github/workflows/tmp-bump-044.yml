@@ -1,0 +1,75 @@
+name: Temporary 0.44.0 metadata migration
+
+on:
+  push:
+    branches:
+      - feat/concept-relation-resolution
+    paths:
+      - .github/workflows/tmp-bump-044.yml
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/concept-relation-resolution
+      - name: Bump synchronized release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          old = "0.43.1"
+          new = "0.44.0"
+          paths = [
+              "pyproject.toml",
+              "uv.lock",
+              "README.md",
+              "rust-core/Cargo.toml",
+              "Cargo.lock",
+              "native-npm-linux-x64/package.json",
+              "typescript/package.json",
+              "typescript/package-lock.json",
+              "typescript/src/version.ts",
+              "typescript-duckdb/package.json",
+              "typescript-duckdb/package-lock.json",
+          ]
+          for raw in paths:
+              path = Path(raw)
+              text = path.read_text(encoding="utf-8")
+              if old not in text:
+                  raise SystemExit(f"expected {old} in {raw}")
+              path.write_text(text.replace(old, new), encoding="utf-8")
+
+          changelog = Path("changelog/0.44.0.md")
+          changelog.write_text(
+              "---\n"
+              "type: Release\n"
+              "title: okf-parser 0.44.0\n"
+              "---\n\n"
+              "# okf-parser 0.44.0\n\n"
+              "- Expose parser-owned concept records for application-facing lookup by concept id or in-bundle Markdown path.\n"
+              "- Expose validated structured frontmatter from `ConceptRecord`.\n"
+              "- Add generic frontmatter resource-relation resolution with optional target-type filtering, so consumers do not reparse Markdown or implement bundle containment themselves.\n",
+              encoding="utf-8",
+          )
+          PY
+      - name: Commit generated metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml uv.lock README.md rust-core/Cargo.toml Cargo.lock \
+            native-npm-linux-x64/package.json typescript/package.json \
+            typescript/package-lock.json typescript/src/version.ts \
+            typescript-duckdb/package.json typescript-duckdb/package-lock.json \
+            changelog/0.44.0.md
+          git diff --cached --check
+          git commit -m "chore(release): bump version to 0.44.0"
+          git push origin HEAD:feat/concept-relation-resolution
