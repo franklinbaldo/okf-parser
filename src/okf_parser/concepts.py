@@ -53,7 +53,8 @@ def _from_index(
     concept_id, markdown_path = _normalized_ref(bundle, reference)
     record = by_id.get(concept_id) or by_path.get(markdown_path)
     if record is None:
-        raise KeyError(f"OKF concept not found in bundle: {reference}")
+        msg = f"OKF concept not found in bundle: {reference}"
+        raise KeyError(msg)
     return record
 
 
@@ -85,17 +86,18 @@ def resolve_relations(
     if relations is None:
         return ()
     if not isinstance(relations, list):
-        raise ValueError(f"OKF relation field must be a list: {field}")
+        msg = f"OKF relation field must be a list: {field}"
+        raise ValueError(msg)
 
     resolved: list[ConceptRecord] = []
     for index, relation in enumerate(relations):
         if not isinstance(relation, dict):
-            raise ValueError(f"OKF relation must be a mapping: {field}[{index}]")
+            msg = f"OKF relation must be a mapping: {field}[{index}]"
+            raise ValueError(msg)
         resource = relation.get(resource_key)
         if not isinstance(resource, str) or not resource.strip():
-            raise ValueError(
-                f"OKF relation must declare string {resource_key}: {field}[{index}]"
-            )
+            msg = f"OKF relation must declare string {resource_key}: {field}[{index}]"
+            raise ValueError(msg)
         target = _from_index(bundle, resource, by_id, by_path)
         if target_type is None or target.concept_type == target_type:
             resolved.append(target)
