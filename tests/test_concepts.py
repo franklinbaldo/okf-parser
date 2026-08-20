@@ -34,6 +34,29 @@ def test_concept_resolves_by_id_or_markdown_path(tmp_path: Path) -> None:
     assert by_id.body == "Source body.\n"
 
 
+def test_concept_accepts_absolute_path_inside_bundle(tmp_path: Path) -> None:
+    _write(tmp_path / "index.md", "# Bundle\n")
+    source = tmp_path / "knowledge/source.md"
+    _write(source, "---\ntype: source\ntitle: Example\n---\nBody.\n")
+    bundle = load_bundle(tmp_path, engine="python")
+
+    resolved = concept(bundle, source.resolve())
+
+    assert resolved.concept_id == "knowledge/source"
+
+
+def test_concept_rejects_path_outside_bundle(tmp_path: Path) -> None:
+    bundle_root = tmp_path / "bundle"
+    outside = tmp_path / "outside.md"
+    _write(bundle_root / "index.md", "# Bundle\n")
+    _write(bundle_root / "inside.md", "---\ntype: note\n---\nInside.\n")
+    _write(outside, "---\ntype: note\n---\nOutside.\n")
+    bundle = load_bundle(bundle_root, engine="python")
+
+    with pytest.raises(ValueError, match="escapes bundle root"):
+        concept(bundle, outside.resolve())
+
+
 def test_resolve_relations_follows_bundle_concepts_and_filters_type(tmp_path: Path) -> None:
     _write(tmp_path / "index.md", "# Bundle\n")
     _write(
