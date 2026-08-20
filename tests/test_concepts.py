@@ -23,7 +23,7 @@ def test_concept_resolves_by_id_or_markdown_path(tmp_path: Path) -> None:
         tmp_path / "knowledge/source.md",
         "---\ntype: source\ntitle: Example source\n---\nSource body.\n",
     )
-    bundle = load_bundle(tmp_path, engine="python")
+    bundle = load_bundle(tmp_path, engine="native")
 
     by_id = concept(bundle, "knowledge/source")
     by_path = concept(bundle, "knowledge/source.md")
@@ -38,7 +38,7 @@ def test_concept_accepts_absolute_path_inside_bundle(tmp_path: Path) -> None:
     _write(tmp_path / "index.md", "# Bundle\n")
     source = tmp_path / "knowledge/source.md"
     _write(source, "---\ntype: source\ntitle: Example\n---\nBody.\n")
-    bundle = load_bundle(tmp_path, engine="python")
+    bundle = load_bundle(tmp_path, engine="native")
 
     resolved = concept(bundle, source.resolve())
 
@@ -51,7 +51,7 @@ def test_concept_rejects_path_outside_bundle(tmp_path: Path) -> None:
     _write(bundle_root / "index.md", "# Bundle\n")
     _write(bundle_root / "inside.md", "---\ntype: note\n---\nInside.\n")
     _write(outside, "---\ntype: note\n---\nOutside.\n")
-    bundle = load_bundle(bundle_root, engine="python")
+    bundle = load_bundle(bundle_root, engine="native")
 
     with pytest.raises(ValueError, match="escapes bundle root"):
         concept(bundle, outside.resolve())
@@ -78,7 +78,7 @@ def test_resolve_relations_follows_bundle_concepts_and_filters_type(tmp_path: Pa
         tmp_path / "knowledge/source.md",
         "---\ntype: source\ntitle: Primary\nresource: https://example.invalid/data\n---\nSource.\n",
     )
-    bundle = load_bundle(tmp_path, engine="python")
+    bundle = load_bundle(tmp_path, engine="native")
 
     resolved = resolve_relations(
         bundle,
@@ -101,7 +101,7 @@ def test_resolve_relations_supports_custom_field_and_resource_key(tmp_path: Path
         tmp_path / "knowledge/source.md",
         "---\ntype: source\ntitle: Primary\n---\nSource body.\n",
     )
-    bundle = load_bundle(tmp_path, engine="python")
+    bundle = load_bundle(tmp_path, engine="native")
 
     resolved = resolve_relations(
         bundle,
@@ -121,7 +121,7 @@ def test_resolve_relations_rejects_forged_source_record(tmp_path: Path) -> None:
         "---\ntype: article-ready\nsources:\n  - resource: source.md\n---\nOriginal body.\n",
     )
     _write(tmp_path / "source.md", "---\ntype: source\n---\nSource.\n")
-    bundle = load_bundle(tmp_path, engine="python")
+    bundle = load_bundle(tmp_path, engine="native")
     ready = concept(bundle, "ready.md")
     forged = ready.model_copy(update={"body": "Forged body.\n"})
 
@@ -135,7 +135,7 @@ def test_resolve_relations_rejects_unknown_local_concept(tmp_path: Path) -> None
         tmp_path / "ready.md",
         "---\ntype: article-ready\nsources:\n  - resource: missing.md\n---\nBody.\n",
     )
-    bundle = load_bundle(tmp_path, engine="python")
+    bundle = load_bundle(tmp_path, engine="native")
 
     with pytest.raises(KeyError, match="not found"):
         resolve_relations(bundle, "ready.md")
@@ -147,7 +147,7 @@ def test_resolve_relations_rejects_malformed_relation_shape(tmp_path: Path) -> N
         tmp_path / "ready.md",
         "---\ntype: article-ready\nsources: nope\n---\nBody.\n",
     )
-    bundle = load_bundle(tmp_path, engine="python")
+    bundle = load_bundle(tmp_path, engine="native")
 
     with pytest.raises(TypeError, match="must be a list"):
         resolve_relations(bundle, "ready.md")
@@ -171,7 +171,7 @@ def test_resolve_relations_rejects_malformed_relation_entries(
         tmp_path / "ready.md",
         "---\ntype: article-ready\nsources:\n" + sources_yaml + "---\nBody.\n",
     )
-    bundle = load_bundle(tmp_path, engine="python")
+    bundle = load_bundle(tmp_path, engine="native")
 
     with pytest.raises(exception_type, match=message):
         resolve_relations(bundle, "ready.md")
