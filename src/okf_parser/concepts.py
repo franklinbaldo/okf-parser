@@ -2,33 +2,13 @@
 
 from __future__ import annotations
 
-import json
-from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
+
+from okf_parser.models import ConceptRecord
 
 if TYPE_CHECKING:
     from okf_parser.bundle import Bundle
-
-
-@dataclass(frozen=True, slots=True)
-class ConceptView:
-    """One parsed OKF concept exposed as a stable application-facing value object."""
-
-    concept_id: str
-    path: str
-    concept_type: str | None
-    title: str | None
-    description: str | None
-    frontmatter: dict[str, Any]
-    body: str
-    source_digest: str
-    parsed_digest: str
-
-
-def _rows(bundle: Bundle) -> list[dict[str, Any]]:
-    """Materialize the concept relation once for bounded application-side lookup."""
-    return bundle.concepts.execute().to_dict(orient="records")
 
 
 def _normalized_ref(bundle: Bundle, reference: str | Path) -> tuple[str, str]:
@@ -48,74 +28,66 @@ def _normalized_ref(bundle: Bundle, reference: str | Path) -> tuple[str, str]:
         msg = f"OKF concept reference escapes bundle root: {reference}"
         raise ValueError(msg)
     if path.suffix.lower() == ".md":
-        concept_id = path.with_suffix("").as_posix()
-        markdown_path = path.as_posix()
-    else:
-        concept_id = path.as_posix()
-        markdown_path = f"{concept_id}.md"
-    return concept_id, markdown_path
+        return path.with_suffix("").as_posix(), path.as_posix()
+    concept_id = path.as_posix()
+    return concept_id, f"{concept_id}.md"
 
 
-def concept(bundle: Bundle, reference: str | Path) -> ConceptView:
-    """Resolve one concept by id, Markdown path, or absolute path inside the bundle.
+def _index(bundle: Bundle) -> tuple[dict[str, ConceptRecord], dict[str, ConceptRecord]]:
+    """Materialize parser-owned concept records once for deterministic lookup."""
+    by_id: dict[str, ConceptRecord] = {}
+    by_path: dict[str, ConceptRecord] = {}
+    for row in bundle.concepts.execute().to_dict(orient="records"):
+        record = ConceptRecord.model_validate(row)
+        by_id[record.concept_id] = record
+        by_path[record.path] = record
+    return by_id, by_path
 
-    ``reference`` is matched only against concepts already admitted by the loaded
-    bundle. Absolute paths are accepted only when contained by ``bundle.root``.
-    Consumers therefore do not need to reimplement filesystem containment or
-    reparse YAML to obtain application-facing concept data.
-    """
+
+def _from_index(
+    bundle: Bundle,
+    reference: str | Path,
+    by_id: dict[str, ConceptRecord],
+    by_path: dict[str, ConceptRecord],
+) -> ConceptRecord:
     concept_id, markdown_path = _normalized_ref(bundle, reference)
-    matches = [
-        row
-        for row in _rows(bundle)
-        if row["concept_id"] == concept_id or row["path"] == markdown_path
-    ]
-    if not matches:
+    record = by_id.get(concept_id) or by_path.get(markdown_path)
+    if record is None:
         raise KeyError(f"OKF concept not found in bundle: {reference}")
-    if len(matches) != 1:
-        raise ValueError(f"OKF concept reference is ambiguous: {reference}")
+    return record
 
-    row = matches[0]
-    frontmatter = json.loads(row["frontmatter_json"])
-    if not isinstance(frontmatter, dict):
-        raise ValueError(f"OKF concept frontmatter is not a mapping: {reference}")
-    return ConceptView(
-        concept_id=str(row["concept_id"]),
-        path=str(row["path"]),
-        concept_type=(str(row["concept_type"]) if row["concept_type"] is not None else None),
-        title=(str(row["title"]) if row["title"] is not None else None),
-        description=(str(row["description"]) if row["description"] is not None else None),
-        frontmatter=frontmatter,
-        body=str(row["body"]),
-        source_digest=str(row["source_digest"]),
-        parsed_digest=str(row["parsed_digest"]),
-    )
+
+def concept(bundle: Bundle, reference: str | Path) -> ConceptRecord:
+    """Resolve one parser-owned concept by id or in-bundle Markdown path."""
+    by_id, by_path = _index(bundle)
+    return _from_index(bundle, reference, by_id, by_path)
 
 
 def resolve_relations(
     bundle: Bundle,
-    source: str | Path | ConceptView,
+    source: str | Path | ConceptRecord,
     *,
     field: str = "sources",
     resource_key: str = "resource",
     target_type: str | None = None,
-) -> list[ConceptView]:
-    """Resolve local concept relations declared in a frontmatter list.
+) -> tuple[ConceptRecord, ...]:
+    """Resolve local concepts referenced by a frontmatter relation list.
 
-    The relation container is intentionally generic: consumers choose the
-    frontmatter ``field`` and the key holding the target ``resource``. Remote or
-    non-concept resources fail explicitly instead of being silently reinterpreted.
-    ``target_type`` can restrict the returned concepts without teaching the parser
-    any consumer-specific vocabulary.
+    Consumers choose the relation field, resource key and optional target type;
+    this module owns only generic OKF lookup, shape validation and bundle
+    containment. Domain meaning remains with the consumer.
     """
-    source_concept = concept(bundle, source) if not isinstance(source, ConceptView) else source
+    by_id, by_path = _index(bundle)
+    source_concept = (
+        source if isinstance(source, ConceptRecord) else _from_index(bundle, source, by_id, by_path)
+    )
     relations = source_concept.frontmatter.get(field, [])
     if relations is None:
-        return []
+        return ()
     if not isinstance(relations, list):
         raise ValueError(f"OKF relation field must be a list: {field}")
 
-    resolved: list[ConceptView] = []
+    resolved: list[ConceptRecord] = []
     for index, relation in enumerate(relations):
         if not isinstance(relation, dict):
             raise ValueError(f"OKF relation must be a mapping: {field}[{index}]")
@@ -124,7 +96,7 @@ def resolve_relations(
             raise ValueError(
                 f"OKF relation must declare string {resource_key}: {field}[{index}]"
             )
-        target = concept(bundle, resource)
+        target = _from_index(bundle, resource, by_id, by_path)
         if target_type is None or target.concept_type == target_type:
             resolved.append(target)
-    return resolved
+    return tuple(resolved)
