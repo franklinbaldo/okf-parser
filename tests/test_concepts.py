@@ -149,21 +149,22 @@ def test_resolve_relations_rejects_malformed_relation_shape(tmp_path: Path) -> N
     )
     bundle = load_bundle(tmp_path, engine="python")
 
-    with pytest.raises(ValueError, match="must be a list"):
+    with pytest.raises(TypeError, match="must be a list"):
         resolve_relations(bundle, "ready.md")
 
 
 @pytest.mark.parametrize(
-    ("sources_yaml", "message"),
+    ("sources_yaml", "message", "exception_type"),
     [
-        ("  - source.md\n", "relation must be a mapping"),
-        ("  - resource: '   '\n", "must declare string resource"),
+        ("  - source.md\n", "relation must be a mapping", TypeError),
+        ("  - resource: '   '\n", "must declare string resource", ValueError),
     ],
 )
 def test_resolve_relations_rejects_malformed_relation_entries(
     tmp_path: Path,
     sources_yaml: str,
     message: str,
+    exception_type: type[Exception],
 ) -> None:
     _write(tmp_path / "index.md", "# Bundle\n")
     _write(
@@ -172,5 +173,5 @@ def test_resolve_relations_rejects_malformed_relation_entries(
     )
     bundle = load_bundle(tmp_path, engine="python")
 
-    with pytest.raises(ValueError, match=message):
+    with pytest.raises(exception_type, match=message):
         resolve_relations(bundle, "ready.md")
