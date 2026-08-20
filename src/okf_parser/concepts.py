@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -31,10 +31,22 @@ def _rows(bundle: Bundle) -> list[dict[str, Any]]:
     return bundle.concepts.execute().to_dict(orient="records")
 
 
-def _normalized_ref(reference: str) -> tuple[str, str]:
-    """Return candidate concept id and Markdown path for one bundle-relative reference."""
-    raw = reference.strip().removeprefix("./").lstrip("/")
+def _normalized_ref(bundle: Bundle, reference: str | Path) -> tuple[str, str]:
+    """Return candidate concept id and Markdown path for one in-bundle reference."""
+    candidate = Path(reference)
+    if candidate.is_absolute():
+        try:
+            raw = candidate.resolve().relative_to(bundle.root.resolve()).as_posix()
+        except ValueError as exc:
+            msg = f"OKF concept reference escapes bundle root: {reference}"
+            raise ValueError(msg) from exc
+    else:
+        raw = str(reference).strip().replace("\\", "/").removeprefix("./")
+
     path = PurePosixPath(raw)
+    if path.is_absolute() or ".." in path.parts:
+        msg = f"OKF concept reference escapes bundle root: {reference}"
+        raise ValueError(msg)
     if path.suffix.lower() == ".md":
         concept_id = path.with_suffix("").as_posix()
         markdown_path = path.as_posix()
@@ -44,13 +56,15 @@ def _normalized_ref(reference: str) -> tuple[str, str]:
     return concept_id, markdown_path
 
 
-def concept(bundle: Bundle, reference: str) -> ConceptView:
-    """Resolve one concept by bundle-relative concept id or Markdown path.
+def concept(bundle: Bundle, reference: str | Path) -> ConceptView:
+    """Resolve one concept by id, Markdown path, or absolute path inside the bundle.
 
     ``reference`` is matched only against concepts already admitted by the loaded
-    bundle. This avoids consumer-side filesystem traversal and reparsing.
+    bundle. Absolute paths are accepted only when contained by ``bundle.root``.
+    Consumers therefore do not need to reimplement filesystem containment or
+    reparse YAML to obtain application-facing concept data.
     """
-    concept_id, markdown_path = _normalized_ref(reference)
+    concept_id, markdown_path = _normalized_ref(bundle, reference)
     matches = [
         row
         for row in _rows(bundle)
@@ -80,7 +94,7 @@ def concept(bundle: Bundle, reference: str) -> ConceptView:
 
 def resolve_relations(
     bundle: Bundle,
-    source: str | ConceptView,
+    source: str | Path | ConceptView,
     *,
     field: str = "sources",
     resource_key: str = "resource",
@@ -94,7 +108,7 @@ def resolve_relations(
     ``target_type`` can restrict the returned concepts without teaching the parser
     any consumer-specific vocabulary.
     """
-    source_concept = concept(bundle, source) if isinstance(source, str) else source
+    source_concept = concept(bundle, source) if not isinstance(source, ConceptView) else source
     relations = source_concept.frontmatter.get(field, [])
     if relations is None:
         return []
