@@ -97,12 +97,7 @@ def test_resolve_relations_rejects_unknown_local_concept(tmp_path: Path) -> None
     _write(tmp_path / "index.md", "# Bundle\n")
     _write(
         tmp_path / "ready.md",
-        "---\n"
-        "type: article-ready\n"
-        "sources:\n"
-        "  - resource: missing.md\n"
-        "---\n"
-        "Body.\n",
+        "---\ntype: article-ready\nsources:\n  - resource: missing.md\n---\nBody.\n",
     )
     bundle = load_bundle(tmp_path, engine="python")
 
