@@ -17,10 +17,10 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - name: Generate canonical lockfiles and formatting
         run: |
+          cargo generate-lockfile
           uv lock
           uv sync --locked
           uv run ruff format .
-          cargo generate-lockfile
           git status --short
           mkdir -p .generated
           git diff --name-only > .generated/files.txt
