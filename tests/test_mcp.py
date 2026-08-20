@@ -116,7 +116,9 @@ def test_mcp_public_schemas_keep_aliases_and_preview_write_pairs_match() -> None
         if key != "expected_preview_token"
     } == preview_properties
     assert import_preview["required"] == import_write["required"]
-    assert import_preview["additionalProperties"] == import_write["additionalProperties"]
+    assert (
+        import_preview["additionalProperties"] == import_write["additionalProperties"]
+    )
     assert "write" not in preview_properties
     assert preview_properties["on_conflict"]["enum"] == [
         "skip",
@@ -234,10 +236,14 @@ def test_import_preview_and_write_share_service_with_review_binding_on_commit(
 
     assert preview == {"written": False, "preview_token": "opaque-binding"}
     assert written == {"written": True}
-    assert calls[0] | {
-        "write": True,
-        "expected_preview_token": preview["preview_token"],
-    } == calls[1]
+    assert (
+        calls[0]
+        | {
+            "write": True,
+            "expected_preview_token": preview["preview_token"],
+        }
+        == calls[1]
+    )
 
 
 def test_duckdb_export_preserves_cli_collision_payload(monkeypatch: pytest.MonkeyPatch) -> None:
