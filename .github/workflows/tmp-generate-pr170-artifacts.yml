@@ -22,17 +22,17 @@ jobs:
           uv sync --locked
           uv run ruff format .
           git status --short
-          mkdir -p .generated
-          git diff --name-only > .generated/files.txt
+          mkdir -p generated
+          git diff --name-only > generated/files.txt
           while IFS= read -r file; do
             [ -z "$file" ] && continue
-            mkdir -p ".generated/$(dirname "$file")"
-            cp "$file" ".generated/$file"
-          done < .generated/files.txt
+            mkdir -p "generated/$(dirname "$file")"
+            cp "$file" "generated/$file"
+          done < generated/files.txt
       - name: Upload generated files
         uses: actions/upload-artifact@v4
         with:
           name: pr170-generated
-          path: .generated
+          path: generated
           if-no-files-found: error
           retention-days: 1
