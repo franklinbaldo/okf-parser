@@ -127,9 +127,7 @@ def _destination_state(destination: Path) -> dict[str, str]:
     return {"kind": "absent"}
 
 
-def _stable_rows(
-    columns: Sequence[str], rows: Sequence[dict[str, object]]
-) -> list[list[object]]:
+def _stable_rows(columns: Sequence[str], rows: Sequence[dict[str, object]]) -> list[list[object]]:
     """Preserve the effective source values in a JSON-stable representation."""
     stable: list[list[object]] = []
     for row in rows:
@@ -167,9 +165,7 @@ def _preview_token(
         "on_conflict": on_conflict,
         "columns": list(columns),
         "rows": _stable_rows(columns, rows),
-        "destinations": [
-            [relative, destinations[relative]] for relative in sorted(destinations)
-        ],
+        "destinations": [[relative, destinations[relative]] for relative in sorted(destinations)],
     }
     encoded = json.dumps(
         payload,
@@ -229,8 +225,10 @@ def import_bundle(  # each argument is an independent public CLI flag.
         rows=rows,
         destinations=destinations,
     )
-    if write and expected_preview_token is not None and not hmac.compare_digest(
-        preview_token, expected_preview_token
+    if (
+        write
+        and expected_preview_token is not None
+        and not hmac.compare_digest(preview_token, expected_preview_token)
     ):
         raise BundleImportError("import preview is stale; rerun preview before committing")
     if duplicate_ids:
