@@ -1,6 +1,7 @@
 """Relational inspection and validation for Open Knowledge Format bundles."""
 
 from okf_parser.bundle import Bundle, validate_path
+from okf_parser.concepts import ConceptView, concept, resolve_relations
 from okf_parser.edit import EditError, preview_concept_edit, write_concept_edit
 from okf_parser.engine import load_bundle
 from okf_parser.graphql_adapter import (
@@ -13,15 +14,11 @@ from okf_parser.graphql_adapter import (
 )
 from okf_parser.ingestion import DocumentEnvelope, IngestionCapability, ingest_documents
 from okf_parser.models import Severity, ValidationReport, Violation
-from okf_parser.resource_relations import (
-    concept_at,
-    concept_frontmatter,
-    resolve_resource_relations,
-)
 from okf_parser.typed_relations import TypedRelations
 
 __all__ = [
     "Bundle",
+    "ConceptView",
     "DocumentEnvelope",
     "EditError",
     "GraphQLAdapterUnavailableError",
@@ -34,13 +31,12 @@ __all__ = [
     "ValidationReport",
     "Violation",
     "build_graphql_schema",
-    "concept_at",
-    "concept_frontmatter",
+    "concept",
     "export_graphql_sdl",
     "ingest_documents",
     "load_bundle",
     "preview_concept_edit",
-    "resolve_resource_relations",
+    "resolve_relations",
     "validate_path",
     "write_concept_edit",
 ]
