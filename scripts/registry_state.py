@@ -114,9 +114,13 @@ def _string(mapping: dict[str, object], key: str, label: str) -> str:
 # Not a fixed enum here on purpose: registry_state.py stays decoupled from
 # release_contract.py's exact wheel-kind names (one per supported platform,
 # e.g. "python-wheel-linux-x86_64") so adding/removing a target platform
-# never requires touching this file. Any kind other than the two npm
-# packages is treated as a PyPI artifact for okf-parser.
-_NPM_KINDS: Final = {"npm-parser", "npm-duckdb"}
+# never requires touching this file. Any kind other than npm package kinds is
+# treated as a PyPI artifact for okf-parser.
+_NPM_KINDS: Final = {"npm-parser", "npm-duckdb", "npm-native"}
+# Keep compatibility with older manifests/tests that predate the native npm
+# artifact; release_contract.py is the authority that requires the complete
+# current release set. When npm-native is present here, it must be inspected.
+_REQUIRED_NPM_KINDS: Final = {"npm-parser", "npm-duckdb"}
 _MIN_PYPI_ARTIFACTS: Final = 2  # at least one wheel + the sdist
 
 
@@ -134,7 +138,7 @@ def _artifact_index(manifest: dict[str, object]) -> tuple[str, dict[str, Artifac
         if kind in indexed:
             _fail(f"duplicate manifest artifact kind {kind!r}")
         indexed[kind] = item
-    if not _NPM_KINDS.issubset(indexed):
+    if not _REQUIRED_NPM_KINDS.issubset(indexed):
         _fail("manifest artifact set is missing an npm package")
     pypi_kinds = set(indexed) - _NPM_KINDS
     if len(pypi_kinds) < _MIN_PYPI_ARTIFACTS:
@@ -351,6 +355,15 @@ def inspect_registry_state(
         _npm_state("okf-parser", artifacts["npm-parser"], fetch, timeout),
         _npm_state("okf-parser-duckdb", artifacts["npm-duckdb"], fetch, timeout),
     ]
+    if "npm-native" in artifacts:
+        entries.append(
+            _npm_state(
+                "okf-parser-native-linux-x64",
+                artifacts["npm-native"],
+                fetch,
+                timeout,
+            )
+        )
     states = [entry["state"] for entry in entries]
     allowed = {"absent", "present_expected"}
     return {
