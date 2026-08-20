@@ -24,6 +24,7 @@ jobs:
         with:
           node-version: '24'
       - name: Regenerate deterministic artifacts
+        # Temporary branch-only helper; this workflow is removed before merge.
         run: |
           uv lock
           uv sync --frozen --all-groups
