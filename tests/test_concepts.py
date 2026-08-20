@@ -93,6 +93,34 @@ def test_resolve_relations_follows_bundle_concepts_and_filters_type(
     assert resolved[0].frontmatter["resource"] == "https://example.invalid/data"
 
 
+def test_resolve_relations_supports_custom_field_and_resource_key(tmp_path: Path) -> None:
+    _write(tmp_path / "index.md", "# Bundle\n")
+    _write(
+        tmp_path / "knowledge/report.md",
+        "---\n"
+        "type: report\n"
+        "citations:\n"
+        "  - concept: knowledge/source.md\n"
+        "---\n"
+        "Report body.\n",
+    )
+    _write(
+        tmp_path / "knowledge/source.md",
+        "---\ntype: source\ntitle: Primary\n---\nSource body.\n",
+    )
+    bundle = load_bundle(tmp_path, engine="python")
+
+    resolved = resolve_relations(
+        bundle,
+        "knowledge/report.md",
+        field="citations",
+        resource_key="concept",
+        target_type="source",
+    )
+
+    assert [item.concept_id for item in resolved] == ["knowledge/source"]
+
+
 def test_resolve_relations_rejects_forged_source_record(tmp_path: Path) -> None:
     _write(tmp_path / "index.md", "# Bundle\n")
     _write(
