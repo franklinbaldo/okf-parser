@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   generate:
@@ -14,6 +14,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/import-preview-token
       - uses: astral-sh/setup-uv@v6
       - name: Generate canonical lockfiles and formatting
         run: |
@@ -22,17 +24,11 @@ jobs:
           uv sync --locked
           uv run ruff format .
           git status --short
-          mkdir -p generated
-          git diff --name-only > generated/files.txt
-          while IFS= read -r file; do
-            [ -z "$file" ] && continue
-            mkdir -p "generated/$(dirname "$file")"
-            cp "$file" "generated/$file"
-          done < generated/files.txt
-      - name: Upload generated files
-        uses: actions/upload-artifact@v4
-        with:
-          name: pr170-generated
-          path: generated
-          if-no-files-found: error
-          retention-days: 1
+      - name: Commit generated artifacts
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock uv.lock src/okf_parser/bundle_import.py
+          git diff --cached --quiet && exit 0
+          git commit -m "chore: regenerate 0.45.0 locks and formatting"
+          git push origin HEAD:feat/import-preview-token
