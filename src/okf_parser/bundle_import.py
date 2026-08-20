@@ -182,6 +182,19 @@ def _validate_options(*, overwrite: bool, on_conflict: ImportConflictPolicy) -> 
         raise BundleImportError(message)
 
 
+def _validate_preview_token(
+    *, write: bool, preview_token: str, expected_preview_token: str | None
+) -> None:
+    """Fail closed when a reviewed import preview no longer matches current state."""
+    if (
+        write
+        and expected_preview_token is not None
+        and not hmac.compare_digest(preview_token, expected_preview_token)
+    ):
+        message = "import preview is stale; rerun preview before committing"
+        raise BundleImportError(message)
+
+
 def import_bundle(  # each argument is an independent public CLI flag.
     source: str,
     path: str,
@@ -225,12 +238,11 @@ def import_bundle(  # each argument is an independent public CLI flag.
         rows=rows,
         destinations=destinations,
     )
-    if (
-        write
-        and expected_preview_token is not None
-        and not hmac.compare_digest(preview_token, expected_preview_token)
-    ):
-        raise BundleImportError("import preview is stale; rerun preview before committing")
+    _validate_preview_token(
+        write=write,
+        preview_token=preview_token,
+        expected_preview_token=expected_preview_token,
+    )
     if duplicate_ids:
         return {
             "created": [],
