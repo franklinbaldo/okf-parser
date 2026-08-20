@@ -103,9 +103,7 @@ def test_native_npm_package_is_not_mistaken_for_a_pypi_file() -> None:
                 ]
             },
         ),
-        parser_version: _result(
-            parser_version, 200, _npm_payload("okf-parser", "sha512-parser")
-        ),
+        parser_version: _result(parser_version, 200, _npm_payload("okf-parser", "sha512-parser")),
         duckdb_version: _result(
             duckdb_version, 200, _npm_payload("okf-parser-duckdb", "sha512-duckdb")
         ),
@@ -152,9 +150,7 @@ def test_native_npm_integrity_conflict_blocks_publication() -> None:
                 ]
             },
         ),
-        parser_version: _result(
-            parser_version, 200, _npm_payload("okf-parser", "sha512-parser")
-        ),
+        parser_version: _result(parser_version, 200, _npm_payload("okf-parser", "sha512-parser")),
         duckdb_version: _result(
             duckdb_version, 200, _npm_payload("okf-parser-duckdb", "sha512-duckdb")
         ),
