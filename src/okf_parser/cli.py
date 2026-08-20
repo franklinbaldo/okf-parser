@@ -150,7 +150,7 @@ def graph(path: str, *, exclude: RepeatableStrings = None) -> CliResult[JsonPayl
 
 
 @app.command
-def schema(  # each argument is an independent public schema flags.
+def schema(  # each argument is an independent public CLI flag.
     path: str,
     *,
     schema_format: CliSchemaFormat = "json",
@@ -481,7 +481,7 @@ def mcp_duckdb_export(
     exclude: RepeatableStrings = None,
     spec_template: str | None = None,
 ) -> dict[str, object]:
-    """Materialize the bundle into a persistent DuckDB database file."""
+    """Materialize the bundle into a persistent DuckDB database."""
     return _duckdb_export_payload(
         path,
         database,
