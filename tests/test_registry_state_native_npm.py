@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from scripts.registry_state import NPM_BASE, PYPI_BASE, HttpResult, inspect_registry_state
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 VERSION = "1.2.3"
 
