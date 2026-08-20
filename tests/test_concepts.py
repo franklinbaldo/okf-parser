@@ -95,12 +95,7 @@ def test_resolve_relations_supports_custom_field_and_resource_key(tmp_path: Path
     _write(tmp_path / "index.md", "# Bundle\n")
     _write(
         tmp_path / "knowledge/report.md",
-        "---\n"
-        "type: report\n"
-        "citations:\n"
-        "  - concept: knowledge/source.md\n"
-        "---\n"
-        "Report body.\n",
+        "---\ntype: report\ncitations:\n  - concept: knowledge/source.md\n---\nReport body.\n",
     )
     _write(
         tmp_path / "knowledge/source.md",
