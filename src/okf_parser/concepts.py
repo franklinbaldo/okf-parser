@@ -79,9 +79,14 @@ def resolve_relations(
     containment. Domain meaning remains with the consumer.
     """
     by_id, by_path = _index(bundle)
-    source_concept = (
-        source if isinstance(source, ConceptRecord) else _from_index(bundle, source, by_id, by_path)
-    )
+    if isinstance(source, ConceptRecord):
+        source_concept = _from_index(bundle, source.path, by_id, by_path)
+        if source_concept != source:
+            msg = f"OKF source concept record does not belong to bundle: {source.path}"
+            raise ValueError(msg)
+    else:
+        source_concept = _from_index(bundle, source, by_id, by_path)
+
     relations = source_concept.frontmatter.get(field, [])
     if relations is None:
         return ()
