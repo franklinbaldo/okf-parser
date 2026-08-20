@@ -57,7 +57,9 @@ def test_concept_rejects_path_outside_bundle(tmp_path: Path) -> None:
         concept(bundle, outside.resolve())
 
 
-def test_resolve_relations_follows_bundle_concepts_and_filters_type(tmp_path: Path) -> None:
+def test_resolve_relations_follows_bundle_concepts_and_filters_type(
+    tmp_path: Path,
+) -> None:
     _write(tmp_path / "index.md", "# Bundle\n")
     _write(
         tmp_path / "knowledge/ready.md",
