@@ -92,13 +92,13 @@ def resolve_relations(
         return ()
     if not isinstance(relations, list):
         msg = f"OKF relation field must be a list: {field}"
-        raise ValueError(msg)
+        raise TypeError(msg)
 
     resolved: list[ConceptRecord] = []
     for index, relation in enumerate(relations):
         if not isinstance(relation, dict):
             msg = f"OKF relation must be a mapping: {field}[{index}]"
-            raise ValueError(msg)
+            raise TypeError(msg)
         resource = relation.get(resource_key)
         if not isinstance(resource, str) or not resource.strip():
             msg = f"OKF relation must declare string {resource_key}: {field}[{index}]"
