@@ -111,14 +111,10 @@ def test_mcp_public_schemas_keep_aliases_and_preview_write_pairs_match() -> None
     assert "expected_preview_token" not in preview_properties
     assert "expected_preview_token" in write_properties
     assert {
-        key: value
-        for key, value in write_properties.items()
-        if key != "expected_preview_token"
+        key: value for key, value in write_properties.items() if key != "expected_preview_token"
     } == preview_properties
     assert import_preview["required"] == import_write["required"]
-    assert (
-        import_preview["additionalProperties"] == import_write["additionalProperties"]
-    )
+    assert import_preview["additionalProperties"] == import_write["additionalProperties"]
     assert "write" not in preview_properties
     assert preview_properties["on_conflict"]["enum"] == [
         "skip",
