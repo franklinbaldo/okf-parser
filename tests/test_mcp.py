@@ -214,7 +214,8 @@ def test_import_preview_and_write_share_service_with_review_binding_on_commit(
         calls.append({"source": source, "path": path, "type": concept_type, **kwargs})
         result: dict[str, object] = {"written": bool(kwargs["write"])}
         if not kwargs["write"]:
-            result["preview_token"] = "opaque-binding"
+            binding = f"opaque-binding-{len(calls)}"
+            result["preview_token"] = binding
         return result
 
     monkeypatch.setattr(cli, "import_bundle", fake_import_bundle)
@@ -222,21 +223,23 @@ def test_import_preview_and_write_share_service_with_review_binding_on_commit(
     preview = cli.mcp_import_preview(
         "source.csv", "bundle", "Pessoa", on_conflict="verify-identical"
     )
+    preview_token = preview["preview_token"]
+    assert isinstance(preview_token, str)
     written = cli.mcp_import_write(
         "source.csv",
         "bundle",
         "Pessoa",
         on_conflict="verify-identical",
-        expected_preview_token=str(preview["preview_token"]),
+        expected_preview_token=preview_token,
     )
 
-    assert preview == {"written": False, "preview_token": "opaque-binding"}
+    assert preview["written"] is False
     assert written == {"written": True}
     assert (
         calls[0]
         | {
             "write": True,
-            "expected_preview_token": preview["preview_token"],
+            "expected_preview_token": preview_token,
         }
         == calls[1]
     )
