@@ -99,6 +99,7 @@ def import_command(  # each argument is an independent public CLI flag.
     write: bool = False,
     overwrite: bool = False,
     on_conflict: ImportConflictPolicy = "skip",
+    expected_preview_token: str | None = None,
 ) -> CliResult[JsonPayload]:
     """Materialize every row of a DuckDB-readable source (CSV, Parquet, JSON) as a concept."""
     payload = import_bundle(
@@ -109,6 +110,7 @@ def import_command(  # each argument is an independent public CLI flag.
         write=write,
         overwrite=overwrite,
         on_conflict=on_conflict,
+        expected_preview_token=expected_preview_token,
     )
     failed = bool(payload["duplicate_ids"]) or bool(payload["conflicting_existing"])
     return CliResult(payload, 1 if failed else 0)
@@ -450,6 +452,7 @@ def mcp_import_write(
     id_column: str | None = None,
     overwrite: bool = False,
     on_conflict: ImportConflictPolicy = "skip",
+    expected_preview_token: str | None = None,
 ) -> dict[str, object]:
     """Commit a tabular import using the existing import service."""
     return import_bundle(
@@ -460,6 +463,7 @@ def mcp_import_write(
         write=True,
         overwrite=overwrite,
         on_conflict=on_conflict,
+        expected_preview_token=expected_preview_token,
     )
 
 

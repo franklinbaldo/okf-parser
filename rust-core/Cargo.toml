@@ -1,6 +1,6 @@
 [package]
 name = "okf-core"
-version = "0.44.0"
+version = "0.45.0"
 edition = "2024"
 license = "MIT"
 description = "Native OKF CLI and compatibility adapters"
