@@ -6,8 +6,10 @@ import io
 import json
 import re
 import tarfile
+import tomllib
 import zipfile
-from typing import TYPE_CHECKING, cast
+from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -21,9 +23,6 @@ from scripts.release_contract import (
     verify_local,
     verify_source,
 )
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 VERSION = "1.2.3"
 COMMIT = "a" * 40
@@ -76,6 +75,19 @@ def _write_source(root: Path, *, protocol_version: str = VERSION) -> None:
     )
     (root / "README.md").write_text(
         f"- uses: franklinbaldo/okf-parser@v{VERSION}\n", encoding="utf-8"
+    )
+    (root / "rust-core" / "src").mkdir(parents=True)
+    (root / "okf-engine" / "src").mkdir(parents=True)
+    (root / "rust-core" / "Cargo.toml").write_text(
+        "[package]\n"
+        'name = "okf-core"\n'
+        f'version = "{VERSION}"\n'
+        "\n[dependencies]\n"
+        f'okf-engine = {{ path = "../okf-engine", version = "{VERSION}" }}\n',
+        encoding="utf-8",
+    )
+    (root / "okf-engine" / "Cargo.toml").write_text(
+        f'[package]\nname = "okf-engine"\nversion = "{VERSION}"\n', encoding="utf-8"
     )
 
 
@@ -317,3 +329,35 @@ def test_verify_contents_rejects_members_outside_package_root(tmp_path: Path) ->
     build_manifest(tmp_path, release, BUILD_CONTEXT)
     with pytest.raises(ContractError, match="member outside"):
         verify_contents(tmp_path, release / "manifest.json")
+
+
+def test_verify_source_rejects_drifted_engine_crate(tmp_path: Path) -> None:
+    _write_source(tmp_path)
+    (tmp_path / "okf-engine" / "Cargo.toml").write_text(
+        '[package]\nname = "okf-engine"\nversion = "0.39.1"\n', encoding="utf-8"
+    )
+    with pytest.raises(ContractError, match="crate version"):
+        verify_source(tmp_path)
+
+
+def test_verify_source_rejects_drifted_core_crate(tmp_path: Path) -> None:
+    _write_source(tmp_path)
+    (tmp_path / "rust-core" / "Cargo.toml").write_text(
+        '[package]\nname = "okf-core"\nversion = "0.39.1"\n\n[dependencies]\n'
+        f'okf-engine = {{ path = "../okf-engine", version = "{VERSION}" }}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ContractError, match="crate version"):
+        verify_source(tmp_path)
+
+
+def test_verify_source_rejects_stale_internal_crate_dependency(tmp_path: Path) -> None:
+    """#172: rust-core pins okf-engine; the pin must move with the workspace."""
+    _write_source(tmp_path)
+    (tmp_path / "rust-core" / "Cargo.toml").write_text(
+        f'[package]\nname = "okf-core"\nversion = "{VERSION}"\n\n[dependencies]\n'
+        'okf-engine = { path = "../okf-engine", version = "0.39.1" }\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ContractError, match="internal okf-engine dependency"):
+        verify_source(tmp_path)
