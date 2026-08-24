@@ -361,3 +361,20 @@ def test_verify_source_rejects_stale_internal_crate_dependency(tmp_path: Path) -
     )
     with pytest.raises(ContractError, match="internal okf-engine dependency"):
         verify_source(tmp_path)
+
+
+def test_repository_rust_crates_track_workspace_version() -> None:
+    """Regression guard for #172 against the real tree.
+
+    okf-engine slept at 0.39.1 for six releases while the workspace published
+    0.45.0 because no check ever read a Cargo.toml. This test fails on that
+    un-bumped state — the real drift is the fixture.
+    """
+    root = Path(__file__).resolve().parents[1]
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    version = cast("dict[str, object]", pyproject["project"])["version"]
+    for crate in ("rust-core", "okf-engine"):
+        manifest = tomllib.loads((root / crate / "Cargo.toml").read_text(encoding="utf-8"))
+        assert cast("dict[str, object]", manifest["package"])["version"] == version, (
+            f"{crate}/Cargo.toml drifted from workspace version {version}"
+        )
