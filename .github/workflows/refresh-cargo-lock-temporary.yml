@@ -1,0 +1,56 @@
+name: Temporary Cargo lock refresh
+
+on:
+  push:
+    branches:
+      - fix/contrato-versao-rust
+    paths:
+      - Cargo.lock
+      - okf-engine/Cargo.toml
+      - rust-core/Cargo.toml
+      - .github/workflows/refresh-cargo-lock-temporary.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/contrato-versao-rust
+          fetch-depth: 0
+      - name: Let Cargo update only local package metadata
+        run: cargo metadata --manifest-path Cargo.toml --format-version 1 > /dev/null
+      - name: Prove lock diff is only the two workspace package versions
+        shell: bash
+        run: |
+          git diff -- Cargo.lock
+          python - <<'PY'
+          import subprocess
+
+          diff = subprocess.check_output(["git", "diff", "--unified=0", "--", "Cargo.lock"], text=True)
+          changed = [
+              line
+              for line in diff.splitlines()
+              if line.startswith(("+", "-")) and not line.startswith(("+++", "---"))
+          ]
+          expected = [
+              '-version = "0.45.0"',
+              '+version = "0.45.1"',
+              '-version = "0.45.0"',
+              '+version = "0.45.1"',
+          ]
+          if changed != expected:
+              raise SystemExit(f"unexpected Cargo.lock diff: {changed!r}")
+          PY
+      - name: Commit generated lock
+        shell: bash
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add Cargo.lock
+          git commit -m 'release: regenerate Cargo.lock for 0.45.1'
+          git push origin HEAD:fix/contrato-versao-rust
