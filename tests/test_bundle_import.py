@@ -90,14 +90,31 @@ def test_failed_write_never_leaves_a_truncated_document(
     writes = {"count": 0}
     crash_message = "simulated crash mid-write"
 
-    def flaky_write_text(self: Path, data: str, *args: object, **_kwargs: object) -> None:
+    def flaky_write_text(
+        self: Path,
+        data: str,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> int:
         if self.parent == documents:
             writes["count"] += 1
             if writes["count"] == 2:
-                args = (data[: len(data) // 2], *args[1:])
-                real_write_text(self, *args)  # type: ignore[arg-type]
+                real_write_text(
+                    self,
+                    data[: len(data) // 2],
+                    encoding=encoding,
+                    errors=errors,
+                    newline=newline,
+                )
                 raise _SimulatedCrashError(crash_message)
-        real_write_text(self, data, *args)  # type: ignore[arg-type]
+        return real_write_text(
+            self,
+            data,
+            encoding=encoding,
+            errors=errors,
+            newline=newline,
+        )
 
     monkeypatch.setattr(Path, "write_text", flaky_write_text)
 
