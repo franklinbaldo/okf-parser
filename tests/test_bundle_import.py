@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
 from okf_parser.bundle_import import BundleImportError, import_bundle
 
-if TYPE_CHECKING:
-    from pathlib import Path
-
 
 def _write_csv(path: Path) -> None:
     path.write_text("id,nome,idade\nr1,Ana,30\nr2,Beto,25\n", encoding="utf-8")
+
+
+class _SimulatedCrashError(OSError):
+    """Marks the fault injected by the atomicity regression test."""
 
 
 def test_dry_run_reports_would_create_and_writes_nothing(tmp_path: Path) -> None:
@@ -68,6 +69,48 @@ def test_existing_destination_is_skipped_without_overwrite(tmp_path: Path) -> No
     assert result["skipped_existing"] == ["pessoa/r1.md"]
     assert result["created"] == ["pessoa/r2.md"]
     assert "Custom" in existing.read_text(encoding="utf-8")
+
+
+def test_failed_write_never_leaves_a_truncated_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A crash mid-import must not leave a half-written concept in the bundle.
+
+    apply/edit go through write_support.write_raw, which stages to a temp file
+    and renames; import_bundle wrote destinations directly, so a crash during
+    one write_text left a truncated concept behind (silent-risk note in #171).
+    Every document that reaches disk must be byte-identical to a clean write.
+    """
+    csv = tmp_path / "source.csv"
+    _write_csv(csv)
+    bundle = tmp_path / "bundle"
+    documents = bundle / "pessoa"
+
+    real_write_text = Path.write_text
+    writes = {"count": 0}
+    crash_message = "simulated crash mid-write"
+
+    def flaky_write_text(self: Path, data: str, *args: object, **_kwargs: object) -> None:
+        if self.parent == documents:
+            writes["count"] += 1
+            if writes["count"] == 2:
+                args = (data[: len(data) // 2], *args[1:])
+                real_write_text(self, *args)  # type: ignore[arg-type]
+                raise _SimulatedCrashError(crash_message)
+        real_write_text(self, data, *args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "write_text", flaky_write_text)
+
+    with pytest.raises(_SimulatedCrashError, match="simulated crash mid-write"):
+        import_bundle(str(csv), str(bundle), "Pessoa", id_column="id", write=True)
+
+    clean = tmp_path / "clean"
+    monkeypatch.undo()
+    import_bundle(str(csv), str(clean), "Pessoa", id_column="id", write=True)
+    for path in documents.glob("*.md"):
+        assert path.read_bytes() == (clean / "pessoa" / path.name).read_bytes(), (
+            f"{path.name} was left truncated by the failed import"
+        )
 
 
 def test_verify_identical_classifies_an_idempotent_reapplication(tmp_path: Path) -> None:
