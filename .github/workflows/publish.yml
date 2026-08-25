@@ -1,4 +1,4 @@
-name: Release
+﻿name: Release
 
 on:
   push:
@@ -346,13 +346,6 @@ jobs:
           version: "0.11.21"
           python-version: "3.12"
 
-      - name: Install Node.js for npm trusted publishing
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
-        with:
-          node-version: 24
-          registry-url: "https://registry.npmjs.org"
-          package-manager-cache: false
-
       - name: Download tested release set
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -368,41 +361,6 @@ jobs:
         env:
           UV_PUBLISH_CHECK_URL: https://pypi.org/simple
         run: uv publish release/python/*
-
-      - name: Publish npm native companion first
-        shell: bash
-        run: |
-          set -euo pipefail
-          version=$(node -p "require('./typescript/package.json').version")
-          package="okf-parser-native-linux-x64"
-          tarball="release/native-npm/${package}-${version}.tgz"
-          if npm view "${package}@${version}" version >/dev/null 2>&1; then
-            echo "${package}@${version} already exists; refusing to overwrite immutable npm state"
-          else
-            npm publish "$tarball" --access public
-          fi
-
-      - name: Publish npm parser
-        shell: bash
-        run: |
-          set -euo pipefail
-          version=$(node -p "require('./typescript/package.json').version")
-          if npm view "okf-parser@${version}" version >/dev/null 2>&1; then
-            echo "okf-parser@${version} already exists; refusing to overwrite immutable npm state"
-          else
-            npm publish "release/npm/okf-parser-${version}.tgz" --access public
-          fi
-
-      - name: Publish npm DuckDB adapter
-        shell: bash
-        run: |
-          set -euo pipefail
-          version=$(node -p "require('./typescript-duckdb/package.json').version")
-          if npm view "okf-parser-duckdb@${version}" version >/dev/null 2>&1; then
-            echo "okf-parser-duckdb@${version} already exists; refusing to overwrite immutable npm state"
-          else
-            npm publish "release/npm/okf-parser-duckdb-${version}.tgz" --access public
-          fi
 
   smoke-test-public-index:
     name: Install from the public PyPI index in a clean environment
