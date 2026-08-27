@@ -1,3 +1,10 @@
+#!/usr/bin/env -S uv run --script
+#
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+# ]
+# ///
 """Validate synchronized release metadata and artifact bytes."""
 
 from __future__ import annotations

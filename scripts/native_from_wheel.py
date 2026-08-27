@@ -1,3 +1,10 @@
+#!/usr/bin/env -S uv run --script
+#
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+# ]
+# ///
 """Reuse the exact Linux x86_64 executable from a Python wheel in npm-native."""
 
 from __future__ import annotations
