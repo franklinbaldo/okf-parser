@@ -1,0 +1,34 @@
+name: PEP 723 one-shot migration
+
+on:
+  push:
+    branches: [chore/pep-723-scripts]
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply migration
+        run: python scripts/_pep723_migrate.py
+      - name: Validate Python syntax and patch hygiene
+        run: |
+          python -m compileall -q scripts benchmarks
+          git diff --check
+      - name: Commit final migration and remove one-shot machinery
+        run: |
+          rm scripts/_pep723_migrate.py .github/workflows/pep723-migrate.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: adopt PEP 723 for standalone Python scripts"
+          git push
