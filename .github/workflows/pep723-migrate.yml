@@ -26,6 +26,7 @@ jobs:
           git diff --check
       - name: Commit migration
         run: |
+          git checkout -- .github/workflows/ci.yml
           rm scripts/_pep723_migrate.py
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
