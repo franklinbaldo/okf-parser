@@ -16,7 +16,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - uses: astral-sh/setup-uv@v6
+      - name: Install uv
+        run: python -m pip install uv
       - name: Install both implementations
         run: |
           uv sync
@@ -81,15 +82,11 @@ jobs:
                   root=Path(td); write_bundle(root,n)
                   row={'concepts': n}
 
-                  # Raw Markdown -> in-memory representation.
-                  t=time.perf_counter(); gen=generator_load(root, use_cache=False); row['generator_raw_load_ms']=(time.perf_counter()-t)*1000
+                  t=time.perf_counter(); generator_load(root, use_cache=False); row['generator_raw_load_ms']=(time.perf_counter()-t)*1000
                   t=time.perf_counter(); pb=parser_load(root); row['parser_python_raw_load_ms']=(time.perf_counter()-t)*1000
                   row['parser_python_links']=int(pb.links.count().execute())
-
-                  # Native Rust engine includes discovery, parsing, validation, links, digests and JSON serialization.
                   row['parser_rust_engine_load_ms']=med_ms(lambda: subprocess.run([exe,'__engine-load',str(root)], stdout=subprocess.DEVNULL, check=True), rounds=3)
 
-                  # okf-generator derived SQLite store.
                   db=root/'.okf_db.sqlite'
                   for p in (db, Path(str(db)+'-wal'), Path(str(db)+'-shm')):
                       p.unlink(missing_ok=True)
@@ -102,8 +99,6 @@ jobs:
                   gs.close()
                   row['generator_cached_open_ms']=med_ms(lambda: (lambda s:(s.get_info(),s.close()))(open_store(root)), rounds=7)
 
-                  # Current okf-parser persisted DuckDB path. Build cost is current Python/Ibis attach path;
-                  # RFC 0012/0010 native-provider parity is not implemented yet and is therefore not timed here.
                   duck_path=root/'parser.duckdb'
                   conn=duckdb.connect(str(duck_path))
                   t=time.perf_counter(); attach_okf(conn,root); row['parser_duckdb_build_ms']=(time.perf_counter()-t)*1000
