@@ -1,0 +1,90 @@
+{
+  "benchmark": "impact-conformance-v1",
+  "source_run": 33204960901,
+  "runner": "github-hosted ubuntu-24.04",
+  "runtime": "python",
+  "runtime_version": "3.12.3",
+  "rounds": 11,
+  "warmups": 2,
+  "sizes": [1, 10, 100, 1000, 10000, 50000],
+  "results": [
+    {
+      "records": 1,
+      "raw_bytes": 81,
+      "canonical_bytes": 81,
+      "operations": {
+        "canonicalize_result": {"median_ns": 12093, "p95_ns": 13707, "median_ns_per_record": 12093},
+        "parse_validate": {"median_ns": 6643, "p95_ns": 8046, "median_ns_per_record": 6643},
+        "normalize_sort": {"median_ns": 432, "p95_ns": 682, "median_ns_per_record": 432},
+        "serialize": {"median_ns": 4309, "p95_ns": 4890, "median_ns_per_record": 4309},
+        "hash_only": {"median_ns": 811, "p95_ns": 1303, "median_ns_per_record": 811},
+        "result_digest": {"median_ns": 18897, "p95_ns": 39778, "median_ns_per_record": 18897}
+      }
+    },
+    {
+      "records": 10,
+      "raw_bytes": 756,
+      "canonical_bytes": 756,
+      "operations": {
+        "canonicalize_result": {"median_ns": 93954, "p95_ns": 126398, "median_ns_per_record": 9395},
+        "parse_validate": {"median_ns": 54527, "p95_ns": 71892, "median_ns_per_record": 5452},
+        "normalize_sort": {"median_ns": 1523, "p95_ns": 1693, "median_ns_per_record": 152},
+        "serialize": {"median_ns": 33435, "p95_ns": 35329, "median_ns_per_record": 3343},
+        "hash_only": {"median_ns": 1262, "p95_ns": 1423, "median_ns_per_record": 126},
+        "result_digest": {"median_ns": 101069, "p95_ns": 121248, "median_ns_per_record": 10106}
+      }
+    },
+    {
+      "records": 100,
+      "raw_bytes": 7506,
+      "canonical_bytes": 7506,
+      "operations": {
+        "canonicalize_result": {"median_ns": 896023, "p95_ns": 971993, "median_ns_per_record": 8960},
+        "parse_validate": {"median_ns": 542017, "p95_ns": 551957, "median_ns_per_record": 5420},
+        "normalize_sort": {"median_ns": 17013, "p95_ns": 17425, "median_ns_per_record": 170},
+        "serialize": {"median_ns": 323737, "p95_ns": 344167, "median_ns_per_record": 3237},
+        "hash_only": {"median_ns": 5641, "p95_ns": 5822, "median_ns_per_record": 56},
+        "result_digest": {"median_ns": 913727, "p95_ns": 919960, "median_ns_per_record": 9137}
+      }
+    },
+    {
+      "records": 1000,
+      "raw_bytes": 75006,
+      "canonical_bytes": 75006,
+      "operations": {
+        "canonicalize_result": {"median_ns": 9046491, "p95_ns": 9242809, "median_ns_per_record": 9046},
+        "parse_validate": {"median_ns": 5456077, "p95_ns": 11389392, "median_ns_per_record": 5456},
+        "normalize_sort": {"median_ns": 192709, "p95_ns": 213630, "median_ns_per_record": 192},
+        "serialize": {"median_ns": 3218162, "p95_ns": 3321937, "median_ns_per_record": 3218},
+        "hash_only": {"median_ns": 47714, "p95_ns": 48025, "median_ns_per_record": 47},
+        "result_digest": {"median_ns": 9158281, "p95_ns": 10522336, "median_ns_per_record": 9158}
+      }
+    },
+    {
+      "records": 10000,
+      "raw_bytes": 750006,
+      "canonical_bytes": 750006,
+      "operations": {
+        "canonicalize_result": {"median_ns": 94076265, "p95_ns": 95109415, "median_ns_per_record": 9407},
+        "parse_validate": {"median_ns": 54283927, "p95_ns": 57003347, "median_ns_per_record": 5428},
+        "normalize_sort": {"median_ns": 2643408, "p95_ns": 2680698, "median_ns_per_record": 264},
+        "serialize": {"median_ns": 34663555, "p95_ns": 35185888, "median_ns_per_record": 3466},
+        "hash_only": {"median_ns": 479365, "p95_ns": 487751, "median_ns_per_record": 47},
+        "result_digest": {"median_ns": 96875764, "p95_ns": 99100470, "median_ns_per_record": 9687}
+      }
+    },
+    {
+      "records": 50000,
+      "raw_bytes": 3750003,
+      "canonical_bytes": 3750003,
+      "operations": {
+        "canonicalize_result": {"median_ns": 475935167, "p95_ns": 480271723, "median_ns_per_record": 9518},
+        "parse_validate": {"median_ns": 274565728, "p95_ns": 277226770, "median_ns_per_record": 5491},
+        "normalize_sort": {"median_ns": 16783995, "p95_ns": 19811751, "median_ns_per_record": 335},
+        "serialize": {"median_ns": 179232491, "p95_ns": 216834855, "median_ns_per_record": 3584},
+        "hash_only": {"median_ns": 2366822, "p95_ns": 2425160, "median_ns_per_record": 47},
+        "result_digest": {"median_ns": 481193788, "p95_ns": 528580505, "median_ns_per_record": 9623}
+      }
+    }
+  ]
+}
