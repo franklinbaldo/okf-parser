@@ -1,0 +1,6 @@
+{
+  "operation": "impact",
+  "seed": "A",
+  "direction": "incoming",
+  "max_depth": 8
+}

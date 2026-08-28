@@ -1,0 +1,6 @@
+{"concept_id":"A","depth":0,"support_depths":{"base":0,"head":0}}
+{"concept_id":"B","depth":1,"support_depths":{"base":1}}
+{"concept_id":"U","depth":1,"support_depths":{"base":1}}
+{"concept_id":"W","depth":1,"support_depths":{"head":1}}
+{"concept_id":"V","depth":2,"support_depths":{"head":2}}
+{"concept_id":"X","depth":2,"support_depths":{"base":2,"head":3}}
