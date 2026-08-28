@@ -1,0 +1,92 @@
+name: RFC 0012 release sync
+
+on:
+  push:
+    branches:
+      - docs/rfc-0012-relational-agent-surfaces
+    paths:
+      - .github/workflows/rfc0012-version-sync.yml
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: docs/rfc-0012-relational-agent-surfaces
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: 0.11.21
+          python-version: '3.12'
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: '22'
+
+      - name: Synchronize release metadata
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          old = "0.45.1"
+          new = "0.45.2"
+          files = [
+              Path("pyproject.toml"),
+              Path("typescript/package.json"),
+              Path("typescript-duckdb/package.json"),
+              Path("native-npm-linux-x64/package.json"),
+              Path("typescript/src/version.ts"),
+              Path("rust-core/Cargo.toml"),
+              Path("okf-engine/Cargo.toml"),
+              Path("README.md"),
+          ]
+          for path in files:
+              text = path.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count == 0:
+                  raise SystemExit(f"{path}: expected at least one {old} occurrence")
+              path.write_text(text.replace(old, new), encoding="utf-8")
+              print(f"{path}: {count} replacement(s)")
+
+          changelog = Path(f"changelog/{new}.md")
+          if changelog.exists():
+              raise SystemExit(f"{changelog} already exists")
+          changelog.write_text(
+              "---\n"
+              "type: Release\n"
+              f"title: okf-parser {new}\n"
+              "description: Propose RFC 0012 for relational agent surfaces over one canonical read service.\n"
+              "---\n\n"
+              f"# okf-parser {new}\n\n"
+              "- Proposes RFC 0012 after the OKF Generator benchmark.\n"
+              "- Defines one canonical relational read service with RFC 0010 native and Python/Ibis fallback backends.\n"
+              "- Pins concept identity, digest vocabulary, cycle-safe impact, deterministic context budgets, cache engine identity, and executable acceptance invariants.\n",
+              encoding="utf-8",
+          )
+          PY
+
+          uv lock
+          cargo check --manifest-path rust-core/Cargo.toml
+          npm install --package-lock-only --ignore-scripts --prefix typescript
+          npm install --package-lock-only --ignore-scripts --prefix typescript-duckdb
+          uv run python scripts/release_contract.py verify-source
+
+      - name: Commit synchronized release files
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add pyproject.toml uv.lock Cargo.lock README.md \
+            typescript/package.json typescript/package-lock.json typescript/src/version.ts \
+            typescript-duckdb/package.json typescript-duckdb/package-lock.json \
+            native-npm-linux-x64/package.json rust-core/Cargo.toml okf-engine/Cargo.toml \
+            changelog/0.45.2.md
+          git diff --cached --check
+          git commit -m "chore: bump RFC 0012 release to 0.45.2"
+          git push origin HEAD:docs/rfc-0012-relational-agent-surfaces
