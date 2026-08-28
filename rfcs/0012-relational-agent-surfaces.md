@@ -2,79 +2,79 @@
 type: RFC
 title: Relational agent surfaces from OKF Generator benchmark
 status: proposed
-description: Adopt the useful agent-facing product ideas demonstrated by okf-generator while preserving okf-parser's authored-OKF, Ibis, DuckDB, TypeContract, and projection-first architecture.
+description: Adopt useful agent-facing product semantics from okf-generator over one canonical relational read service, preserving okf-parser's authored-OKF, DuckDB/Ibis, TypeContract, native-engine, and projection-first architecture.
 ---
 
 # RFC 0012: Relational agent surfaces from OKF Generator benchmark
 
 ## Summary
 
-`okf-generator` demonstrates several agent-facing product ideas that are useful
-independently of its code-oriented AST architecture: fast concept lookup,
-relationship navigation, bundle diff with impact analysis, compact context,
-agent installation helpers, MCP access, and incremental refresh.
+`okf-generator` demonstrates several useful agent-facing product ideas: concept
+lookup, relationship navigation, semantic diff with impact analysis, compact
+context, agent installation helpers, MCP access, and incremental refresh.
 
-`okf-parser` should adopt the **product semantics** of those capabilities, but
-must not copy their implementation model or turn its strict OKF core into a
-code-indexing system.
+`okf-parser` should adopt those **product semantics** without importing the
+benchmark's code-oriented AST architecture, code ontology, storage model, or
+implementation code.
 
 The architectural rule of this RFC is:
 
 ```text
-authored OKF Markdown
+authored OKF / explicit source adapters
         ↓
-strict parse / validation
+strict parse + canonical semantic engine
         ↓
-authoritative normalized relations
+canonical relations
+  concepts / links / reserved / diagnostics
         ↓
-TypeContract
+shared relational read service
+  native RFC 0010 table functions when available
+  Python/Ibis fallback with the same observable contract
         ↓
-DuckDB / Ibis relational compilation
+TypeContract / typed projections where requested
         ↓
-query / lookup / diff / impact / context
+query / lookup / relations / diff / impact / context
         ↓
 CLI / MCP / agent integrations
 ```
 
-NetworkX remains a projection for graph algorithms. It is not the canonical
-store behind agent features. Persistent DuckDB remains an optional compiled
-image of the bundle, not a second source of truth. Agent-facing JSON, text, or
-MCP payloads are serializations of relational results, not independent semantic
-models.
+The **shared relational read service**, not `query --sql`, is the foundational
+milestone. `query` is one consumer of that service. Structured `lookup` is
+another and must construct relational/Ibis predicates directly rather than
+building SQL strings.
 
-This RFC is proposal-only. The implementation stack attempted before this RFC
-is abandoned; no feature PR from that stack was opened.
+NetworkX remains a projection for graph algorithms. Persistent DuckDB remains a
+disposable compiled image or interoperability snapshot, not a second source of
+truth. Agent JSON/text/MCP payloads are serializations of relational results,
+not independent semantic models.
+
+This RFC is proposal-only. The pre-RFC agent feature stack is abandoned; no
+feature PR from that stack was opened.
 
 ## Motivation
 
 ### The benchmark exposed a real product gap
 
-The public `okf-generator` documentation presents a coherent agent workflow:
-
-```text
-generate → lookup → diff → visualize → mcp → agent integration
-```
-
-Its useful ideas include:
+The public `okf-generator` workflow makes knowledge inexpensive for an agent to
+inspect incrementally instead of repeatedly scanning a corpus. The useful
+product ideas are:
 
 - exact and filtered concept lookup;
-- related/caller/callee navigation;
+- relationship navigation;
 - `diff --impact`;
-- compact agent context rather than re-reading whole files;
+- compact context with an explicit budget;
 - one-command agent installation;
 - MCP tools over the same knowledge model;
 - incremental refresh based on deterministic change detection.
 
-Those are useful user experiences. They do not require copying tree-sitter,
-function/class/module assumptions, its bundle dialect, its implementation
-code, or its code-specific relationship vocabulary.
+Those experiences do not require tree-sitter, Function/Class/Module semantics,
+a generator-specific bundle dialect, or a second knowledge store.
 
-Reference:
-<https://github.com/UmairBaig8/okf-generator>
+Reference: <https://github.com/UmairBaig8/okf-generator>
 
-### `okf-parser` already has a different and stronger architectural center
+### `okf-parser` already has a different architectural center
 
-The existing architecture document defines this core pipeline:
+The repository architecture already says:
 
 ```text
 discovery / classification
@@ -90,189 +90,265 @@ typed DuckDB / Ibis relations
 consumer projections and adapters
 ```
 
-That is not merely an implementation detail. It is the project's identity.
+That is the project's identity, not an implementation accident. The core
+answers what canonical OKF says. External dialects are adapted before downstream
+consumers see them.
 
-The core answers what an authored OKF bundle says. External source dialects are
-adapted into canonical OKF before downstream consumers see them. The project
-therefore does not need a new agent-specific semantic store.
+RFC 0005 makes concept types relational. RFC 0006 makes DuckDB catalog/type
+semantics part of compilation. The Python API already exposes Ibis relations,
+`attach_okf()` persists ordinary relational tables, and NetworkX is already a
+projection of `concepts` + `links`.
 
-RFC 0005 already treats concept types relationally. RFC 0006 makes DuckDB's
-catalog and logical types part of the compilation model. `attach_okf()` already
-materializes ordinary `concepts`, `links`, `reserved`, and `diagnostics` tables,
-with optional typed tables derived from declarations. The Python API already
-exposes Ibis relations. NetworkX is explicitly a projection of those relations.
+The missing capability is therefore a coherent **read service and agent product
+surface over the relational model already owned by the project**.
 
-The missing piece is not another index format. The missing piece is a good
-**read/query layer and agent product surface over the relational model that
-already exists**.
-
-### Issue #151 already identified the correct primitive
+### Issue #151 identified the first consumer, not the substrate
 
 Issue #151 measured a concrete ergonomics problem: read-only structured access
-currently requires materializing a DuckDB file and reconnecting separately.
-Its revised proposal is a sibling `query` command that reuses the same
-materialization used by `apply`, accepts read-oriented SQL, and returns rows
-without invoking write staging.
+currently requires first exporting DuckDB and then opening a second connection.
+It proposes a `query` sibling to `apply`.
 
-This RFC treats that work as foundational rather than creating a separate
-`lookup` implementation that scans `ConceptRecord` objects directly.
+The important correction in this RFC is that `query` is not itself the
+foundation. The foundation is the shared relational read service that presents
+the canonical relations. `query --sql` and structured agent operations are
+siblings above it.
 
 Reference: <https://github.com/franklinbaldo/okf-parser/issues/151>
 
+## Relationship to RFC 0010: one relational contract, two execution backends
+
+RFC 0010 proposes a native DuckDB extension backed by the shared `okf-engine`,
+with four canonical SQL table functions:
+
+```sql
+okf_concepts(root)
+okf_links(root)
+okf_reserved(root)
+okf_diagnostics(root)
+```
+
+Those functions are the preferred native SQL backend for this RFC when the
+extension is available. They are **not** a separate semantic universe beside
+this RFC's read service.
+
+The service contract is the four canonical relations and their semantics. It
+may be fulfilled by:
+
+1. the RFC 0010 native table functions backed by `okf-engine`; or
+2. the portable Python/Ibis path backed by the existing canonical parser/engine
+   boundary when the extension is unavailable.
+
+The two backends must be observably equivalent for the same authored bundle,
+configuration, and requested capabilities. Backend selection is deployment and
+performance policy; it must not change identity, digests, link resolution, or
+diagnostics.
+
+This prevents two competing materializations:
+
+```text
+                         ┌─ RFC 0010 native table functions ─┐
+authored bundle → canonical semantic contract               ├→ read services
+                         └─ portable Python/Ibis fallback ───┘
+```
+
+A third feature-specific scanner/index is not allowed. In particular, `lookup`
+must not bypass this boundary by walking Markdown/`ConceptRecord` objects on its
+own.
+
+RFC 0010 remains independently reviewable: this RFC does not require every host
+to load a native extension. If RFC 0010 is absent, the fallback still implements
+the same logical read contract. If RFC 0010 is present, `query` should use its
+table functions rather than rematerializing the same bundle through an
+independent SQL path.
+
+## Normative vocabulary
+
+### Canonical relations
+
+The base read contract consists of `concepts`, `links`, `reserved`, and
+`diagnostics`, with the same observable fields and semantics already exposed by
+the repository/RFC 0010.
+
+Typed TypeContract relations are optional projections layered on top when a
+consumer explicitly requests declared-type compilation.
+
+### Concept identity
+
+`diff`, lookup resolution, relation navigation, and impact use the canonical
+`concept_id` emitted by the active source adapter/semantic engine. Identity is
+**not inferred from content equality**.
+
+For authored filesystem OKF, the shipped contract derives `concept_id` from the
+bundle-relative path without the Markdown suffix. `logical_key` is currently the
+same value. Therefore, in v1:
+
+```text
+notes/a.md → notes/a
+notes/b.md → notes/b
+```
+
+Renaming `notes/a.md` to `notes/b.md` is **removed + added**, even when the
+semantic content and `parsed_digest` are identical. A consumer may report a
+same-digest pair as an advisory `possible_move`, but that heuristic cannot
+collapse the two identities or change diff semantics.
+
+A future source adapter may define another canonical identity under its own RFC
+(for example a qualified Git object identity). `diff` consumes the provider's
+canonical `concept_id`; it never guesses identity from title, body, or digest.
+
+### `source_digest` and `parsed_digest`
+
+This RFC reuses the repository/RFC 0009 vocabulary exactly:
+
+- `source_digest` identifies the normalized exact authored source representation
+  governed by the parser's source-digest contract;
+- `parsed_digest` identifies the canonical parsed semantic projection governed
+  by the parser's parsed-digest contract.
+
+A diff may report both. It must not invent a generic `content_digest` whose
+meaning overlaps either one.
+
+### Compiled image
+
+A compiled image is any persistent/read-optimized derivative, including a
+DuckDB snapshot or future cache. It is never authored state and may always be
+deleted and regenerated.
+
 ## Design principles
 
-The following principles are normative for every capability introduced by this
-RFC.
+### 1. Authored OKF remains canonical
 
-### 1. Authored OKF remains the source of truth
+Markdown/frontmatter/authored links, or the canonical representation produced
+by an explicit source adapter, remain authoritative. No agent feature requires
+editing an index database instead of the source corpus.
 
-Markdown/frontmatter and authored links remain authoritative. A persistent
-DuckDB database is a compiled representation. It may be regenerated or safely
-discarded without losing authored knowledge.
+### 2. One relational semantic path
 
-No agent feature may require users to edit an index database instead of the
-bundle.
+`query`, `lookup`, `related`, `diff`, `impact`, and `context` consume the shared
+relational read service. Native and portable execution backends must satisfy the
+same relation contract.
 
-### 2. Relational compilation comes before agent convenience APIs
+No feature-specific parser, `ConceptRecord` index, graph store, or bespoke
+Markdown scan is an acceptable shortcut.
 
-`lookup`, `related`, `diff`, `impact`, and `context` should be derived from the
-same normalized relations used by the rest of the project.
+### 3. DuckDB/Ibis is the ordinary query substrate; NetworkX is a projection
 
-A feature-specific Python index, graph cache, or bespoke document scan is not a
-second acceptable core path merely because it is easier to implement.
+Filtering, projection, joins, aggregation, typed access, and relational
+comparison belong in DuckDB/Ibis. Graph algorithms may use NetworkX or recursive
+SQL, but their nodes/edges come from canonical relations.
 
-### 3. DuckDB/Ibis is the ordinary query substrate
+### 4. Domain semantics stay outside the generic core
 
-The project should use DuckDB/Ibis for filtering, projection, joins,
-aggregation, type-aware access, and relational comparison.
+The generic vocabulary is concept, type, field, link, incoming, outgoing,
+related, diagnostic. `Function`, `Class`, `caller`, `callee`, `import`, and
+similar terms require a source adapter/profile that proves those semantics.
 
-A command does not need a persistent `.duckdb` file to benefit from this rule:
-the service may compile an in-memory relational image for one call. Persistent
-DuckDB is an optimization and interoperability surface, not a prerequisite for
-ordinary use.
+### 5. Shared services, thin transports
 
-### 4. NetworkX is a graph projection, not semantic authority
+CLI and MCP call the same public service functions. MCP does not get a second
+lookup implementation, and CLI raw SQL is not the implementation language of
+structured lookup.
 
-Traversal algorithms, connected components, cycle detection, shortest paths,
-or transitive impact may reasonably use NetworkX when it is the clearest
-implementation.
+When a result is naturally tabular, the internal contract stays relational.
+JSON/text are transport projections rather than a new semantic dialect.
 
-The nodes and edges supplied to those algorithms must come from the canonical
-relations. Agent features must not silently create a competing graph model.
+### 6. Derived artifacts are disposable and completely keyed
 
-### 5. Domain semantics stay outside the generic core
+A reusable compiled image/cache must include every input that can change its
+relations, at least:
 
-The core vocabulary is generic: concept, type, incoming relation, outgoing
-relation, related concept, field, link, diagnostic.
+- authored source identity/digests;
+- parser/compiler semantic version;
+- **execution backend/engine identity** (`python`, `okf-engine`, native
+  extension, including a version/source identity sufficient to distinguish
+  builds);
+- exclusion configuration;
+- TypeContract/spec-template configuration;
+- requested capabilities/projection policy when it changes stored facts;
+- every other option that affects relation contents.
 
-Code-specific words such as `Function`, `Class`, `caller`, `callee`, `import`,
-or `dependency` belong to a source adapter or profile that can prove those
-semantics. They are not generic OKF primitives.
+A cache produced by the Rust/native path must never be accepted merely because
+its filesystem inputs match a cache expected from the Python path. Backend
+parity is tested, not assumed as cache identity.
 
-### 6. Derived artifacts are disposable and versioned by their inputs
+Deletion of the compiled image must always be a correct recovery operation.
 
-Any persistent cache or compiled image must be derivable from authored input
-plus explicit compilation options. It must never become hidden authoritative
-state.
+### 7. Deterministic and offline by default
 
-A reusable cache must include enough identity to invalidate on at least:
+No capability in this RFC requires embeddings, a vector database, network
+access, or an LLM. Optional semantic retrieval/enrichment belongs to a later
+consumer or adapter.
 
-- authored-content digest changes;
-- parser/compiler version changes;
-- exclusion configuration changes;
-- type/spec compilation configuration changes;
-- any other option that changes the resulting relations.
+### 8. Copy product semantics, not implementation assumptions
 
-Deletion of the cache must always be a correct recovery operation.
-
-### 7. CLI and MCP remain thin adapters over shared services
-
-RFC 0008 established this rule for mutations. This RFC applies it equally to
-reads.
-
-There should not be a CLI lookup engine and a second MCP lookup engine. Both
-must call the same relational service functions and expose equivalent semantics.
-
-### 8. Prefer relational/tabular output over new JSON dialects
-
-When a result is naturally rows and columns, the internal contract should stay
-relational. JSON exists as a transport serialization for agents, not as a new
-nested semantic schema that the core must maintain independently.
-
-Higher-level concept/context responses may be structured for usability, but
-they should be composed from stable relational records rather than inventing a
-parallel object graph.
-
-### 9. Deterministic, offline behavior is the baseline
-
-The benchmark's deterministic/offline property is worth preserving.
-
-No capability in this RFC requires embeddings, a vector database, or an LLM.
-Optional semantic retrieval or enrichment may exist later as an adapter or
-consumer, but it is not part of the first-class core defined here.
-
-### 10. Copy product ideas, not code or architectural assumptions
-
-This benchmark is clean-room at the product level: public behavior and user
-experience inform requirements. No implementation code is copied from
-`okf-generator`.
-
-The implementation must emerge from `okf-parser`'s own parser, relations,
-TypeContract, DuckDB/Ibis, graph projection, service layer, and MCP conventions.
+The benchmark informs requirements and UX only. Implementation comes from this
+repository's semantic engine, canonical relations, DuckDB/Ibis, TypeContract,
+graph projection, service layer, and RFC 0008 MCP conventions.
 
 ## Benchmark disposition
 
-| `okf-generator` capability | Decision here | `okf-parser` interpretation |
+| `okf-generator` capability | Decision | `okf-parser` interpretation |
 | --- | --- | --- |
-| `lookup` / `get_concept` | adopt | relational lookup over canonical concept/type relations |
-| type/tag filters | adopt generically | field/type predicates over compiled relations; no code taxonomy |
-| fuzzy symbol search | defer from v1 | exact identity and explicit filtering first; fuzzy matching must not silently become identity resolution |
-| callers / callees | adapt | generic incoming/outgoing/related; code adapters may expose caller/callee aliases |
-| `diff` | adopt | relational comparison of concept identity, digests, fields, links, and diagnostics |
-| `diff --impact` | adopt | changed relational identities plus transitive traversal over canonical link relations |
-| compact lookup context | adopt | deterministic context projection generated on demand from relations |
-| `SUMMARY.md` | do not require | derive summaries/context on demand; avoid committed duplicate state by default |
-| agent `install` | adopt | install minimal rules that point agents at query/context/diff/check; CLI-first, MCP optional |
-| MCP lookup tools | adopt | thin MCP wrappers over shared read services |
-| incremental update | adopt principle, not mechanism | reuse existing digests and optional derived relational cache; no generator-owned manifest semantics in core |
-| tree-sitter AST extraction | reject from core | belongs in an external source adapter that projects code into canonical OKF |
+| lookup / get concept | adopt | structured predicates over canonical relations |
+| type/tag filters | adopt generically | type/field predicates; no code taxonomy |
+| fuzzy symbol search | defer | ranked suggestions only; never identity resolution |
+| callers / callees | adapt | incoming/outgoing/related; aliases only in code adapters |
+| diff | adopt | relational comparison using canonical identity + shipped digests |
+| diff --impact | adopt | cycle-safe reachability over canonical links |
+| compact context | adopt | deterministic budgeted projection generated on demand |
+| SUMMARY.md | do not require | derive context; avoid committed duplicate state |
+| agent install | adopt | minimal rules pointing at read/diff/check surfaces |
+| MCP lookup tools | adopt | thin wrappers over shared services |
+| incremental update | adapt | disposable compiled image keyed by full compiler/backend identity |
+| tree-sitter extraction | reject from core | source-adapter concern |
 | Function/Class/Module ontology | reject from core | domain-specific taxonomy |
-| LLM `ask` / enrichment | reject from core | optional consumer/adapter concern |
+| LLM ask/enrichment | reject from core | optional downstream concern |
 | training pairs | reject from core | downstream dataset tooling |
-| FastAPI dashboard | reject from core for now | consumer UI, not parser responsibility |
+| dashboard | reject from core for now | consumer UI |
 
 ## Decision
 
-### 1. `query` is the foundational read primitive
+### 1. The first milestone is the shared relational read service
 
-The first implementation milestone should resolve issue #151 instead of adding
-`lookup` first.
+Before `query` or `lookup`, implementation must define one service boundary that
+opens canonical relations for a bundle/configuration.
 
 Conceptually:
+
+```text
+open_relations(bundle, options)
+    → concepts
+    → links
+    → reserved
+    → diagnostics
+    → optional typed relations
+```
+
+The public type/name may differ. The requirement is architectural: consumers do
+not decide how Markdown is scanned, how the native engine is selected, or how
+canonical rows are constructed.
+
+When RFC 0010 is available, this boundary may use the native table functions.
+Otherwise it uses the portable canonical fallback. Conformance tests compare the
+backends.
+
+### 2. `query --sql` is a trusted power-user consumer
+
+Issue #151 becomes the first user-visible consumer:
 
 ```text
 okf-parser query <bundle> --sql "SELECT ..."
 ```
 
-The service compiles the bundle into the same relational concept tables used by
-`apply`/typed compilation, executes the read query, and returns a stable tabular
-result.
+It opens the shared relation service, executes the requested read query, and
+returns stable tabular output.
 
-The exact SQL safety contract requires care. "SELECT-only" is a **mutation
-shape rule**, not a claim that arbitrary DuckDB SQL is sandboxed: DuckDB table
-functions can still access external resources. RFC 0006 already rejects fake
-SQL sandboxing. Therefore:
+"SELECT-only" is a mutation-shape rule, not a sandbox claim. DuckDB table
+functions can perform external I/O. RFC 0006 already rejects fake SQL sandboxing.
+Therefore raw SQL is a trusted power-user capability and any MCP exposure would
+need honest RFC 0008 annotations for its maximum legal effect.
 
-- the CLI may expose explicit raw read SQL as a trusted power-user operation;
-- MCP should not need raw SQL merely to support ordinary agent lookup;
-- high-level agent tools should compile safe structured predicates into the
-  relational service rather than asking the agent to construct arbitrary SQL;
-- any raw-SQL MCP exposure must use honest RFC 0008 effect annotations based on
-  its maximum legal effect.
-
-### 2. First-class `lookup` is a convenience projection over `query`
-
-`lookup` should not scan Markdown or build its own index.
+### 3. Structured `lookup` is a sibling consumer, not SQL generation
 
 The first version should support deterministic forms such as:
 
@@ -282,248 +358,273 @@ okf-parser lookup --type <type>
 okf-parser lookup --field status=aberta
 ```
 
-The service resolves these against canonical relational columns and returns
-stable concept records.
+The shared lookup service builds Ibis/relational expressions or equivalent
+structured predicates against canonical relations. It must **not** implement
+lookup by string-concatenating SQL for `query --sql`.
 
-Fuzzy search is deliberately not part of the identity resolver in v1. If later
-added, fuzzy results must be explicitly ranked suggestions, never silently
-accepted as an exact concept identity.
+CLI and MCP both call that service. Raw SQL is unnecessary for ordinary MCP
+lookup.
 
-### 3. Relation navigation is generic
+Fuzzy retrieval, if later added, returns explicitly ranked suggestions and
+never silently resolves canonical identity.
 
-The core read API should expose forms equivalent to:
+### 4. Relation navigation is generic
+
+The read service exposes operations equivalent to:
 
 ```text
-related(concept)
 incoming(concept)
 outgoing(concept)
+related(concept)
 ```
 
-These operate on canonical link relations.
+They use canonical `links`. Code-specific `callers`/`callees` aliases belong to
+a code adapter/profile.
 
-A code adapter may later provide `callers`/`callees` when its projection policy
-has created typed code relations. Those names must not leak into the generic
-OKF core.
+### 5. `diff` is relational and identity-preserving
 
-### 4. `diff` is relational, not textual
+`diff(base, head)` compares canonical relation snapshots by `concept_id`.
+Minimum output includes:
 
-`diff` compares two compiled bundle states by stable concept identity and
-normalized relational content.
+- concepts added/removed;
+- for surviving identities, `source_digest_changed` and
+  `parsed_digest_changed` separately;
+- fields added/removed/changed where represented by the compiled relation;
+- links added/removed;
+- diagnostics introduced/resolved.
 
-The minimum result includes:
+A textual Markdown diff is complementary evidence, not the semantic contract.
+A rename in authored filesystem OKF is removed+added under the identity rule
+above; digest equality may only produce advisory move evidence.
 
-- concepts added / removed;
-- concepts whose parsed/content digest changed;
-- fields added / removed / changed where representable by the compiled type
-  relations;
-- links added / removed;
-- diagnostics introduced / resolved.
+### 6. `impact` is cycle-safe deterministic reachability
 
-A Markdown textual diff is useful complementary evidence but is not the
-semantic diff contract of this command.
+`diff --impact` starts from changed concept identities/edges and computes a
+relational neighborhood over canonical links. It reports reachability, **not
+causation**.
 
-### 5. `impact` starts from the relational diff
+Default traversal for "what may depend on this change" follows incoming links
+(reverse edge direction) with an explicit depth bound. Consumers may request
+outgoing or both directions.
 
-`diff --impact` takes the changed concept identities/edges from `diff` and asks
-which other concepts are reachable through canonical relation directions.
+The traversal must:
 
-The implementation may use:
+- maintain a visited set and terminate on cycles;
+- emit each impacted `concept_id` once at its minimum discovered depth;
+- use deterministic frontier ordering by canonical `concept_id`;
+- produce stable final ordering by `(depth, concept_id)`;
+- never depend on NetworkX insertion order, SQL incidental row order, or worker
+  completion order.
 
-- DuckDB recursive CTEs;
-- NetworkX traversal over the relation projection;
-- another equivalent deterministic graph algorithm.
+DuckDB recursive CTEs, NetworkX, or another graph implementation are acceptable
+if they satisfy that contract over the same link relation.
 
-The choice is an implementation detail provided the edges come from the same
-canonical relations and the output is deterministic.
+### 7. `context` has explicit deterministic budgets
 
-The result should distinguish at least direct from transitive impact and record
-path/depth information when requested. It must not imply causal impact merely
-because a graph path exists; the contract is relational reachability.
+`context <concept>` composes identity/type/path, selected fields, diagnostics,
+relations, and optionally neighbor summaries from current relations.
 
-### 6. `context` is generated, compact, and disposable
-
-`context <concept>` produces an agent-oriented projection such as:
-
-- identity/path/type;
-- selected authored fields;
-- diagnostic state;
-- incoming/outgoing relations;
-- optionally bounded neighbors to a requested depth.
-
-It is generated from current relations on demand. A committed `SUMMARY.md` is
-not required as duplicate state.
-
-The default response must be bounded. Agents should be able to request deeper
-context explicitly rather than receiving an unbounded graph neighborhood.
-
-### 7. Persistent DuckDB is a first-class compiled image, not the authoring format
-
-The existing persistent DuckDB export is important and should become more
-useful to these features, but the distinction stays explicit:
+The core stays tokenizer-independent. Its default hard bounds are:
 
 ```text
-authored bundle          = canonical source
-compiled DuckDB image    = query/interoperability snapshot
-agent context / JSON     = transport projection
+max_bytes      = 16384   # UTF-8 serialized output budget
+max_relations  = 50      # included relation/neighbor records
+depth          = 1
 ```
 
-A future reusable compiled image may accelerate `query`, `lookup`, `diff`, and
-`context`. Its correctness is defined entirely by whether it represents the
-current authored bundle under the same compiler/configuration identity.
+A caller may request different explicit values. Expansion order is deterministic
+by relation direction, depth, and canonical `concept_id`. If the byte budget is
+reached, truncation occurs only at record/body-fragment boundaries and the
+result reports `truncated=true` plus the effective limits.
 
-This RFC does not rename DuckDB files or introduce a new `.okf` binary file
-format.
+Agent integrations that know a model tokenizer may translate their token budget
+into a stricter byte budget before calling the service. The core must not claim
+a universal token count without naming a tokenizer/model.
 
-### 8. Incremental refresh reuses parser-owned digests
+A committed `SUMMARY.md` is not required. Context is a disposable projection.
 
-The benchmark's SHA256 dirty-update behavior is attractive, but `okf-parser`
-already owns parsed/content digests and already has a native engine path for
-large bundles.
+### 8. Persistent DuckDB and incremental caches are compiled images
 
-Before introducing a new manifest format, implementation should benchmark the
-relational materialization and use existing digests to identify changed
-concepts. A persistent cache is justified only if measurements show meaningful
-benefit after the `query`/lookup surfaces exist.
-
-If introduced, incremental refresh updates a disposable compiled image; it does
-not mutate authored OKF merely to keep the cache current.
-
-### 9. Agent installation teaches the architecture instead of hiding it
-
-A future command may install minimal integration instructions for Claude,
-OpenCode, Codex, Cursor, or other agents.
-
-The instructions should teach a small stable workflow, for example:
+The distinction remains:
 
 ```text
-before broad Markdown scanning → lookup/query/context
-before changing a concept       → incoming/outgoing/related
-before reviewing a knowledge change → diff --impact
-after a change                  → check
+authored bundle       = canonical source
+canonical relations   = semantic read contract
+DuckDB/cache image    = disposable compiled snapshot
+agent JSON/context    = transport projection
 ```
 
-The installer should not create a second knowledge bundle, generate domain
-ontology, or require a long-lived MCP server. CLI usage is sufficient; MCP is an
-optional transport over the same services.
+Before introducing a new cache manifest, implementation must profile the real
+read workloads. Existing `source_digest`/`parsed_digest` should be reused for
+change detection where valid, but cache identity also includes the execution
+backend/engine and compilation configuration from principle 6.
 
-### 10. MCP exposes high-level relational operations
+Deleting the compiled image and rebuilding must produce canonical-equivalent
+relations and identical deterministic consumer output.
 
-The initial agent-facing MCP surface should prefer product operations such as:
+### 9. Agent installation teaches the shared surfaces
+
+A future installer may create minimal instructions for Claude, OpenCode, Codex,
+Cursor, or similar agents. The guidance should prefer:
+
+```text
+before broad corpus scanning       → lookup / context
+for ad-hoc trusted relational work → query
+before changing a concept          → incoming / outgoing / related
+when reviewing knowledge changes   → diff --impact
+after changing authored OKF        → check
+```
+
+It must not generate a second knowledge bundle or domain ontology. CLI is
+sufficient; MCP is an optional transport over the same services.
+
+### 10. MCP exposes structured operations
+
+The ordinary MCP surface should use high-level operations such as:
 
 ```text
 lookup
 get_concept
-related
 incoming
 outgoing
+related
 context
 bundle_diff
 impact
 ```
 
-Names may be refined during implementation, but the semantic constraint is
-fixed: each tool is a thin wrapper over the same read services used by the CLI.
+Each tool is a thin wrapper over the same service used by CLI. Raw SQL is not a
+prerequisite for MCP agent UX.
 
-Raw SQL is not required for the ordinary MCP path.
+## Relationship to RFC 0011 tracked migrations
 
-## Non-goals
+RFC 0011's migration ledger is ordinary OKF authored state. If RFC 0011 lands,
+its `Migration` concepts therefore appear in canonical relations and can appear
+in `diff` like any other concepts.
 
-This RFC does not:
+`diff` reports the relational changes observed before/after a migration, but it
+must not infer that a migration **caused** arbitrary changed concepts merely
+because the ledger entry exists. Causal/audit correlation requires explicit
+links/provenance or a later consumer contract.
 
-- turn `okf-parser` into a source-code AST indexer;
-- define code-language parsers;
-- add embeddings or vector search;
-- add an LLM question-answering layer;
-- make DuckDB the authored OKF storage format;
-- require persistent database materialization for every read;
-- add a dashboard;
-- define training-data export;
-- accept fuzzy matches as canonical concept identity;
-- replace NetworkX where graph algorithms are useful;
-- change RFC 0005 mutation semantics;
-- change RFC 0006 declaration trust semantics;
-- change RFC 0008's preview/commit and effect-annotation model.
+## Non-goals and rejected architecture
 
-## Rejected architecture
+This RFC does not turn `okf-parser` into an AST indexer, add language parsers,
+embeddings/vector search, LLM QA, a dashboard, training-data export, or a new
+binary `.okf` format.
 
-### Direct `ConceptRecord` lookup as the new agent core
+The following approaches are specifically rejected:
 
-Rejected because it creates a shortcut around the relational compiler. It is a
-reasonable low-level helper, but not the architectural foundation for the new
-product surface.
+- **Direct `ConceptRecord` scanning as the agent core** — bypasses the shared
+  relational service.
+- **Graph-first authority** — NetworkX is a projection, not the source of
+  semantic facts.
+- **Code ontology in generic core** — Function/Class/Module/caller/callee are
+  source-domain semantics.
+- **Required committed summary/index documents** — duplicate derivable state.
+- **A new bespoke index/cache before measurement** — DuckDB/Ibis/native engine
+  must be exercised first.
+- **SQL-string generation as structured lookup** — couples agent APIs to a raw
+  SQL transport and defeats the shared typed service boundary.
 
-### Graph-first agent API
-
-Rejected because NetworkX is already a downstream projection. Making it the
-agent authority would invert the documented architecture and make tabular/type
-queries awkward.
-
-### Copying `okf-generator`'s code ontology
-
-Rejected because Function/Class/Module/caller/callee are properties of one
-source domain, not universal OKF semantics.
-
-### Committed summary/index documents as required state
-
-Rejected because they duplicate facts already derivable from the bundle and
-introduce stale-state problems. Generated summaries remain acceptable as an
-explicit export if consumers need them.
-
-### A new bespoke binary/index format
-
-Rejected unless later measurement proves DuckDB/Ibis plus existing digests
-cannot meet the required performance. The project already has a relational
-engine and should exploit it before inventing another store.
+RFC 0005 mutation semantics, RFC 0006 declaration trust, and RFC 0008 effect
+annotations remain unchanged.
 
 ## Implementation order after acceptance
 
-Implementation should be a fresh stack based on the accepted RFC, not a repair
-of the abandoned pre-RFC stack.
+Implementation starts fresh from the accepted architecture:
 
-Recommended order:
+1. **Shared relational read service** — canonical relation provider + native
+   RFC 0010/fallback parity tests.
+2. **`query` consumer** — resolve #151 over that service.
+3. **Structured lookup + generic relation navigation** — service first, then
+   CLI/MCP adapters.
+4. **Relational diff** — identity, shipped digests, fields, links, diagnostics.
+5. **Cycle-safe impact** — deterministic bounded reachability.
+6. **Budgeted context** — hard byte/relation/depth contracts.
+7. **Agent installation helpers** — minimal instructions over stable surfaces.
+8. **Incremental compiled-image optimization** — only after profiling proves
+   benefit.
 
-1. **Query primitive** — resolve #151 on the shared relational materializer.
-2. **Lookup and generic relation navigation** — CLI/service first, then MCP.
-3. **Relational diff** — concept/digest/field/link/diagnostic changes.
-4. **Impact analysis** — deterministic reachability over canonical relations.
-5. **Bounded context projection** — compact agent-facing context.
-6. **Agent installation helpers** — minimal CLI-first instructions, MCP optional.
-7. **Incremental compiled-image optimization** — only after profiling the real
-   workload and proving the cache is useful.
-
-Each implementation PR must identify which layer it changes:
+Every implementation PR must identify the layer it changes:
 
 ```text
-authored parse
-normalized relations
-relational compilation
+source adapter / authored parse
+canonical semantic engine
+canonical relation provider
 consumer service
 transport adapter
+compiled-image optimization
 ```
 
-A PR that cannot identify its layer or introduces the same semantic fact in two
-layers should be treated as an architecture regression.
+A PR that introduces the same semantic fact through two layers or cannot name
+its layer is an architecture regression.
 
-## Acceptance criteria
+## Acceptance invariants
 
-This RFC is ready to move from `proposed` to `accepted` when review agrees on:
+RFC acceptance is architectural; implementation completion remains separate.
+The following are the conformance requirements future implementation PRs must be
+able to test.
 
-1. authored OKF remains canonical and DuckDB remains compiled state;
-2. query/lookup/diff/context are relational consumers, not independent indexes;
-3. NetworkX stays a projection for graph algorithms;
-4. generic core semantics remain domain-neutral;
-5. the useful `okf-generator` product features to adopt/reject are explicit;
-6. issue #151 is the first implementation primitive;
-7. raw SQL versus structured MCP lookup has an honest trust/effect boundary;
-8. incremental caching is derived/disposable and introduced only after
-   measurement.
+1. **Backend parity.** A language-neutral fixture evaluated through the native
+   RFC 0010 provider and portable fallback yields canonical-equal `concepts`,
+   `links`, `reserved`, and `diagnostics` after explicit deterministic ordering.
+   If the native provider is unavailable on a CI target, its conformance corpus
+   must run on at least one supported native target and the fallback on all
+   portable targets.
+
+2. **No agent-side parse bypass.** Modules implementing `lookup`, relation
+   navigation, `diff`, `impact`, or `context` do not import/use
+   `parse_document`, filesystem discovery, or `ConceptRecord` to reconstruct
+   canonical identity/relations. They consume the relation-provider/service
+   boundary.
+
+3. **Shared transport semantics.** CLI `lookup` and MCP `lookup` delegate to the
+   same public lookup service; equivalent inputs over the same fixture produce
+   equivalent normalized records.
+
+4. **Identity is test-pinned.** Renaming an authored `a.md` to `b.md` with
+   identical semantic content produces one removal and one addition. Equal
+   `parsed_digest` cannot silently convert that into one unchanged concept.
+
+5. **Digest vocabulary is preserved.** A source-only change and a semantic
+   parsed change have fixtures proving distinct `source_digest_changed` versus
+   `parsed_digest_changed` reporting.
+
+6. **Impact terminates deterministically.** A cyclic link fixture terminates,
+   emits each concept once at minimum depth, and produces the same
+   `(depth, concept_id)` ordering across repeated runs/backends.
+
+7. **Context obeys hard bounds.** Default context never exceeds 16,384 UTF-8
+   bytes, includes at most 50 relation/neighbor records at depth 1, and reports
+   truncation deterministically when the fixture exceeds a bound.
+
+8. **Compiled images are disposable.** Running a deterministic consumer,
+   deleting the compiled image/cache, rebuilding, and rerunning produces the
+   same normalized output.
+
+9. **Backend identity invalidates cache.** A cache key/manifest created for one
+   engine/backend identity cannot validate as the other backend merely because
+   source digests and configuration match.
+
+10. **Structured lookup is not SQL text construction.** The lookup service
+    accepts structured predicates/arguments and composes relational/Ibis
+    expressions (or an equivalent typed relational plan); it does not build a
+    raw SQL string and route it through `query --sql`.
+
+These invariants give later reviews an objective architecture gate rather than
+an instruction to merely "agree" with this RFC's prose.
 
 ## References
 
-- `okf-parser` architecture: `docs/architecture.md`
-- RFC 0005: relational frontmatter writes
-- RFC 0006: declared column types and DuckDB compilation
-- RFC 0008: effect-aware MCP tools
-- RFC 0011 proposal: tracked migrations
-- issue #151: read-only relational query primitive
-- `okf-generator`: <https://github.com/UmairBaig8/okf-generator>
+- `docs/architecture.md` — strict core / source-adapter boundary
+- RFC 0005 — relational frontmatter writes
+- RFC 0006 — declared column types and DuckDB compilation
+- RFC 0008 — effect-aware MCP tools
+- RFC 0009 / PR #93 — `source_digest` and `parsed_digest` vocabulary across a
+  source adapter
+- RFC 0010 / PR #121 — native DuckDB table-function read surface
+- PR #132 and PR #133 — draft RFC 0010 implementation slices
+- RFC 0011 / PR #153 — tracked migrations proposal
+- issue #151 — read-only relational query consumer
+- `okf-generator` — <https://github.com/UmairBaig8/okf-generator>
