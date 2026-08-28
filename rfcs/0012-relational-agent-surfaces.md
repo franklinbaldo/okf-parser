@@ -424,21 +424,36 @@ snapshot presence. A state whose support becomes empty is discarded. Therefore
 an edge that exists only in `base` cannot be concatenated with a later edge that
 exists only in `head` and reported as one historical path.
 
-Reported impact preserves snapshot provenance for the accepted path (or paths):
-which snapshot(s) support the reachability and, when path detail is requested,
-the snapshot presence of each edge. A concept reachable in both snapshots may
-still be emitted once at minimum depth while aggregating the supported snapshot
-set deterministically.
+Reported impact preserves snapshot provenance for every accepted reachability.
+Each impacted concept is emitted once with a deterministic per-snapshot minimum
+depth map, conceptually:
+
+```text
+concept_id: X
+support_depths: {base: 2, head: 3}
+depth: 2
+```
+
+`support_depths[snapshot]` is the minimum depth among valid paths wholly
+supported by that snapshot. Equal-depth paths in the same snapshot may aggregate
+optional path evidence deterministically, but a shallower path in one snapshot
+must not erase a deeper valid path in the other. The top-level `depth` is
+`min(support_depths.values())`; it is a convenience for ordering and compact
+consumers, not a replacement for the per-snapshot map. The supported snapshot
+set is therefore exactly the key set of `support_depths`.
 
 The traversal must:
 
 - maintain cycle-safe visited state keyed by at least concept identity plus
   snapshot-support state and terminate on cycles;
-- emit each impacted `concept_id` once at its minimum discovered depth, with
-  deterministic aggregation of supported snapshots when equal-depth paths exist;
+- emit each impacted `concept_id` once, preserving one minimum depth per
+  supported snapshot in `support_depths`;
+- aggregate equal-depth evidence deterministically without discarding a valid
+  different-depth reachability in another snapshot;
 - use deterministic frontier ordering by canonical `concept_id` and snapshot
   support;
-- produce stable final ordering by `(depth, concept_id)`;
+- produce stable final ordering by `(depth, concept_id)`, where `depth` is the
+  minimum value in `support_depths`;
 - never depend on NetworkX insertion order, SQL incidental row order, or worker
   completion order.
 
@@ -461,8 +476,16 @@ depth          = 1
 
 A caller may request different explicit values. Expansion order is deterministic
 by relation direction, depth, and canonical `concept_id`. If the byte budget is
-reached, truncation occurs only at record/body-fragment boundaries and the
-result reports `truncated=true` plus the effective limits.
+reached, truncation normally occurs only at record/body-fragment boundaries and
+the result reports `truncated=true` plus the effective limits.
+
+The identity block is the minimum structural content guaranteed to be present,
+but its variable-length values are not exempt from `max_bytes`. If that block
+alone would exceed the byte budget — for example because of a pathological path
+or authored identity value — last-resort truncation may enter those identity
+values while preserving the identity-field structure and reporting
+`truncated=true`. The hard byte bound therefore remains satisfiable even for a
+pathological identity.
 
 Agent integrations that know a model tokenizer may translate their token budget
 into a stricter byte budget before calling the service. The core must not claim
@@ -625,15 +648,22 @@ able to test.
    `parsed_digest_changed` reporting.
 
 6. **Impact is snapshot-aware and deterministic.** Fixtures cover a removed
-   base-only edge, an added head-only edge, a cycle, and a tempting mixed path
-   whose consecutive edges never coexist in one snapshot. Traversal preserves
-   removed/added reachability, rejects the synthetic cross-snapshot path,
-   terminates, emits each concept once at minimum depth, records supported
-   snapshot provenance, and produces stable `(depth, concept_id)` ordering.
+   base-only edge, an added head-only edge, a cycle, a tempting mixed path whose
+   consecutive edges never coexist in one snapshot, and one concept reachable
+   at different minimum depths in the two snapshots (for example depth 2 in
+   `base` and depth 3 in `head`). Traversal preserves removed/added reachability,
+   rejects the synthetic cross-snapshot path, terminates, emits each concept
+   once, records `support_depths` with the minimum depth for every supporting
+   snapshot (for the example, `{base: 2, head: 3}`), derives top-level `depth`
+   from the minimum map value, and produces stable `(depth, concept_id)`
+   ordering.
 
 7. **Context obeys hard bounds.** Default context never exceeds 16,384 UTF-8
    bytes, includes at most 50 relation/neighbor records at depth 1, and reports
-   truncation deterministically when the fixture exceeds a bound.
+   truncation deterministically when the fixture exceeds a bound. A fixture in
+   which the identity block alone exceeds the byte budget verifies last-resort
+   truncation inside variable-length identity values while preserving the
+   identity-field structure and `truncated=true`.
 
 8. **Compiled images are disposable.** Running a deterministic consumer,
    deleting the compiled image/cache, rebuilding, and rerunning produces the
