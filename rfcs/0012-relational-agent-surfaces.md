@@ -328,9 +328,14 @@ The public type/name may differ. The requirement is architectural: consumers do
 not decide how Markdown is scanned, how the native engine is selected, or how
 canonical rows are constructed.
 
-When RFC 0010 is available, this boundary may use the native table functions.
-Otherwise it uses the portable canonical fallback. Conformance tests compare the
-backends.
+Milestone 1a is implementable today: define the relation-provider/service
+boundary with the portable canonical fallback and a language-neutral conformance
+corpus that pins the four relation contracts.
+
+Milestone 1b is conditional on RFC 0010 being accepted and available: wire the
+native table-function provider to the same boundary and run the same corpus as a
+backend-parity test. RFC 0012 acceptance and milestone 1a do not depend on the
+native extension having landed first.
 
 ### 2. `query --sql` is a trusted power-user consumer
 
@@ -407,17 +412,39 @@ Default traversal for "what may depend on this change" follows incoming links
 (reverse edge direction) with an explicit depth bound. Consumers may request
 outgoing or both directions.
 
+Traversal is defined over the union of link identities from both snapshots,
+`E_base ∪ E_head`, so a removed edge remains visible through `base` and an added
+edge is visible through `head`. Every traversed edge carries snapshot presence:
+`base`, `head`, or both.
+
+The union is a discovery surface, not permission to invent a path that never
+existed. Each frontier state carries a path-support set initialized from the
+seed's valid snapshot(s). Crossing an edge intersects that set with the edge's
+snapshot presence. A state whose support becomes empty is discarded. Therefore
+an edge that exists only in `base` cannot be concatenated with a later edge that
+exists only in `head` and reported as one historical path.
+
+Reported impact preserves snapshot provenance for the accepted path (or paths):
+which snapshot(s) support the reachability and, when path detail is requested,
+the snapshot presence of each edge. A concept reachable in both snapshots may
+still be emitted once at minimum depth while aggregating the supported snapshot
+set deterministically.
+
 The traversal must:
 
-- maintain a visited set and terminate on cycles;
-- emit each impacted `concept_id` once at its minimum discovered depth;
-- use deterministic frontier ordering by canonical `concept_id`;
+- maintain cycle-safe visited state keyed by at least concept identity plus
+  snapshot-support state and terminate on cycles;
+- emit each impacted `concept_id` once at its minimum discovered depth, with
+  deterministic aggregation of supported snapshots when equal-depth paths exist;
+- use deterministic frontier ordering by canonical `concept_id` and snapshot
+  support;
 - produce stable final ordering by `(depth, concept_id)`;
 - never depend on NetworkX insertion order, SQL incidental row order, or worker
   completion order.
 
 DuckDB recursive CTEs, NetworkX, or another graph implementation are acceptable
-if they satisfy that contract over the same link relation.
+if they satisfy that contract over the base/head link snapshots from the same
+relational service.
 
 ### 7. `context` has explicit deterministic budgets
 
@@ -534,13 +561,18 @@ annotations remain unchanged.
 
 Implementation starts fresh from the accepted architecture:
 
-1. **Shared relational read service** — canonical relation provider + native
-   RFC 0010/fallback parity tests.
+1a. **Portable shared relational read service** — canonical relation-provider
+    boundary + portable fallback + language-neutral conformance corpus. This is
+    independently implementable before RFC 0010 lands.
+1b. **Native provider parity** — once RFC 0010 is accepted/available, wire its
+    table functions to the same service and run the same conformance corpus
+    against native and portable providers.
 2. **`query` consumer** — resolve #151 over that service.
 3. **Structured lookup + generic relation navigation** — service first, then
    CLI/MCP adapters.
 4. **Relational diff** — identity, shipped digests, fields, links, diagnostics.
-5. **Cycle-safe impact** — deterministic bounded reachability.
+5. **Cycle-safe snapshot-aware impact** — deterministic bounded reachability
+   over base/head relation snapshots without cross-snapshot synthetic paths.
 6. **Budgeted context** — hard byte/relation/depth contracts.
 7. **Agent installation helpers** — minimal instructions over stable surfaces.
 8. **Incremental compiled-image optimization** — only after profiling proves
@@ -566,12 +598,13 @@ RFC acceptance is architectural; implementation completion remains separate.
 The following are the conformance requirements future implementation PRs must be
 able to test.
 
-1. **Backend parity.** A language-neutral fixture evaluated through the native
-   RFC 0010 provider and portable fallback yields canonical-equal `concepts`,
-   `links`, `reserved`, and `diagnostics` after explicit deterministic ordering.
-   If the native provider is unavailable on a CI target, its conformance corpus
-   must run on at least one supported native target and the fallback on all
-   portable targets.
+1. **Relation contract first; backend parity when native exists.** The portable
+   provider must pass a language-neutral corpus that pins canonical `concepts`,
+   `links`, `reserved`, and `diagnostics` with explicit deterministic ordering.
+   Once RFC 0010 is accepted/available, the native provider must pass that same
+   corpus and yield canonical-equal relations. RFC 0012 acceptance does not
+   require a native provider that has not landed yet; parity becomes mandatory
+   when that backend exists.
 
 2. **No agent-side parse bypass.** Modules implementing `lookup`, relation
    navigation, `diff`, `impact`, or `context` do not import/use
@@ -591,9 +624,12 @@ able to test.
    parsed change have fixtures proving distinct `source_digest_changed` versus
    `parsed_digest_changed` reporting.
 
-6. **Impact terminates deterministically.** A cyclic link fixture terminates,
-   emits each concept once at minimum depth, and produces the same
-   `(depth, concept_id)` ordering across repeated runs/backends.
+6. **Impact is snapshot-aware and deterministic.** Fixtures cover a removed
+   base-only edge, an added head-only edge, a cycle, and a tempting mixed path
+   whose consecutive edges never coexist in one snapshot. Traversal preserves
+   removed/added reachability, rejects the synthetic cross-snapshot path,
+   terminates, emits each concept once at minimum depth, records supported
+   snapshot provenance, and produces stable `(depth, concept_id)` ordering.
 
 7. **Context obeys hard bounds.** Default context never exceeds 16,384 UTF-8
    bytes, includes at most 50 relation/neighbor records at depth 1, and reports
