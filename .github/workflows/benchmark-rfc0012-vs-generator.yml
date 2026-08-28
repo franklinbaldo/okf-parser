@@ -1,0 +1,120 @@
+name: Benchmark RFC0012 vs okf-generator
+
+on:
+  push:
+    branches: [bench/rfc0012-vs-okf-generator]
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: astral-sh/setup-uv@v6
+      - name: Install both implementations
+        run: |
+          uv sync
+          uv pip install --python .venv/bin/python 'git+https://github.com/UmairBaig8/okf-generator.git@5fb73be73814ec75b5c5f48ccbbecf348ff277d3'
+      - name: Run same-host benchmark
+        run: |
+          uv run python - <<'PY'
+          from __future__ import annotations
+          import json, os, shutil, statistics, subprocess, tempfile, time
+          from pathlib import Path
+          import duckdb
+          from okf.lookup import load_bundle as generator_load
+          from okf.storage import open_store
+          from okf_parser.bundle import load_bundle as parser_load
+          from okf_parser.duckdb import attach_okf
+
+          SIZES = (1000, 10000, 50000)
+          QUERY_ROUNDS = 200
+
+          def med_ms(fn, rounds=7):
+              fn()
+              xs=[]
+              for _ in range(rounds):
+                  t=time.perf_counter_ns(); fn(); xs.append((time.perf_counter_ns()-t)/1e6)
+              return statistics.median(xs)
+
+          def avg_us(fn, rounds=QUERY_ROUNDS):
+              t=time.perf_counter_ns()
+              for _ in range(rounds): fn()
+              return (time.perf_counter_ns()-t)/rounds/1e3
+
+          def write_bundle(root: Path, n: int):
+              (root/'index.md').write_text('# Benchmark bundle\n', encoding='utf-8')
+              for i in range(n):
+                  nxt=(i+1)%n
+                  typ='BenchmarkA' if i%2==0 else 'BenchmarkB'
+                  text=(
+                      '---\n'
+                      f'type: {typ}\n'
+                      f'title: Concept {i:06d}\n'
+                      f'description: Synthetic concept {i}\n'
+                      '---\n'
+                      f'# Concept {i:06d}\n\n'
+                      '## Related\n\n'
+                      f'- [next](/concept-{nxt:06d}.md)\n\n'
+                      'Synthetic benchmark body.\n'
+                  )
+                  (root/f'concept-{i:06d}.md').write_text(text, encoding='utf-8')
+
+          exe=shutil.which('okf-parser')
+          if not exe:
+              raise RuntimeError('okf-parser executable not found')
+          report={
+              'host': {'runner': os.environ.get('RUNNER_NAME'), 'os': os.environ.get('RUNNER_OS')},
+              'okf_parser_head': subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip(),
+              'okf_generator_commit': '5fb73be73814ec75b5c5f48ccbbecf348ff277d3',
+              'sizes': []
+          }
+
+          for n in SIZES:
+              with tempfile.TemporaryDirectory(prefix=f'okf-compare-{n}-') as td:
+                  root=Path(td); write_bundle(root,n)
+                  row={'concepts': n}
+
+                  # Raw Markdown -> in-memory representation.
+                  t=time.perf_counter(); gen=generator_load(root, use_cache=False); row['generator_raw_load_ms']=(time.perf_counter()-t)*1000
+                  t=time.perf_counter(); pb=parser_load(root); row['parser_python_raw_load_ms']=(time.perf_counter()-t)*1000
+                  row['parser_python_links']=int(pb.links.count().execute())
+
+                  # Native Rust engine includes discovery, parsing, validation, links, digests and JSON serialization.
+                  row['parser_rust_engine_load_ms']=med_ms(lambda: subprocess.run([exe,'__engine-load',str(root)], stdout=subprocess.DEVNULL, check=True), rounds=3)
+
+                  # okf-generator derived SQLite store.
+                  db=root/'.okf_db.sqlite'
+                  for p in (db, Path(str(db)+'-wal'), Path(str(db)+'-shm')):
+                      p.unlink(missing_ok=True)
+                  t=time.perf_counter(); gs=open_store(root); row['generator_sqlite_build_ms']=(time.perf_counter()-t)*1000
+                  row['generator_sqlite_mb']=db.stat().st_size/1024/1024
+                  target=f'concept-{n//2:06d}'
+                  row['generator_point_lookup_us']=avg_us(lambda: gs.get(target))
+                  row['generator_type_filter_us']=avg_us(lambda: gs.search(type_filter='BenchmarkA', limit=80))
+                  row['generator_neighbors_us']=avg_us(lambda: gs.get_neighbors(target))
+                  gs.close()
+                  row['generator_cached_open_ms']=med_ms(lambda: (lambda s:(s.get_info(),s.close()))(open_store(root)), rounds=7)
+
+                  # Current okf-parser persisted DuckDB path. Build cost is current Python/Ibis attach path;
+                  # RFC 0012/0010 native-provider parity is not implemented yet and is therefore not timed here.
+                  duck_path=root/'parser.duckdb'
+                  conn=duckdb.connect(str(duck_path))
+                  t=time.perf_counter(); attach_okf(conn,root); row['parser_duckdb_build_ms']=(time.perf_counter()-t)*1000
+                  row['parser_duckdb_mb']=duck_path.stat().st_size/1024/1024
+                  row['parser_duckdb_point_lookup_us']=avg_us(lambda: conn.execute('SELECT concept_id,title FROM okf.concepts WHERE concept_id=?',[target]).fetchall())
+                  row['parser_duckdb_type_filter_us']=avg_us(lambda: conn.execute("SELECT concept_id,title FROM okf.concepts WHERE concept_type='BenchmarkA' LIMIT 80").fetchall())
+                  row['parser_duckdb_neighbors_us']=avg_us(lambda: conn.execute('SELECT source_id,target_id FROM okf.links WHERE source_id=? OR target_id=?',[target,target]).fetchall())
+                  conn.close()
+                  row['parser_duckdb_cached_open_ms']=med_ms(lambda: (lambda c:(c.execute('SELECT count(*) FROM okf.concepts').fetchone(),c.close()))(duckdb.connect(str(duck_path))), rounds=7)
+                  report['sizes'].append(row)
+                  print('BENCH_ROW '+json.dumps(row, sort_keys=True), flush=True)
+
+          print('BENCH_REPORT '+json.dumps(report, sort_keys=True), flush=True)
+          PY
