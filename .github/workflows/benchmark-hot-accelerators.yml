@@ -1,0 +1,65 @@
+name: Benchmark hot navigation accelerators
+
+on:
+  push:
+    branches: [bench/rfc0012-vs-okf-generator]
+
+permissions:
+  contents: read
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and run Rust microbenchmark
+        run: |
+          cat > /tmp/hot_bench.rs <<'RS'
+          use std::collections::HashMap;
+          use std::hint::black_box;
+          use std::time::Instant;
+
+          const N: usize = 50_000;
+          const ROUNDS: usize = 2_000_000;
+
+          fn main() {
+              let ids: Vec<String> = (0..N).map(|i| format!("concept-{i:06}")).collect();
+              let mut id_to_ord: HashMap<String, usize> = HashMap::with_capacity(N * 2);
+              for (i, id) in ids.iter().enumerate() { id_to_ord.insert(id.clone(), i); }
+
+              let mut outgoing: Vec<Vec<u32>> = vec![Vec::new(); N];
+              let mut incoming: Vec<Vec<u32>> = vec![Vec::new(); N];
+              for i in 0..N {
+                  let j = (i + 1) % N;
+                  outgoing[i].push(j as u32);
+                  incoming[j].push(i as u32);
+              }
+
+              let target = ids[N/2].clone();
+              let t = Instant::now();
+              let mut acc = 0usize;
+              for _ in 0..ROUNDS {
+                  acc ^= *id_to_ord.get(black_box(&target)).unwrap();
+              }
+              let ns = t.elapsed().as_nanos() as f64 / ROUNDS as f64;
+              println!("HASH_LOOKUP_NS {ns:.2} {acc}");
+
+              let ord = *id_to_ord.get(&target).unwrap();
+              let t = Instant::now();
+              let mut acc2 = 0u32;
+              for _ in 0..ROUNDS {
+                  let out = black_box(&outgoing[ord]);
+                  let inc = black_box(&incoming[ord]);
+                  acc2 ^= out[0] ^ inc[0];
+              }
+              let ns2 = t.elapsed().as_nanos() as f64 / ROUNDS as f64;
+              println!("ADJ_VEC_NS {ns2:.2} {acc2}");
+
+              let bytes_ids: usize = ids.iter().map(|s| s.capacity()).sum();
+              let edge_slots = outgoing.iter().map(Vec::capacity).sum::<usize>() + incoming.iter().map(Vec::capacity).sum::<usize>();
+              println!("APPROX_PAYLOAD_BYTES {}", bytes_ids + edge_slots * std::mem::size_of::<u32>());
+          }
+          RS
+          rustc -O /tmp/hot_bench.rs -o /tmp/hot_bench
+          /tmp/hot_bench
