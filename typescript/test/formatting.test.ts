@@ -5,6 +5,7 @@ import path from "node:path";
 import { expect, test } from "vitest";
 
 import {
+  canonicalizeSimpleFrontmatterBlock,
   formatMarkdown,
   formatPath,
   protectedBlockSignature,
@@ -42,6 +43,44 @@ test.each(cases)("shared formatting contract: $name", (item) => {
   expect(lists.filter((block) => block.attributes.ordered === false)).toHaveLength(
     item.bullet_lists,
   );
+});
+
+test("simple frontmatter uses the shared physical order", () => {
+  const source =
+    "status: active\ndescription: Plain text\ntype: Reference\nnumber: 0012\ntitle: Example\nactive: false\n";
+
+  expect(canonicalizeSimpleFrontmatterBlock(source)).toBe(
+    "type: Reference\ntitle: Example\ndescription: Plain text\nactive: false\nnumber: 0012\nstatus: active\n",
+  );
+});
+
+test("complex frontmatter remains byte-for-byte on the generic path", () => {
+  for (const source of [
+    "type: Reference # keep me\ntitle: Example",
+    "type: Reference\nitems:\n  - one\n  - two",
+    "type: 'Reference'\ntitle: Example",
+    "type: Reference\ntitle: Example: subtitle",
+  ]) {
+    expect(canonicalizeSimpleFrontmatterBlock(source)).toBe(source);
+  }
+});
+
+test("formatPath writes canonical simple frontmatter order", async () => {
+  const root = await mkdtemp(path.join(tmpdir(), "okf-parser-format-frontmatter-"));
+  const markdownPath = path.join(root, "concept.md");
+  await writeFile(
+    markdownPath,
+    "---\nstatus: active\ndescription: Plain text\ntype: Reference\nnumber: 0012\ntitle: Example\nactive: false\n---\n# Example\n",
+    "utf8",
+  );
+
+  const report = await formatPath(root, { write: true });
+  const written = await readFile(markdownPath, "utf8");
+
+  expect(report.succeeded).toBe(true);
+  expect(written.startsWith(
+    "---\ntype: Reference\ntitle: Example\ndescription: Plain text\nactive: false\nnumber: 0012\nstatus: active\n---\n",
+  )).toBe(true);
 });
 
 test("check is read-only and write is explicit", async () => {

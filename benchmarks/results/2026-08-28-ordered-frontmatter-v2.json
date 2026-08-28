@@ -1,0 +1,51 @@
+{
+  "benchmark": "ordered-frontmatter-v2",
+  "baseline_commit": "67e72cbe153b57d111649c3e14777ac58f471a96",
+  "candidate_commit": "d0c95d75571ac7625eb93d6f7d1eeb8164abe01e",
+  "workflow_run": 33210930340,
+  "host": "GitHub-hosted Ubuntu 24.04",
+  "rounds": 5,
+  "warmups": 1,
+  "sizes": [1000, 10000, 50000],
+  "results": [
+    {
+      "documents": 1000,
+      "baseline_ns": 24889534,
+      "candidate_ns": 20323879,
+      "candidate_fallback_ns": 26207711,
+      "baseline_ns_per_document": 24889,
+      "candidate_ns_per_document": 20323,
+      "candidate_fallback_ns_per_document": 26207,
+      "base_to_candidate_speedup": 1.2246448623316444,
+      "fallback_to_candidate_speedup": 1.289503396472691,
+      "fallback_vs_base_ratio": 1.052961096017306,
+      "output_bytes": 636022
+    },
+    {
+      "documents": 10000,
+      "baseline_ns": 209325466,
+      "candidate_ns": 165616659,
+      "candidate_fallback_ns": 203499938,
+      "baseline_ns_per_document": 20932,
+      "candidate_ns_per_document": 16561,
+      "candidate_fallback_ns_per_document": 20349,
+      "base_to_candidate_speedup": 1.263915521928262,
+      "fallback_to_candidate_speedup": 1.2287407512549808,
+      "fallback_vs_base_ratio": 0.9721699986565419,
+      "output_bytes": 6369024
+    },
+    {
+      "documents": 50000,
+      "baseline_ns": 1029871835,
+      "candidate_ns": 845360552,
+      "candidate_fallback_ns": 1054665885,
+      "baseline_ns_per_document": 20597,
+      "candidate_ns_per_document": 16907,
+      "candidate_fallback_ns_per_document": 21093,
+      "base_to_candidate_speedup": 1.2182634173826459,
+      "fallback_to_candidate_speedup": 1.2475929737965819,
+      "fallback_vs_base_ratio": 1.024074888891393,
+      "output_bytes": 31889024
+    }
+  ]
+}

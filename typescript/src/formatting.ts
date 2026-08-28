@@ -32,6 +32,9 @@ const LEAF_BLOCKS = new Set([
   "thematicBreak",
   "definition",
 ]);
+const PREFERRED_FRONTMATTER_KEYS = ["type", "title", "description"] as const;
+const SIMPLE_KEY = /^[A-Za-z_][A-Za-z0-9_.-]*$/u;
+const UNSAFE_VALUE_PREFIXES = new Set(["-", "?", ":", ",", "[", "]", "{", "}", "#", "&", "*", "!", "|", ">", "'", '"', "%", "@", "`"]);
 
 export type ProtectedAttribute = string | number | boolean | null | readonly string[];
 
@@ -62,6 +65,75 @@ function parseMarkdown(text: string) {
     extensions: [frontmatter(["yaml"]), gfm()],
     mdastExtensions: [frontmatterFromMarkdown(["yaml"]), gfmFromMarkdown()],
   });
+}
+
+function frontmatterKeyOrder(key: string): readonly [number, string] {
+  const rank = PREFERRED_FRONTMATTER_KEYS.indexOf(
+    key as (typeof PREFERRED_FRONTMATTER_KEYS)[number],
+  );
+  return rank >= 0 ? [rank, ""] : [PREFERRED_FRONTMATTER_KEYS.length, key];
+}
+
+function compareLexical(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+function simpleFrontmatterLine(line: string): readonly [string, string] | null {
+  const separator = line.indexOf(":");
+  if (separator < 0) return null;
+  const key = line.slice(0, separator);
+  if (!SIMPLE_KEY.test(key)) return null;
+  const remainder = line.slice(separator + 1);
+  let value = "";
+  if (remainder.length > 0) {
+    if (!remainder.startsWith(" ") || remainder.startsWith("  ")) return null;
+    value = remainder.slice(1);
+  }
+  if (
+    value !== value.trim() ||
+    value.includes("\t") ||
+    value.includes("#") ||
+    value.includes(": ") ||
+    (value.length > 0 && UNSAFE_VALUE_PREFIXES.has(value[0]!))
+  ) {
+    return null;
+  }
+  return [key, line];
+}
+
+export function canonicalizeSimpleFrontmatterBlock(block: string): string {
+  if (block.length === 0) return block;
+  const terminalNewline = block.endsWith("\n");
+  const content = terminalNewline ? block.slice(0, -1) : block;
+  if (content.length === 0) return block;
+
+  const seen = new Set<string>();
+  const rows: Array<readonly [string, string]> = [];
+  for (const line of content.split("\n")) {
+    const parsed = simpleFrontmatterLine(line);
+    if (parsed === null || seen.has(parsed[0])) return block;
+    seen.add(parsed[0]);
+    rows.push(parsed);
+  }
+  rows.sort((left, right) => {
+    const a = frontmatterKeyOrder(left[0]);
+    const b = frontmatterKeyOrder(right[0]);
+    return a[0] - b[0] || compareLexical(a[1], b[1]);
+  });
+  const ordered = rows.map((row) => row[1]).join("\n");
+  return terminalNewline ? `${ordered}\n` : ordered;
+}
+
+function orderedSimpleFrontmatter(text: string): string {
+  if (!text.startsWith("---\n")) return text;
+  const closing = text.indexOf("\n---\n", 4);
+  if (closing < 0) return text;
+  const frontmatterText = text.slice(4, closing);
+  const ordered = canonicalizeSimpleFrontmatterBlock(frontmatterText);
+  if (ordered === frontmatterText) return text;
+  return `---\n${ordered}\n---\n${text.slice(closing + 5)}`;
 }
 
 function isParent(node: Node): node is Parent {
@@ -180,6 +252,14 @@ export function safeFormatMarkdown(text: string): string | null {
     : null;
 }
 
+function safeFormatPathText(text: string): string | null {
+  const ordered = orderedSimpleFrontmatter(text);
+  const formatted = formatMarkdown(ordered);
+  return isDeepStrictEqual(protectedBlockSignature(formatted), protectedBlockSignature(ordered))
+    ? formatted
+    : null;
+}
+
 async function readUtf8(filePath: string): Promise<string> {
   const bytes = await readFile(filePath);
   return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -208,7 +288,7 @@ export async function formatPath(
       skippedPaths.push(relative);
       continue;
     }
-    const formatted = safeFormatMarkdown(original);
+    const formatted = safeFormatPathText(original);
     if (formatted === null) {
       skippedPaths.push(relative);
       continue;
