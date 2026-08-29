@@ -14,7 +14,7 @@ The default matrix uses 100, 1,000 and 5,000 concepts, five measured rounds and
 one unmeasured warm-up round:
 
 ```bash
-uv run python benchmarks/python_parser.py
+uv run benchmarks/python_parser.py
 npm --prefix typescript run build
 node benchmarks/typescript-parser.mjs
 ```
@@ -22,7 +22,7 @@ node benchmarks/typescript-parser.mjs
 Use the same parameters in both runtimes when changing the corpus:
 
 ```bash
-uv run python benchmarks/python_parser.py \
+uv run benchmarks/python_parser.py \
   --sizes 100,1000 --body-paragraphs 8 --rounds 7 \
   --read-concurrencies 1,4,8,16,32,64
 

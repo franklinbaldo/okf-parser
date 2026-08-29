@@ -8,19 +8,19 @@ description: Every CLI command and MCP tool exposed by okf-parser, with flags an
 
 `okf-parser` exposes its command-line interface through Cyclopts
 (`uv run okf-parser <command>`). Inspection operations are also exposed through
-FastMCP (`okf-parser-mcp`, or `okf-parser serve`) and share the same service
+FastMCP (`okf-parser serve`) and share the same service
 functions and payloads where both surfaces exist.
 
 The default MCP profile is commit-disabled and exposes inspection plus faithful
 preview tools. `okf-parser serve --allow-write` adds explicit commit tools; the
-zero-argument `okf-parser-mcp` entry point remains commit-disabled. Tool-level MCP
+default `okf-parser serve` entry point remains commit-disabled. Tool-level MCP
 annotations describe each tool's maximum possible effect and are descriptive hints,
 not an authorization boundary.
 
-Most commands print one JSON object to stdout. `schema --format zod` and
-`schema --format pydantic` print source as plain text. Text output preserves an
-existing final newline instead of adding a second one. Exit status is command-specific
-and described below.
+Most commands print one JSON object to stdout. `schema --format zod`,
+`schema --format pydantic`, and `schema --format graphql` print source/schema text
+as plain text. Text output preserves an existing final newline instead of adding a
+second one. Exit status is command-specific and described below.
 
 Commands that walk an existing bundle accept `--exclude` (repeatable) where
 shown, in addition to any `.okfignore`; see
@@ -126,11 +126,13 @@ MCP tool: `graph`.
 ## `schema`
 
 ```bash
-uv run okf-parser schema path/to/bundle [--format json|zod|pydantic] [--infer-types] [--cast FIELD]... [--spec-template TEMPLATE] [--exclude PATTERN]... [--zod-import zod|astro]
+uv run okf-parser schema path/to/bundle [--format json|zod|pydantic|graphql] [--infer-types] [--cast FIELD]... [--spec-template TEMPLATE] [--exclude PATTERN]... [--zod-import zod|astro]
 ```
 
-Exports the bundle's shared frontmatter contract as JSON Schema, Zod source, or
-an importable Pydantic v2 module.
+Exports the bundle's shared frontmatter contract as JSON Schema, Zod source,
+an importable Pydantic v2 module, or deterministic GraphQL SDL. GraphQL SDL is a
+read-only projection of the same TypeContract; it does not add a second schema
+authority or a GraphQL server.
 
 The common Pydantic path is intentionally just:
 
@@ -150,7 +152,7 @@ valid OKF keys or concept types are very long. A stable digest suffix preserves
 identity, and long aliases, literals and annotations are emitted in canonical
 multiline form rather than relying on a later formatter pass.
 
-- `--format` — `json` (default), `zod`, or `pydantic`.
+- `--format` — `json` (default), `zod`, `pydantic`, or `graphql`.
 - `--infer-types` — infer scalar types from observed frontmatter values instead
   of leaving them untyped.
 - `--cast FIELD` — declare a scalar type for a specific field, repeatable.
@@ -167,13 +169,24 @@ shell redirection is enough when a file is desired:
 uv run okf-parser schema path/to/bundle --format pydantic > generated_models.py
 ```
 
+The GraphQL target likewise prints deterministic SDL and can be redirected
+without installing the optional executable GraphQL runtime:
+
+```bash
+uv run okf-parser schema path/to/bundle --format graphql > schema.graphql
+```
+
 The redirected bytes are the renderer bytes: if the source already ends in its
 canonical newline, the CLI does not append a second blank line. Checked-in short
 and adversarial source snapshots exercise this contract against the repository's
 Ruff formatting and lint rules.
 
-MCP tool: `schema` with the same `json`, `zod`, and `pydantic` format choices
-(`format` is represented internally by the Python parameter `schema_format`).
+MCP tool: `schema` with the same `json`, `zod`, `pydantic`, and `graphql` format
+choices (`format` is represented internally by the Python parameter
+`schema_format`).
+
+See [Embedded GraphQL read adapter](graphql.md) for executable read-only schema
+usage, scalar policies, and host-owned transport integration.
 
 ## `format`
 
@@ -250,7 +263,7 @@ MCP tool: `duckdb_export` with `--allow-write`; it also accepts `spec_template`.
 uv run okf-parser serve [--transport stdio|http|sse] [--host HOST] [--port PORT] [--allow-write]
 ```
 
-Runs the MCP server. `stdio` (default) is what `okf-parser-mcp` runs directly;
+Runs the MCP server. `stdio` is the default;
 `http` and `sse` bind `--host` and `--port` for network transports. The default
 profile exposes `check`, `inventory`, `graph`, `schema`, `format_check`,
 `apply_preview`, `init_preview`, and `import_preview`. `--allow-write` additionally

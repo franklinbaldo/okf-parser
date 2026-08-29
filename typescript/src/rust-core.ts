@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -14,13 +15,35 @@ export class RustCoreError extends Error {
   }
 }
 
+const require = createRequire(import.meta.url);
+
 function binaryName(): string {
   return process.platform === "win32" ? "okf-core.exe" : "okf-core";
 }
 
+function nativePackageName(): string | undefined {
+  if (process.platform === "linux" && process.arch === "x64") {
+    return "okf-parser-native-linux-x64";
+  }
+  return undefined;
+}
+
+function installedNativePackageCore(): string | undefined {
+  const packageName = nativePackageName();
+  if (packageName === undefined) return undefined;
+  try {
+    const manifest = require.resolve(`${packageName}/package.json`);
+    const candidate = path.join(path.dirname(manifest), "bin", binaryName());
+    return existsSync(candidate) ? candidate : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function packagedRustCore(): string | undefined {
-  const candidate = fileURLToPath(new URL(`../native/${binaryName()}`, import.meta.url));
-  return existsSync(candidate) ? candidate : undefined;
+  const local = fileURLToPath(new URL(`../native/${binaryName()}`, import.meta.url));
+  if (existsSync(local)) return local;
+  return installedNativePackageCore();
 }
 
 function pathRustCore(environment: NodeJS.ProcessEnv): string | undefined {
@@ -69,7 +92,7 @@ export async function rustLoadBundle(
   },
 ): Promise<Bundle> {
   options.signal?.throwIfAborted();
-  const args = ["load", root, "--read-concurrency", String(options.readConcurrency)];
+  const args = ["__engine-load", root, "--read-concurrency", String(options.readConcurrency)];
   for (const pattern of options.exclude ?? []) args.push("--exclude", pattern);
   const child = spawn(executable, args, { stdio: ["ignore", "pipe", "pipe"] });
   const stdout: Buffer[] = [];
@@ -146,7 +169,7 @@ export async function rustMarkdownFactsBatch(
   signal?: AbortSignal,
 ): Promise<readonly MarkdownFacts[]> {
   signal?.throwIfAborted();
-  const child = spawn(executable, [], { stdio: ["pipe", "pipe", "pipe"] });
+  const child = spawn(executable, ["__engine-facts"], { stdio: ["pipe", "pipe", "pipe"] });
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
   child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
