@@ -1,3 +1,10 @@
+#!/usr/bin/env -S uv run --script
+#
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+# ]
+# ///
 """Prove a built wheel's executable does not link against a DuckDB library.
 
 The Python distribution depends on `duckdb` and runs its DuckDB export

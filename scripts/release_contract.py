@@ -1,3 +1,10 @@
+#!/usr/bin/env -S uv run --script
+#
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+# ]
+# ///
 """Validate synchronized release metadata and artifact bytes."""
 
 from __future__ import annotations
@@ -313,11 +320,51 @@ def _verify_readme_action(root: Path, version: str) -> None:
 
 
 def _verify_changelog(root: Path, version: str) -> Path:
-    path = root / "changelog" / f"{version}.md"
-    metadata = _frontmatter(path)
-    if metadata.get("type") != "Release" or metadata.get("title") != f"okf-parser {version}":
-        _fail(f"changelog metadata does not identify okf-parser {version}")
-    return path
+    """Check the release-note fragments this version publishes.
+
+    A version identifies a release, not a pull request: several changes land
+    together under one number, so each contributes a fragment to
+    `changelog/<version>/` rather than competing for a single file. The release
+    needs at least one, and each must be a readable note -- the assembled body
+    is what reaches the GitHub Release.
+    """
+    directory = root / "changelog" / version
+    if not directory.is_dir():
+        _fail(f"changelog/{version}/ does not exist; a release needs at least one note fragment")
+    fragments = sorted(path for path in directory.glob("*.md") if path.is_file())
+    if not fragments:
+        _fail(f"changelog/{version}/ has no *.md fragment")
+    for fragment in fragments:
+        metadata = _frontmatter(fragment)
+        if metadata.get("type") != "Release Note":
+            _fail(f"{fragment.relative_to(root).as_posix()} must declare type: Release Note")
+        if not metadata.get("title"):
+            _fail(f"{fragment.relative_to(root).as_posix()} must declare a title")
+    return directory
+
+
+def _verify_rust_crates(root: Path, version: str) -> None:
+    """Check the Rust crate versions against the workspace version.
+
+    docs/releasing.md lists "the Rust crate version" among what verify-source
+    requires, but nothing read any Cargo.toml and okf-engine silently drifted
+    to 0.39.1 while the workspace published 0.45.0 (issue #172). rust-core
+    additionally pins okf-engine as an internal path dependency, so all three
+    numbers must move together.
+    """
+    for crate_root, name in ((root / "okf-engine", "okf-engine"), (root / "rust-core", "okf-core")):
+        path = crate_root / "Cargo.toml"
+        try:
+            manifest = tomllib.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
+            _fail(f"cannot read {path}: {exc}")
+        package = _mapping(manifest.get("package"), f"{path} [package]")
+        if _string(package, "version", str(path)) != version:
+            _fail(f"{name} crate version must be {version}")
+    dependencies = _mapping(manifest.get("dependencies"), "rust-core/Cargo.toml dependencies")
+    internal = _mapping(dependencies.get("okf-engine"), "rust-core okf-engine dependency")
+    if _string(internal, "version", "rust-core okf-engine dependency") != version:
+        _fail(f"rust-core internal okf-engine dependency must be {version}")
 
 
 def verify_source(root: Path, tag: str | None = None) -> SourceContract:
@@ -325,6 +372,7 @@ def verify_source(root: Path, tag: str | None = None) -> SourceContract:
     version = _project_version(root)
     _verify_npm_contract(root, version)
     _verify_protocol(root, version)
+    _verify_rust_crates(root, version)
     changelog = _verify_changelog(root, version)
     _verify_readme_action(root, version)
     if tag is not None and tag != f"v{version}":
