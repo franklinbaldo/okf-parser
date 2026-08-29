@@ -4,10 +4,14 @@ on:
   pull_request:
     paths:
       - ".github/workflows/release-dry-run.yml"
+      - ".github/workflows/publish.yml"
       - "changelog/**"
       - "docs/releasing.md"
+      - "native-npm-linux-x64/**"
       - "pyproject.toml"
       - "rfcs/0003-resumable-multi-registry-release.md"
+      - "rust-core/Cargo.lock"
+      - "rust-core/Cargo.toml"
       - "scripts/**"
       - "tests/test_release_contract.py"
       - "tests/test_registry_state.py"
@@ -33,8 +37,236 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  wheels-linux:
+    name: Build wheel (linux-${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64
+            runner: ubuntu-latest
+          - target: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Build manylinux wheel
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          maturin-version: v1.14.1
+          target: ${{ matrix.target }}
+          manylinux: 2_28
+          args: --release --locked --out dist --compatibility pypi
+
+      - name: Prove the executable does not link DuckDB
+        shell: bash
+        run: uv run --script scripts/check_no_duckdb_link.py dist/*.whl
+
+      - name: Install and exercise the wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          environment="$RUNNER_TEMP/smoke"
+          uv venv --python 3.12 "$environment"
+          if [ -d "$environment/Scripts" ]; then
+            bin="$environment/Scripts"
+            python="$bin/python.exe"
+          else
+            bin="$environment/bin"
+            python="$bin/python"
+          fi
+          uv pip install --python "$python" --quiet --only-binary :all: dist/*.whl
+          mkdir -p "$RUNNER_TEMP/fixture"
+          {
+            echo '---'
+            echo 'type: Note'
+            echo '---'
+            echo '# Note'
+          } > "$RUNNER_TEMP/fixture/note.md"
+          "$bin/okf-parser" --version
+          "$bin/okf-parser" check "$RUNNER_TEMP/fixture"
+          "$bin/okf-parser" duckdb "$RUNNER_TEMP/fixture" "$RUNNER_TEMP/bundle.duckdb"
+          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$python" - <<'PY'
+          import os
+          import duckdb
+
+          with duckdb.connect(os.environ["BUNDLE"], read_only=True) as connection:
+              assert connection.sql("SELECT concept_type FROM okf.concepts").fetchone() == ("Note",)
+          PY
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheel-linux-${{ matrix.target }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  wheels-windows:
+    name: Build wheel (windows-x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Build Windows wheel
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          maturin-version: v1.14.1
+          target: x64
+          args: --release --locked --out dist --compatibility pypi
+
+      - name: Prove the executable does not link DuckDB
+        shell: bash
+        run: uv run --script scripts/check_no_duckdb_link.py dist/*.whl
+
+      - name: Install and exercise the wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          environment="$RUNNER_TEMP/smoke"
+          uv venv --python 3.12 "$environment"
+          if [ -d "$environment/Scripts" ]; then
+            bin="$environment/Scripts"
+            python="$bin/python.exe"
+          else
+            bin="$environment/bin"
+            python="$bin/python"
+          fi
+          uv pip install --python "$python" --quiet --only-binary :all: dist/*.whl
+          mkdir -p "$RUNNER_TEMP/fixture"
+          {
+            echo '---'
+            echo 'type: Note'
+            echo '---'
+            echo '# Note'
+          } > "$RUNNER_TEMP/fixture/note.md"
+          "$bin/okf-parser" --version
+          "$bin/okf-parser" check "$RUNNER_TEMP/fixture"
+          "$bin/okf-parser" duckdb "$RUNNER_TEMP/fixture" "$RUNNER_TEMP/bundle.duckdb"
+          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$python" - <<'PY'
+          import os
+          import duckdb
+
+          with duckdb.connect(os.environ["BUNDLE"], read_only=True) as connection:
+              assert connection.sql("SELECT concept_type FROM okf.concepts").fetchone() == ("Note",)
+          PY
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheel-windows-x64
+          path: dist/*.whl
+          if-no-files-found: error
+
+  wheels-macos:
+    name: Build wheel (macos-${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64
+            runner: macos-15-intel
+          - target: aarch64
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Build macOS wheel
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          maturin-version: v1.14.1
+          target: ${{ matrix.target }}
+          args: --release --locked --out dist --compatibility pypi
+
+      - name: Prove the executable does not link DuckDB
+        shell: bash
+        run: uv run --script scripts/check_no_duckdb_link.py dist/*.whl
+
+      - name: Install and exercise the wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          environment="$RUNNER_TEMP/smoke"
+          uv venv --python 3.12 "$environment"
+          if [ -d "$environment/Scripts" ]; then
+            bin="$environment/Scripts"
+            python="$bin/python.exe"
+          else
+            bin="$environment/bin"
+            python="$bin/python"
+          fi
+          uv pip install --python "$python" --quiet --only-binary :all: dist/*.whl
+          mkdir -p "$RUNNER_TEMP/fixture"
+          {
+            echo '---'
+            echo 'type: Note'
+            echo '---'
+            echo '# Note'
+          } > "$RUNNER_TEMP/fixture/note.md"
+          "$bin/okf-parser" --version
+          "$bin/okf-parser" check "$RUNNER_TEMP/fixture"
+          "$bin/okf-parser" duckdb "$RUNNER_TEMP/fixture" "$RUNNER_TEMP/bundle.duckdb"
+          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$python" - <<'PY'
+          import os
+          import duckdb
+
+          with duckdb.connect(os.environ["BUNDLE"], read_only=True) as connection:
+              assert connection.sql("SELECT concept_type FROM okf.concepts").fetchone() == ("Note",)
+          PY
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheel-macos-${{ matrix.target }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  sdist:
+    name: Build sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+
+      - name: Build sdist
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          maturin-version: v1.14.1
+          command: sdist
+          args: --out dist
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
   build-release-set:
     name: Build and verify release set
+    needs: [wheels-linux, wheels-windows, wheels-macos, sdist]
     runs-on: ubuntu-latest
     env:
       DRY_RUN_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref_name }}
@@ -68,30 +300,67 @@ jobs:
           if [[ "$DRY_RUN_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             args+=(--tag "$DRY_RUN_REF")
           fi
-          python scripts/release_contract.py verify-source "${args[@]}"
+          uv run --script scripts/release_contract.py verify-source "${args[@]}"
 
       - name: Install locked build dependencies
         run: |
-          uv sync --frozen --all-groups
+          uv sync --frozen --all-groups --no-install-project
           npm ci --prefix typescript
           npm ci --prefix typescript-duckdb
 
-      - name: Build each artifact once
+      - name: Download built wheels and sdist
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: "wheel-*"
+          path: release/python
+          merge-multiple: true
+
+      - name: Download sdist
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sdist
+          path: release/python
+
+      - name: Build native npm and npm release artifacts
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf release
-          mkdir -p release/python release/npm
-          uv build --out-dir release/python
-          rm -f release/python/.gitignore
+          mkdir -p release/npm release/native-npm native-npm-linux-x64/bin
+          version=$(uv run --script scripts/project_version.py)
+          wheel=$(find release/python -maxdepth 1 -type f -name "okf_parser-${version}-py3-none-manylinux*_x86_64.whl" -print -quit)
+          test -n "$wheel"
+          uv run --script scripts/native_from_wheel.py extract "$wheel" native-npm-linux-x64/bin/okf-core
+          (cd native-npm-linux-x64 && npm pack --pack-destination ../release/native-npm --silent)
           (cd typescript && npm pack --pack-destination ../release/npm --silent)
           (cd typescript-duckdb && npm pack --pack-destination ../release/npm --silent)
+
+      - name: Verify bundled Python native engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_version=$(uv run --script scripts/project_version.py)
+          wheel_count=$(find release/python -maxdepth 1 -type f -name "okf_parser-${expected_version}-*.whl" | wc -l)
+          test "$wheel_count" -eq 5
+          uv run --script scripts/verify_wheel_scripts.py             release/python/okf_parser-"${expected_version}"-*.whl
+
+      - name: Verify npm native companion artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_version=$(node -p "require('./typescript/package.json').version")
+          native="release/native-npm/okf-parser-native-linux-x64-${expected_version}.tgz"
+          test -f "$native"
+          native_listing="$(tar -tzf "$native")"
+          grep -qx 'package/bin/okf-core' <<<"$native_listing"
+          grep -qx 'package/package.json' <<<"$native_listing"
+          wheel=$(find release/python -maxdepth 1 -type f -name "okf_parser-${expected_version}-py3-none-manylinux*_x86_64.whl" -print -quit)
+          uv run --script scripts/native_from_wheel.py verify "$wheel" "$native"
 
       - name: Generate immutable release manifest
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/release_contract.py build-manifest \
+          uv run --script scripts/release_contract.py build-manifest \
             --directory release \
             --repository "$GITHUB_REPOSITORY" \
             --commit "$(git rev-parse HEAD)" \
@@ -103,35 +372,72 @@ jobs:
 
       - name: Verify wheel and source distribution as consumers
         shell: bash
+        # Every platform wheel is already installed and exercised in its native
+        # build job above. This aggregate job rechecks the host x86_64 wheel and
+        # the sdist as consumers; the sdist install below is the one
+        # deliberately Rust-dependent path: it proves the from-source fallback
+        # still works for platforms with no prebuilt wheel.
         run: |
           set -euo pipefail
-          expected_version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
-          wheel=$(find release/python -maxdepth 1 -type f -name '*.whl' -print -quit)
+          expected_version=$(uv run --script scripts/project_version.py)
+          wheel=$(find release/python -maxdepth 1 -type f -name "okf_parser-${expected_version}-py3-none-manylinux*_x86_64.whl" -print -quit)
           sdist=$(find release/python -maxdepth 1 -type f -name '*.tar.gz' -print -quit)
+          test -n "$wheel"
+          test -n "$sdist"
           for artifact in "$wheel" "$sdist"; do
             label=$(basename "$artifact" | tr '.-' '__')
             environment="$RUNNER_TEMP/python-$label"
             uv venv --python 3.12 "$environment"
-            uv pip install --python "$environment/bin/python" "$artifact"
+            if [[ "$artifact" == *.whl ]]; then
+              uv pip install --python "$environment/bin/python" --only-binary :all: "$artifact"
+            else
+              uv pip install --python "$environment/bin/python" "$artifact"
+            fi
             EXPECTED_VERSION="$expected_version" "$environment/bin/python" -c 'import importlib.metadata, os; assert importlib.metadata.version("okf-parser") == os.environ["EXPECTED_VERSION"]'
             "$environment/bin/okf-parser" --help >/dev/null
+            test -x "$environment/bin/okf-parser"
             mkdir "$environment/fixture"
             printf '%s\n' '---' 'type: Node' '---' '# Node' > "$environment/fixture/node.md"
+            FIXTURE="$environment/fixture" "$environment/bin/python" - <<'PY'
+          import os
+          from pathlib import Path
+          from okf_parser import load_bundle
+          from okf_parser.rust_core import resolve_rust_core
+
+          executable = resolve_rust_core()
+          if executable is None or executable.name not in {"okf-parser", "okf-parser.exe"}:
+              raise SystemExit(f"bundled native engine was not selected: {executable}")
+          bundle = load_bundle(Path(os.environ["FIXTURE"]))
+          if bundle.markdown_count != 1:
+              raise SystemExit(f"unexpected native bundle count: {bundle.markdown_count}")
+          PY
             "$environment/bin/okf-parser" check "$environment/fixture" >/dev/null
           done
 
-      - name: Verify main npm tarball as a consumer
+      - name: Verify main npm tarball with native companion
         shell: bash
         run: |
           set -euo pipefail
           expected_version=$(node -p "require('./typescript/package.json').version")
           parser_tarball="$GITHUB_WORKSPACE/release/npm/okf-parser-$expected_version.tgz"
+          native_tarball="$GITHUB_WORKSPACE/release/native-npm/okf-parser-native-linux-x64-$expected_version.tgz"
           consumer="$RUNNER_TEMP/npm-consumer"
           mkdir "$consumer"
           cd "$consumer"
           npm init -y >/dev/null
-          npm install --ignore-scripts "$parser_tarball" >/dev/null
+          npm install --ignore-scripts "$native_tarball" "$parser_tarball" >/dev/null
           EXPECTED_VERSION="$expected_version" node --input-type=module -e 'import("okf-parser").then(({ capabilityManifest }) => { if (capabilityManifest.protocol_version !== process.env.EXPECTED_VERSION) process.exit(1) })'
+          mkdir knowledge
+          printf '%s\n' '---' 'type: Node' '---' '# Node' > knowledge/node.md
+          node --input-type=module - <<'JS'
+          import { loadBundle, resolveRustCore } from "okf-parser";
+          const executable = resolveRustCore({ environment: { PATH: "" } });
+          if (executable === undefined || !executable.includes("okf-parser-native-linux-x64")) {
+            throw new Error(`npm native companion was not selected: ${String(executable)}`);
+          }
+          const bundle = await loadBundle("knowledge");
+          if (bundle.markdownCount !== 1) throw new Error(`unexpected native bundle count: ${String(bundle.markdownCount)}`);
+          JS
           ./node_modules/.bin/okf-parser-ts --help >/dev/null
           mkdir format-fixture
           printf '# Heading\n\n-   item\n' > format-fixture/concept.md
@@ -144,6 +450,26 @@ jobs:
           grep -qx -- '- item' format-fixture/concept.md
           node "$GITHUB_WORKSPACE/typescript/scripts/smoke-mcp-stdio.mjs" ./node_modules/.bin/okf-parser-ts-mcp
 
+      - name: Verify npm portable fallback without optional package
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_version=$(node -p "require('./typescript/package.json').version")
+          parser_tarball="$GITHUB_WORKSPACE/release/npm/okf-parser-$expected_version.tgz"
+          consumer="$RUNNER_TEMP/npm-portable-consumer"
+          mkdir "$consumer"
+          cd "$consumer"
+          npm init -y >/dev/null
+          npm install --ignore-scripts --omit=optional "$parser_tarball" >/dev/null
+          mkdir knowledge
+          printf '%s\n' '---' 'type: Node' '---' '# Node' > knowledge/node.md
+          node --input-type=module - <<'JS'
+          import { loadBundle, resolveRustCore } from "okf-parser";
+          if (resolveRustCore({ environment: { PATH: "" } }) !== undefined) throw new Error("portable install unexpectedly found Rust");
+          const bundle = await loadBundle("knowledge", { engine: "native" });
+          if (bundle.markdownCount !== 1) throw new Error("portable fallback failed");
+          JS
+
       - name: Verify both npm tarballs together
         shell: bash
         run: |
@@ -155,7 +481,7 @@ jobs:
           mkdir "$consumer"
           cd "$consumer"
           npm init -y >/dev/null
-          npm install --ignore-scripts "$parser_tarball" >/dev/null
+          npm install --ignore-scripts --omit=optional "$parser_tarball" >/dev/null
           npm install --ignore-scripts "$adapter_tarball" >/dev/null
           mkdir knowledge
           printf '%s\n' '---' 'type: Node' '---' '# Node' > knowledge/node.md
@@ -163,47 +489,17 @@ jobs:
           node --input-type=module -e 'import("okf-parser-duckdb").then(async ({ exportDuckDb }) => { const result = await exportDuckDb("knowledge", { database: "second.duckdb" }); if (result.concept_count !== 1) process.exit(1) })'
 
       - name: Re-verify exact artifact bytes
-        run: python scripts/release_contract.py verify-local --manifest release/manifest.json
+        run: uv run --script scripts/release_contract.py verify-local --manifest release/manifest.json
 
       - name: Verify shipped package contents
-        run: python scripts/release_contract.py verify-contents --manifest release/manifest.json
+        run: uv run --script scripts/release_contract.py verify-contents --manifest release/manifest.json
 
       - name: Inspect public registry state
-        run: python -m scripts.registry_state --manifest release/manifest.json --output release/registry-state.json
+        run: uv run --script scripts/registry_state.py --manifest release/manifest.json --output release/registry-state.json
 
       - name: Write release summary
         shell: bash
-        run: |
-          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import json
-          from pathlib import Path
-
-          manifest = json.loads(Path("release/manifest.json").read_text(encoding="utf-8"))
-          registry = json.loads(Path("release/registry-state.json").read_text(encoding="utf-8"))
-          print(f"## Release dry run {manifest['version']}")
-          print()
-          print(f"Source: `{manifest['repository']}@{manifest['commit']}`")
-          print()
-          print("| Artifact | Bytes | SHA-256 |")
-          print("|---|---:|---|")
-          for artifact in manifest["artifacts"]:
-              print(f"| `{artifact['path']}` | {artifact['size']} | `{artifact['sha256']}` |")
-          print()
-          print("## Public registry preflight")
-          print()
-          print("| Registry | Package | State | Package exists | Action |")
-          print("|---|---|---|---|---|")
-          actions = {
-              (item["registry"], item["package"]): item["action"]
-              for item in registry["plan"]
-          }
-          for entry in registry["entries"]:
-              action = actions[(entry["registry"], entry["package"])]
-              print(
-                  f"| {entry['registry']} | `{entry['package']}` | "
-                  f"`{entry['state']}` | `{entry['package_exists']}` | `{action}` |"
-              )
-          PY
+        run: uv run --script scripts/release_summary.py --directory release >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload tested release set
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

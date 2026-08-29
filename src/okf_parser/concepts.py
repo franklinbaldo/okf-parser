@@ -1,0 +1,118 @@
+"""Application-facing concept lookup and frontmatter relation resolution."""
+
+from __future__ import annotations
+
+from pathlib import Path, PurePosixPath
+from typing import TYPE_CHECKING
+
+from okf_parser.models import ConceptRecord
+
+if TYPE_CHECKING:
+    from okf_parser.bundle import Bundle
+
+
+def _normalized_ref(bundle: Bundle, reference: str | Path) -> tuple[str, str]:
+    """Return candidate concept id and Markdown path for one in-bundle reference."""
+    candidate = Path(reference)
+    if candidate.is_absolute():
+        try:
+            raw = candidate.resolve().relative_to(bundle.root.resolve()).as_posix()
+        except ValueError as exc:
+            msg = f"OKF concept reference escapes bundle root: {reference}"
+            raise ValueError(msg) from exc
+    else:
+        raw = str(reference).strip().replace("\\", "/").removeprefix("./")
+
+    path = PurePosixPath(raw)
+    if path.is_absolute() or ".." in path.parts:
+        msg = f"OKF concept reference escapes bundle root: {reference}"
+        raise ValueError(msg)
+    if path.suffix.lower() == ".md":
+        return path.with_suffix("").as_posix(), path.as_posix()
+    concept_id = path.as_posix()
+    return concept_id, f"{concept_id}.md"
+
+
+def _record_from_relation_row(row: dict[str, object]) -> ConceptRecord:
+    """Restore nullable strings after an Ibis/pandas round-trip."""
+    normalized = dict(row)
+    for field in ("title", "description"):
+        if not isinstance(normalized.get(field), str):
+            normalized[field] = None
+    return ConceptRecord.model_validate(normalized)
+
+
+def _index(bundle: Bundle) -> tuple[dict[str, ConceptRecord], dict[str, ConceptRecord]]:
+    """Materialize parser-owned concept records once for deterministic lookup."""
+    by_id: dict[str, ConceptRecord] = {}
+    by_path: dict[str, ConceptRecord] = {}
+    for row in bundle.concepts.execute().to_dict(orient="records"):
+        record = _record_from_relation_row(row)
+        by_id[record.concept_id] = record
+        by_path[record.path] = record
+    return by_id, by_path
+
+
+def _from_index(
+    bundle: Bundle,
+    reference: str | Path,
+    by_id: dict[str, ConceptRecord],
+    by_path: dict[str, ConceptRecord],
+) -> ConceptRecord:
+    concept_id, markdown_path = _normalized_ref(bundle, reference)
+    record = by_id.get(concept_id) or by_path.get(markdown_path)
+    if record is None:
+        msg = f"OKF concept not found in bundle: {reference}"
+        raise KeyError(msg)
+    return record
+
+
+def concept(bundle: Bundle, reference: str | Path) -> ConceptRecord:
+    """Resolve one parser-owned concept by id or in-bundle Markdown path."""
+    by_id, by_path = _index(bundle)
+    return _from_index(bundle, reference, by_id, by_path)
+
+
+def resolve_relations(
+    bundle: Bundle,
+    source: str | Path | ConceptRecord,
+    *,
+    field: str = "sources",
+    resource_key: str = "resource",
+    target_type: str | None = None,
+) -> tuple[ConceptRecord, ...]:
+    """Resolve local concepts referenced by a frontmatter relation list.
+
+    Consumers choose the relation field, resource key and optional target type;
+    this module owns only generic OKF lookup, shape validation and bundle
+    containment. Domain meaning remains with the consumer.
+    """
+    by_id, by_path = _index(bundle)
+    if isinstance(source, ConceptRecord):
+        source_concept = _from_index(bundle, source.path, by_id, by_path)
+        if source_concept != source:
+            msg = f"OKF source concept record does not belong to bundle: {source.path}"
+            raise ValueError(msg)
+    else:
+        source_concept = _from_index(bundle, source, by_id, by_path)
+
+    relations = source_concept.frontmatter.get(field, [])
+    if relations is None:
+        return ()
+    if not isinstance(relations, list):
+        msg = f"OKF relation field must be a list: {field}"
+        raise TypeError(msg)
+
+    resolved: list[ConceptRecord] = []
+    for index, relation in enumerate(relations):
+        if not isinstance(relation, dict):
+            msg = f"OKF relation must be a mapping: {field}[{index}]"
+            raise TypeError(msg)
+        resource = relation.get(resource_key)
+        if not isinstance(resource, str) or not resource.strip():
+            msg = f"OKF relation must declare string {resource_key}: {field}[{index}]"
+            raise ValueError(msg)
+        target = _from_index(bundle, resource, by_id, by_path)
+        if target_type is None or target.concept_type == target_type:
+            resolved.append(target)
+    return tuple(resolved)

@@ -1,3 +1,14 @@
+#!/usr/bin/env -S uv run --script
+#
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+#     "okf-parser",
+# ]
+#
+# [tool.uv.sources]
+# okf-parser = { path = "..", editable = true }
+# ///
 """Compare native Python Markdown facts with the experimental Rust batch core."""
 
 from __future__ import annotations

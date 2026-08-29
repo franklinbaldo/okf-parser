@@ -106,9 +106,17 @@ def test_mcp_public_schemas_keep_aliases_and_preview_write_pairs_match() -> None
 
     import_preview = tools["import_preview"].inputSchema
     import_write = tools["import_write"].inputSchema
-    assert import_preview == import_write
-    assert "write" not in import_preview["properties"]
-    assert import_preview["properties"]["on_conflict"]["enum"] == [
+    preview_properties = import_preview["properties"]
+    write_properties = import_write["properties"]
+    assert "expected_preview_token" not in preview_properties
+    assert "expected_preview_token" in write_properties
+    assert {
+        key: value for key, value in write_properties.items() if key != "expected_preview_token"
+    } == preview_properties
+    assert import_preview["required"] == import_write["required"]
+    assert import_preview["additionalProperties"] == import_write["additionalProperties"]
+    assert "write" not in preview_properties
+    assert preview_properties["on_conflict"]["enum"] == [
         "skip",
         "verify-identical",
     ]
@@ -117,7 +125,7 @@ def test_mcp_public_schemas_keep_aliases_and_preview_write_pairs_match() -> None
     assert "digests" in tools["inventory"].inputSchema["properties"]
 
     schema_format = tools["schema"].inputSchema["properties"]["format"]
-    assert schema_format["enum"] == ["json", "zod", "pydantic"]
+    assert schema_format["enum"] == ["json", "zod", "pydantic", "graphql"]
     assert "spec_template" in tools["duckdb_export"].inputSchema["properties"]
 
 
@@ -192,7 +200,7 @@ def test_init_preview_and_write_share_service_with_only_commit_bit_changed(
     assert calls[0] | {"write": True} == calls[1]
 
 
-def test_import_preview_and_write_share_service_with_only_commit_bit_changed(
+def test_import_preview_and_write_share_service_with_review_binding_on_commit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: list[dict[str, object]] = []
@@ -204,18 +212,37 @@ def test_import_preview_and_write_share_service_with_only_commit_bit_changed(
         **kwargs: object,
     ) -> dict[str, object]:
         calls.append({"source": source, "path": path, "type": concept_type, **kwargs})
-        return {"written": bool(kwargs["write"])}
+        result: dict[str, object] = {"written": bool(kwargs["write"])}
+        if not kwargs["write"]:
+            binding = f"opaque-binding-{len(calls)}"
+            result["preview_token"] = binding
+        return result
 
     monkeypatch.setattr(cli, "import_bundle", fake_import_bundle)
 
     preview = cli.mcp_import_preview(
         "source.csv", "bundle", "Pessoa", on_conflict="verify-identical"
     )
-    written = cli.mcp_import_write("source.csv", "bundle", "Pessoa", on_conflict="verify-identical")
+    preview_token = preview["preview_token"]
+    assert isinstance(preview_token, str)
+    written = cli.mcp_import_write(
+        "source.csv",
+        "bundle",
+        "Pessoa",
+        on_conflict="verify-identical",
+        expected_preview_token=preview_token,
+    )
 
-    assert preview == {"written": False}
+    assert preview["written"] is False
     assert written == {"written": True}
-    assert calls[0] | {"write": True} == calls[1]
+    assert (
+        calls[0]
+        | {
+            "write": True,
+            "expected_preview_token": preview_token,
+        }
+        == calls[1]
+    )
 
 
 def test_duckdb_export_preserves_cli_collision_payload(monkeypatch: pytest.MonkeyPatch) -> None:
