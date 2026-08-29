@@ -1,4 +1,4 @@
-name: CI
+﻿name: CI
 
 on:
   pull_request:
@@ -51,9 +51,9 @@ jobs:
       - name: Prove native and Rust full bundles equivalent
         shell: bash
         run: |
-          OKF_CORE=target/release/okf-core uv run pytest tests/test_rust_core.py
-          uv run python benchmarks/python_parser.py --sizes 10 --rounds 1 --rust-core target/release/okf-core > "$RUNNER_TEMP/python-rust-benchmark.json"
-          node benchmarks/typescript-parser.mjs --sizes=10 --rounds=1 --rust-core=target/release/okf-core > "$RUNNER_TEMP/typescript-rust-benchmark.json"
+          OKF_CORE=target/release/okf-parser uv run pytest tests/test_rust_core.py
+          uv run python benchmarks/python_parser.py --sizes 10 --rounds 1 --rust-core target/release/okf-parser > "$RUNNER_TEMP/python-rust-benchmark.json"
+          node benchmarks/typescript-parser.mjs --sizes=10 --rounds=1 --rust-core=target/release/okf-parser > "$RUNNER_TEMP/typescript-rust-benchmark.json"
 
   version-bump:
     name: Version bump and changelog
@@ -65,8 +65,20 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Require a version bump and matching changelog
+      - name: Require an unpublished version and a note fragment
         shell: bash
+        # A version number identifies a RELEASE, not a pull request. Several
+        # changes may declare the same number because that is the version they
+        # will all carry once merged, so this gate deliberately allows the head
+        # version to equal its base.
+        #
+        # The rule this replaces compared the head against `origin/$BASE` and
+        # demanded they differ. On a stack the base is the previous PR's branch,
+        # so every level was forced to outrank the one below it: the #180 ->
+        # #186 chain got numbered 0.45.3 through 0.45.8 by this gate, not by
+        # anyone's intent, while #175 and #178 still asked for 0.45.1 and 0.45.2
+        # after both had shipped. The invariant that actually matters is
+        # narrower and absolute: never reuse a published number.
         env:
           BASE: ${{ github.base_ref }}
         run: |
@@ -74,27 +86,30 @@ jobs:
           read_version() {
             sed -n 's/^version = "\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)"$/\1/p'
           }
+          outranks() {
+            [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" == "$1" && "$1" != "$2" ]]
+          }
 
           git fetch --quiet origin "$BASE"
           head_version=$(read_version < pyproject.toml)
-          if git cat-file -e "origin/$BASE:pyproject.toml" 2>/dev/null; then
-            base_version=$(git show "origin/$BASE:pyproject.toml" | read_version)
-          else
-            base_version="0.0.0"
-          fi
-
           if [[ -z "$head_version" ]]; then
             echo "::error file=pyproject.toml::A versão SemVer não foi encontrada."
             exit 1
           fi
-          if [[ "$head_version" == "$base_version" ]]; then
-            echo "::error file=pyproject.toml::A versão continua $head_version; faça o bump."
+
+          published=$(git tag --list 'v*.*.*' | sed 's/^v//' | sort -V | tail -1)
+          if [[ -n "$published" ]] && ! outranks "$head_version" "$published"; then
+            echo "::error file=pyproject.toml::A versão $head_version não supera a última publicada ($published)."
             exit 1
           fi
-          highest=$(printf '%s\n%s\n' "$base_version" "$head_version" | sort -V | tail -1)
-          if [[ "$highest" != "$head_version" ]]; then
-            echo "::error file=pyproject.toml::A versão $head_version não supera $base_version."
-            exit 1
+
+          if git cat-file -e "origin/$BASE:pyproject.toml" 2>/dev/null; then
+            base_version=$(git show "origin/$BASE:pyproject.toml" | read_version)
+            if [[ -n "$base_version" && "$base_version" != "$head_version" ]] \
+              && ! outranks "$head_version" "$base_version"; then
+              echo "::error file=pyproject.toml::A versão $head_version regride em relação a $base_version na base."
+              exit 1
+            fi
           fi
 
           for manifest in typescript/package.json typescript-duckdb/package.json; do
@@ -107,21 +122,25 @@ jobs:
             fi
           done
 
-          expected_changelog="changelog/$head_version.md"
-          mapfile -t added_changelogs < <(
-            git diff --diff-filter=A --name-only "origin/$BASE...HEAD" -- "changelog/*.md"
-          )
-          if [[ "${#added_changelogs[@]}" -ne 1 ]]; then
-            echo "::error file=changelog::Cada PR deve adicionar exatamente um changelog."
-            printf 'Encontrado: %s\n' "${added_changelogs[@]}"
-            exit 1
-          fi
-          if [[ "${added_changelogs[0]}" != "$expected_changelog" ]]; then
-            echo "::error file=${added_changelogs[0]}::Esperado $expected_changelog."
+          fragments="changelog/$head_version"
+          shopt -s nullglob
+          present=("$fragments"/*.md)
+          shopt -u nullglob
+          if [[ "${#present[@]}" -eq 0 ]]; then
+            echo "::error file=changelog::$fragments/ precisa de ao menos um fragmento .md."
             exit 1
           fi
 
-          echo "OK: $base_version -> $head_version; $expected_changelog presente."
+          mapfile -t touched < <(
+            git diff --name-only "origin/$BASE...HEAD" -- "$fragments/*.md"
+          )
+          if [[ "${#touched[@]}" -eq 0 ]]; then
+            echo "::error file=changelog::Esta PR não contribui nenhum fragmento em $fragments/."
+            echo "Uma mudança que entra na release $head_version tem de se documentar nela."
+            exit 1
+          fi
+
+          echo "OK: release $head_version, ${#present[@]} fragmento(s), ${#touched[@]} desta PR."
 
   quality:
     runs-on: ubuntu-latest
@@ -157,7 +176,7 @@ jobs:
         run: uv run pytest --cov --cov-report=term-missing --cov-fail-under=85
 
       - name: Validate this repository with okf-parser
-        run: uv run okf-parser check .
+        run: uv run okf-parser check . --require-spec "docs/types/{slug}.md" --normative-spec
 
       - name: Build distributions
         run: uv build

@@ -49,6 +49,11 @@ class ConceptRecord(BaseModel):
     frontmatter_json: str
     body: str
 
+    @property
+    def frontmatter(self) -> dict[str, YamlValue]:
+        """Return the validated structured frontmatter represented by this record."""
+        return FRONTMATTER_ADAPTER.validate_json(self.frontmatter_json, strict=True)
+
 
 class ReservedRecord(BaseModel):
     """One reserved index.md or log.md document."""
