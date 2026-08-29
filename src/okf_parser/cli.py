@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from dataclasses import dataclass
+from importlib.metadata import version as _package_version
 from typing import Annotated, Literal, cast
 
 from cyclopts import App, Parameter
@@ -27,7 +28,7 @@ from okf_parser.service import (
 )
 
 type McpTransport = Literal["stdio", "http", "sse"]
-type SchemaFormat = Literal["json", "zod", "pydantic"]
+type SchemaFormat = Literal["json", "zod", "pydantic", "graphql"]
 type ZodImport = Literal["zod", "astro"]
 type CliSchemaFormat = Annotated[SchemaFormat, Parameter(name="format")]
 type ImportConflictPolicy = Literal["skip", "verify-identical"]
@@ -61,6 +62,7 @@ def _render_cli_result(result: object) -> None:
 app = App(
     name="okf-parser",
     help="Validate and inspect OKF bundles with Ibis and NetworkX.",
+    version=_package_version("okf-parser"),
     result_action=_render_cli_result,
 )
 
@@ -97,6 +99,7 @@ def import_command(  # each argument is an independent public CLI flag.
     write: bool = False,
     overwrite: bool = False,
     on_conflict: ImportConflictPolicy = "skip",
+    expected_preview_token: str | None = None,
 ) -> CliResult[JsonPayload]:
     """Materialize every row of a DuckDB-readable source (CSV, Parquet, JSON) as a concept."""
     payload = import_bundle(
@@ -107,6 +110,7 @@ def import_command(  # each argument is an independent public CLI flag.
         write=write,
         overwrite=overwrite,
         on_conflict=on_conflict,
+        expected_preview_token=expected_preview_token,
     )
     failed = bool(payload["duplicate_ids"]) or bool(payload["conflicting_existing"])
     return CliResult(payload, 1 if failed else 0)
@@ -156,7 +160,7 @@ def schema(  # each argument is an independent public CLI flag.
     zod_import: ZodImport = "zod",
     spec_template: str | None = None,
 ) -> CliResult[JsonPayload | str]:
-    """Export JSON Schema, Zod, or importable Pydantic source."""
+    """Export JSON Schema, Zod, Pydantic source, or GraphQL SDL."""
     return CliResult(
         schema_bundle(
             path,
@@ -448,6 +452,7 @@ def mcp_import_write(
     id_column: str | None = None,
     overwrite: bool = False,
     on_conflict: ImportConflictPolicy = "skip",
+    expected_preview_token: str | None = None,
 ) -> dict[str, object]:
     """Commit a tabular import using the existing import service."""
     return import_bundle(
@@ -458,6 +463,7 @@ def mcp_import_write(
         write=True,
         overwrite=overwrite,
         on_conflict=on_conflict,
+        expected_preview_token=expected_preview_token,
     )
 
 

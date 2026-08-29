@@ -16,6 +16,7 @@ from okf_parser.duckdb import attach_okf
 from okf_parser.edit import preview_concept_edit as _preview_concept_edit
 from okf_parser.edit import write_concept_edit as _write_concept_edit
 from okf_parser.formatting import FormatReport, format_path
+from okf_parser.graphql_adapter import export_graphql_sdl
 from okf_parser.schema_export import documents_by_type as _documents_by_type
 from okf_parser.schema_export import export_json_schema, export_pydantic_source, export_zod_schema
 from okf_parser.spec_scaffold import scaffold_missing_declared_schemas, scaffold_missing_specs
@@ -59,6 +60,7 @@ def import_bundle(  # each argument is an independent public CLI flag.
     write: bool = False,
     overwrite: bool = False,
     on_conflict: Literal["skip", "verify-identical"] = "skip",
+    expected_preview_token: str | None = None,
 ) -> dict[str, object]:
     """Materialize every row of a DuckDB-readable source as one concept document."""
     return _import_bundle(
@@ -69,6 +71,7 @@ def import_bundle(  # each argument is an independent public CLI flag.
         write=write,
         overwrite=overwrite,
         on_conflict=on_conflict,
+        expected_preview_token=expected_preview_token,
     )
 
 
@@ -149,7 +152,15 @@ def schema_bundle(  # service mirrors the independent public schema flags.
     zod_import: ZodImport = "zod",
     spec_template: str | None = None,
 ) -> dict[str, object] | str:
-    """Export JSON Schema, Zod, or importable Pydantic source."""
+    """Export JSON Schema, Zod, Pydantic source, or deterministic GraphQL SDL."""
+    if fmt == "graphql":
+        return export_graphql_sdl(
+            path,
+            exclude,
+            infer_types=infer_types,
+            casts=casts,
+            spec_template=spec_template,
+        )
     if fmt == "zod":
         return export_zod_schema(
             path,

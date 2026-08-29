@@ -12,6 +12,9 @@ cannot open on its own surfaces as DuckDB's own error, unchanged.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 from io import StringIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
@@ -110,9 +113,85 @@ def _matches_candidate(destination: Path, candidate: str) -> bool:
     return existing.parsed_digest == intended.parsed_digest
 
 
+def _destination_state(destination: Path) -> dict[str, str]:
+    """Return the destination state that must remain unchanged until commit."""
+    if destination.is_symlink():
+        return {"kind": "symlink", "target": str(destination.readlink())}
+    if destination.is_file():
+        return {
+            "kind": "file",
+            "sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
+        }
+    if destination.exists():
+        return {"kind": "other"}
+    return {"kind": "absent"}
+
+
+def _stable_rows(columns: Sequence[str], rows: Sequence[dict[str, object]]) -> list[list[object]]:
+    """Preserve the effective source values in a JSON-stable representation."""
+    stable: list[list[object]] = []
+    for row in rows:
+        values: list[object] = []
+        for column in columns:
+            value = row.get(column)
+            if value is None:
+                values.append(None)
+            elif isinstance(value, str):
+                values.append(["str", value])
+            else:
+                values.append([type(value).__qualname__, str(value)])
+        stable.append(values)
+    return stable
+
+
+def _preview_token(
+    *,
+    source: str,
+    concept_type: str,
+    id_column: str | None,
+    overwrite: bool,
+    on_conflict: ImportConflictPolicy,
+    columns: Sequence[str],
+    rows: Sequence[dict[str, object]],
+    destinations: dict[str, dict[str, str]],
+) -> str:
+    """Bind an import preview to its source plan and current destination state."""
+    payload = {
+        "version": 1,
+        "source": source,
+        "concept_type": concept_type,
+        "id_column": id_column,
+        "overwrite": overwrite,
+        "on_conflict": on_conflict,
+        "columns": list(columns),
+        "rows": _stable_rows(columns, rows),
+        "destinations": [[relative, destinations[relative]] for relative in sorted(destinations)],
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _validate_options(*, overwrite: bool, on_conflict: ImportConflictPolicy) -> None:
     if overwrite and on_conflict == "verify-identical":
         message = "overwrite and on_conflict='verify-identical' are mutually exclusive"
+        raise BundleImportError(message)
+
+
+def _validate_preview_token(
+    *, write: bool, preview_token: str, expected_preview_token: str | None
+) -> None:
+    """Fail closed when a reviewed import preview no longer matches current state."""
+    if (
+        write
+        and expected_preview_token is not None
+        and not hmac.compare_digest(preview_token, expected_preview_token)
+    ):
+        message = "import preview is stale; rerun preview before committing"
         raise BundleImportError(message)
 
 
@@ -125,6 +204,7 @@ def import_bundle(  # each argument is an independent public CLI flag.
     write: bool = False,
     overwrite: bool = False,
     on_conflict: ImportConflictPolicy = "skip",
+    expected_preview_token: str | None = None,
 ) -> dict[str, object]:
     """Materialize every row of a DuckDB-readable source as one concept document.
 
@@ -134,6 +214,11 @@ def import_bundle(  # each argument is an independent public CLI flag.
     concept value as an idempotent match and any divergence as an atomic
     conflict. `overwrite` remains an explicit replacement policy and cannot be
     combined with `verify-identical`.
+
+    Dry-runs return a deterministic ``preview_token``. When a write supplies
+    ``expected_preview_token``, source values and every relevant destination
+    must still match that reviewed preview or the call fails before any
+    filesystem mutation.
     """
     _validate_options(overwrite=overwrite, on_conflict=on_conflict)
     root = Path(path).resolve()
@@ -142,6 +227,22 @@ def import_bundle(  # each argument is an independent public CLI flag.
         message = "source column 'type' is reserved; use --type to set concept identity"
         raise BundleImportError(message)
     plan, duplicate_ids = _plan(concept_type, columns, rows, id_column)
+    destinations = {relative: _destination_state(root / relative) for relative in plan}
+    preview_token = _preview_token(
+        source=source,
+        concept_type=concept_type,
+        id_column=id_column,
+        overwrite=overwrite,
+        on_conflict=on_conflict,
+        columns=columns,
+        rows=rows,
+        destinations=destinations,
+    )
+    _validate_preview_token(
+        write=write,
+        preview_token=preview_token,
+        expected_preview_token=expected_preview_token,
+    )
     if duplicate_ids:
         return {
             "created": [],
@@ -150,6 +251,7 @@ def import_bundle(  # each argument is an independent public CLI flag.
             "matched_existing": [],
             "conflicting_existing": [],
             "duplicate_ids": list(duplicate_ids),
+            "preview_token": preview_token,
             "written": False,
         }
 
@@ -183,6 +285,7 @@ def import_bundle(  # each argument is an independent public CLI flag.
             "matched_existing": sorted(matched_existing),
             "conflicting_existing": sorted(conflicting_existing),
             "duplicate_ids": [],
+            "preview_token": preview_token,
             "written": False,
         }
 
@@ -194,6 +297,7 @@ def import_bundle(  # each argument is an independent public CLI flag.
             "matched_existing": sorted(matched_existing),
             "conflicting_existing": [],
             "duplicate_ids": [],
+            "preview_token": preview_token,
             "written": False,
         }
 
@@ -210,5 +314,6 @@ def import_bundle(  # each argument is an independent public CLI flag.
         "matched_existing": sorted(matched_existing),
         "conflicting_existing": [],
         "duplicate_ids": [],
+        "preview_token": preview_token,
         "written": True,
     }
