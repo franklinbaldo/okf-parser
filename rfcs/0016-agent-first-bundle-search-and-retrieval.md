@@ -42,9 +42,9 @@ The design has seven invariants:
 
 ### RFC 0015 — canonical Markdown document IR
 
-RFC 0015 is the authoritative structural boundary for Markdown. Its normalized-source digest, spans, `SourceMap`, sections, and document IR are the long-term authority for structural passage selection.
+RFC 0015 proposes the long-term authoritative structural boundary for Markdown. Its normalized-source digest, spans, `SourceMap`, sections, and document IR are the intended authority for structural passage selection once that proposal is implemented.
 
-RFC 0016 does **not** turn that IR into agent output. Structural retrieval should use the document IR to select the smallest complete useful subtree/section and then return ordinary Markdown evidence. Raw AST/IR JSON is not the default agent context.
+RFC 0016 does **not** turn that IR into agent output. Structural retrieval should use the document IR, when available, to select the smallest complete useful subtree/section and then return ordinary Markdown evidence. Raw AST/IR JSON is not the default agent context.
 
 The compact body-line location remains a presentation/evidence coordinate. It is intentionally weaker than a structural selector:
 
@@ -56,7 +56,7 @@ body-line range in current parsed body
 path.md#B35-B39 + Markdown snippet
 ```
 
-Phase 1A may begin with the current shared body-line projection and a simple line/window passage builder. It does not need to wait for every structural retrieval helper envisioned by RFC 0015. When structural selection is available, it replaces passage selection internals without changing the public `search` contract.
+Phase 1A may begin with the current shared body-line projection and a simple line/window passage builder. It does not need to wait for acceptance or implementation of every structural retrieval helper envisioned by RFC 0015. If that structural model is adopted and available, it replaces passage selection internals without changing the public `search` contract.
 
 ### RFC 0002 — Python/TypeScript observable parity
 
