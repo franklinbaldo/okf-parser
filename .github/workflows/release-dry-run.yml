@@ -53,6 +53,12 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
       - name: Build manylinux wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
@@ -63,15 +69,22 @@ jobs:
 
       - name: Prove the executable does not link DuckDB
         shell: bash
-        run: python3 scripts/check_no_duckdb_link.py dist/*.whl
+        run: uv run --script scripts/check_no_duckdb_link.py dist/*.whl
 
       - name: Install and exercise the wheel
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m venv "$RUNNER_TEMP/smoke"
-          if [ -d "$RUNNER_TEMP/smoke/Scripts" ]; then bin="$RUNNER_TEMP/smoke/Scripts"; else bin="$RUNNER_TEMP/smoke/bin"; fi
-          "$bin/python" -m pip install --quiet dist/*.whl
+          environment="$RUNNER_TEMP/smoke"
+          uv venv --python 3.12 "$environment"
+          if [ -d "$environment/Scripts" ]; then
+            bin="$environment/Scripts"
+            python="$bin/python.exe"
+          else
+            bin="$environment/bin"
+            python="$bin/python"
+          fi
+          uv pip install --python "$python" --quiet --only-binary :all: dist/*.whl
           mkdir -p "$RUNNER_TEMP/fixture"
           {
             echo '---'
@@ -82,7 +95,7 @@ jobs:
           "$bin/okf-parser" --version
           "$bin/okf-parser" check "$RUNNER_TEMP/fixture"
           "$bin/okf-parser" duckdb "$RUNNER_TEMP/fixture" "$RUNNER_TEMP/bundle.duckdb"
-          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$bin/python" - <<'PY'
+          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$python" - <<'PY'
           import os
           import duckdb
 
@@ -104,6 +117,12 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
       - name: Build Windows wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
@@ -113,15 +132,22 @@ jobs:
 
       - name: Prove the executable does not link DuckDB
         shell: bash
-        run: python3 scripts/check_no_duckdb_link.py dist/*.whl
+        run: uv run --script scripts/check_no_duckdb_link.py dist/*.whl
 
       - name: Install and exercise the wheel
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m venv "$RUNNER_TEMP/smoke"
-          if [ -d "$RUNNER_TEMP/smoke/Scripts" ]; then bin="$RUNNER_TEMP/smoke/Scripts"; else bin="$RUNNER_TEMP/smoke/bin"; fi
-          "$bin/python" -m pip install --quiet dist/*.whl
+          environment="$RUNNER_TEMP/smoke"
+          uv venv --python 3.12 "$environment"
+          if [ -d "$environment/Scripts" ]; then
+            bin="$environment/Scripts"
+            python="$bin/python.exe"
+          else
+            bin="$environment/bin"
+            python="$bin/python"
+          fi
+          uv pip install --python "$python" --quiet --only-binary :all: dist/*.whl
           mkdir -p "$RUNNER_TEMP/fixture"
           {
             echo '---'
@@ -132,7 +158,7 @@ jobs:
           "$bin/okf-parser" --version
           "$bin/okf-parser" check "$RUNNER_TEMP/fixture"
           "$bin/okf-parser" duckdb "$RUNNER_TEMP/fixture" "$RUNNER_TEMP/bundle.duckdb"
-          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$bin/python" - <<'PY'
+          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$python" - <<'PY'
           import os
           import duckdb
 
@@ -162,6 +188,12 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
       - name: Build macOS wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
@@ -171,15 +203,22 @@ jobs:
 
       - name: Prove the executable does not link DuckDB
         shell: bash
-        run: python3 scripts/check_no_duckdb_link.py dist/*.whl
+        run: uv run --script scripts/check_no_duckdb_link.py dist/*.whl
 
       - name: Install and exercise the wheel
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m venv "$RUNNER_TEMP/smoke"
-          if [ -d "$RUNNER_TEMP/smoke/Scripts" ]; then bin="$RUNNER_TEMP/smoke/Scripts"; else bin="$RUNNER_TEMP/smoke/bin"; fi
-          "$bin/python" -m pip install --quiet dist/*.whl
+          environment="$RUNNER_TEMP/smoke"
+          uv venv --python 3.12 "$environment"
+          if [ -d "$environment/Scripts" ]; then
+            bin="$environment/Scripts"
+            python="$bin/python.exe"
+          else
+            bin="$environment/bin"
+            python="$bin/python"
+          fi
+          uv pip install --python "$python" --quiet --only-binary :all: dist/*.whl
           mkdir -p "$RUNNER_TEMP/fixture"
           {
             echo '---'
@@ -190,7 +229,7 @@ jobs:
           "$bin/okf-parser" --version
           "$bin/okf-parser" check "$RUNNER_TEMP/fixture"
           "$bin/okf-parser" duckdb "$RUNNER_TEMP/fixture" "$RUNNER_TEMP/bundle.duckdb"
-          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$bin/python" - <<'PY'
+          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$python" - <<'PY'
           import os
           import duckdb
 
@@ -261,7 +300,7 @@ jobs:
           if [[ "$DRY_RUN_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             args+=(--tag "$DRY_RUN_REF")
           fi
-          python scripts/release_contract.py verify-source "${args[@]}"
+          uv run --script scripts/release_contract.py verify-source "${args[@]}"
 
       - name: Install locked build dependencies
         run: |
@@ -287,10 +326,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release/npm release/native-npm native-npm-linux-x64/bin
-          version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          version=$(uv run --script scripts/project_version.py)
           wheel=$(find release/python -maxdepth 1 -type f -name "okf_parser-${version}-py3-none-manylinux*_x86_64.whl" -print -quit)
           test -n "$wheel"
-          python scripts/native_from_wheel.py extract "$wheel" native-npm-linux-x64/bin/okf-core
+          uv run --script scripts/native_from_wheel.py extract "$wheel" native-npm-linux-x64/bin/okf-core
           (cd native-npm-linux-x64 && npm pack --pack-destination ../release/native-npm --silent)
           (cd typescript && npm pack --pack-destination ../release/npm --silent)
           (cd typescript-duckdb && npm pack --pack-destination ../release/npm --silent)
@@ -299,22 +338,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected_version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          expected_version=$(uv run --script scripts/project_version.py)
           wheel_count=$(find release/python -maxdepth 1 -type f -name "okf_parser-${expected_version}-*.whl" | wc -l)
           test "$wheel_count" -eq 5
-          for wheel in release/python/okf_parser-"${expected_version}"-*.whl; do
-            PYTHON_WHEEL="$wheel" python - <<'PY'
-          import os
-          import zipfile
-          from pathlib import Path
-
-          wheel = Path(os.environ["PYTHON_WHEEL"])
-          with zipfile.ZipFile(wheel) as archive:
-              scripts = [name for name in archive.namelist() if name.endswith(('.data/scripts/okf-parser', '.data/scripts/okf-parser.exe'))]
-              if len(scripts) != 1:
-                  raise SystemExit(f"{wheel.name}: expected one unified okf-parser script, found {scripts}")
-          PY
-          done
+          uv run --script scripts/verify_wheel_scripts.py             release/python/okf_parser-"${expected_version}"-*.whl
 
       - name: Verify npm native companion artifact
         shell: bash
@@ -327,13 +354,13 @@ jobs:
           grep -qx 'package/bin/okf-core' <<<"$native_listing"
           grep -qx 'package/package.json' <<<"$native_listing"
           wheel=$(find release/python -maxdepth 1 -type f -name "okf_parser-${expected_version}-py3-none-manylinux*_x86_64.whl" -print -quit)
-          python scripts/native_from_wheel.py verify "$wheel" "$native"
+          uv run --script scripts/native_from_wheel.py verify "$wheel" "$native"
 
       - name: Generate immutable release manifest
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/release_contract.py build-manifest \
+          uv run --script scripts/release_contract.py build-manifest \
             --directory release \
             --repository "$GITHUB_REPOSITORY" \
             --commit "$(git rev-parse HEAD)" \
@@ -352,7 +379,7 @@ jobs:
         # still works for platforms with no prebuilt wheel.
         run: |
           set -euo pipefail
-          expected_version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          expected_version=$(uv run --script scripts/project_version.py)
           wheel=$(find release/python -maxdepth 1 -type f -name "okf_parser-${expected_version}-py3-none-manylinux*_x86_64.whl" -print -quit)
           sdist=$(find release/python -maxdepth 1 -type f -name '*.tar.gz' -print -quit)
           test -n "$wheel"
@@ -361,7 +388,11 @@ jobs:
             label=$(basename "$artifact" | tr '.-' '__')
             environment="$RUNNER_TEMP/python-$label"
             uv venv --python 3.12 "$environment"
-            uv pip install --python "$environment/bin/python" "$artifact"
+            if [[ "$artifact" == *.whl ]]; then
+              uv pip install --python "$environment/bin/python" --only-binary :all: "$artifact"
+            else
+              uv pip install --python "$environment/bin/python" "$artifact"
+            fi
             EXPECTED_VERSION="$expected_version" "$environment/bin/python" -c 'import importlib.metadata, os; assert importlib.metadata.version("okf-parser") == os.environ["EXPECTED_VERSION"]'
             "$environment/bin/okf-parser" --help >/dev/null
             test -x "$environment/bin/okf-parser"
@@ -458,50 +489,17 @@ jobs:
           node --input-type=module -e 'import("okf-parser-duckdb").then(async ({ exportDuckDb }) => { const result = await exportDuckDb("knowledge", { database: "second.duckdb" }); if (result.concept_count !== 1) process.exit(1) })'
 
       - name: Re-verify exact artifact bytes
-        run: python scripts/release_contract.py verify-local --manifest release/manifest.json
+        run: uv run --script scripts/release_contract.py verify-local --manifest release/manifest.json
 
       - name: Verify shipped package contents
-        run: python scripts/release_contract.py verify-contents --manifest release/manifest.json
+        run: uv run --script scripts/release_contract.py verify-contents --manifest release/manifest.json
 
       - name: Inspect public registry state
-        run: python -m scripts.registry_state --manifest release/manifest.json --output release/registry-state.json
+        run: uv run --script scripts/registry_state.py --manifest release/manifest.json --output release/registry-state.json
 
       - name: Write release summary
         shell: bash
-        run: |
-          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
-          import json
-          from pathlib import Path
-
-          manifest = json.loads(Path("release/manifest.json").read_text(encoding="utf-8"))
-          registry = json.loads(Path("release/registry-state.json").read_text(encoding="utf-8"))
-          native_npm = sorted(path.name for path in Path("release/native-npm").glob("*.tgz"))
-          print(f"## Release dry run {manifest['version']}")
-          print()
-          print(f"Source: `{manifest['repository']}@{manifest['commit']}`")
-          print()
-          print("| Artifact | Bytes | SHA-256 |")
-          print("|---|---:|---|")
-          for artifact in manifest["artifacts"]:
-              print(f"| `{artifact['path']}` | {artifact['size']} | `{artifact['sha256']}` |")
-          for filename in native_npm:
-              print(f"| `native-npm/{filename}` | native companion | verified separately |")
-          print()
-          print("## Public registry preflight")
-          print()
-          print("| Registry | Package | State | Package exists | Action |")
-          print("|---|---|---|---|---|")
-          actions = {
-              (item["registry"], item["package"]): item["action"]
-              for item in registry["plan"]
-          }
-          for entry in registry["entries"]:
-              action = actions[(entry["registry"], entry["package"])]
-              print(
-                  f"| {entry['registry']} | `{entry['package']}` | "
-                  f"`{entry['state']}` | `{entry['package_exists']}` | `{action}` |"
-              )
-          PY
+        run: uv run --script scripts/release_summary.py --directory release >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload tested release set
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
