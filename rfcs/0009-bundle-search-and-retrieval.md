@@ -136,7 +136,9 @@ path: str
     Bundle root.
 
 query: str
-    Non-empty search text after trimming surrounding whitespace.
+    Search text. Before validation, remove only the six ASCII whitespace
+    characters SP, HT, LF, VT, FF and CR from both ends. The remaining query
+    must be non-empty. Other Unicode whitespace is ordinary query content.
 
 mode: "lexical" | "literal" | "vector" | "hybrid" = "lexical"
     Retrieval semantics. Exact versus approximate vector execution is not a
@@ -174,18 +176,24 @@ requested mode**, but it must never change the mode itself.
 
 Profile resolution follows these rules:
 
-1. `profile=None` selects the configured default profile for the requested
-   mode;
-2. the default `lexical` profile must satisfy the offline, closed-world contract
+1. `profile=None` selects the default profile for the requested mode;
+2. Phase 1 requires no external profile registry: its lexical and literal
+   defaults may be built into the implementation;
+3. the default `lexical` profile must satisfy the offline, closed-world contract
    in this RFC;
-3. a named profile must exist and declare compatibility with the requested
+4. a named profile must exist and declare compatibility with the requested
    mode;
-4. an unknown or incompatible profile is an explicit error;
-5. failure to resolve a vector/hybrid implementation is an explicit
+5. an unknown or incompatible profile is an explicit error;
+6. failure to resolve a vector/hybrid implementation is an explicit
    unsupported/unconfigured error, never a silent fallback to lexical, literal
    or a hosted provider;
-6. merely installing or configuring embeddings never changes
+7. merely installing or configuring embeddings never changes
    `mode="lexical"` or its zero-configuration behavior.
+
+A Phase 1 implementation with no named-profile configuration may therefore
+accept `profile=None` for lexical/literal and reject every non-null profile as
+unconfigured. The public argument does not force Phase 1 to invent a profile
+configuration file before one is needed.
 
 Phase 1 implements `lexical` and `literal`. The public enum reserves `vector`
 and `hybrid` so later phases extend the same tool, but a Phase 1 runtime must
@@ -197,12 +205,17 @@ the bundle relation. It is case-sensitive and performs no slugging, case
 folding, accent folding or Unicode normalization.
 
 `path_glob` operates on the raw bundle-relative POSIX logical path, before any
-compact-location escaping. It uses the same **positive path-pattern grammar**
-as one RFC 0004 `.okfignore` pattern: `*` and `?` stay within one path segment,
-character classes follow the RFC 0004 matcher, and `**` may span segments. It is
-an inclusion filter: only matching discovered paths remain candidates. Leading
-`!` negation, comments and blank-line syntax are rejected because `path_glob`
-is one positive filter, not an ignore file.
+compact-location escaping. Its **wildcard and anchoring semantics** are the same
+as the path-matching part of one RFC 0004 pattern: a pattern with no `/` may
+match a basename at any depth; a leading or internal `/` anchors matching at the
+bundle root; `*` and `?` stay within one segment; RFC 0004 character classes are
+supported; and `**` may span segments.
+
+`path_glob` is not an ignore-file line. It has no comment, negation or
+trailing-space control syntax: leading `!` and `#` are ordinary literal
+characters, and whitespace is part of the pattern. It is an inclusion filter:
+only matching discovered file paths remain candidates. Because search candidates
+are files, a directory-only pattern matches no candidate by itself.
 
 ### 2. Body-relative locations are canonical and ephemeral
 
@@ -288,9 +301,12 @@ overlapping windows or sections may be ranked without losing exact body
 coordinates.
 
 Every returned hit must map to a contiguous range in the shared body-line
-representation. Before `limit` is applied, duplicate engine candidates with the
-same raw `(path, body_start_line, body_end_line)` are coalesced, retaining the
-best score for that range.
+representation. The mode/profile first completes whatever scoring or fusion
+policy defines its **final hit score**. Only then are duplicate final candidates
+with the same raw `(path, body_start_line, body_end_line)` coalesced, retaining
+the best final score for that range. In hybrid retrieval, lexical/vector
+candidate fusion therefore happens before this public deduplication step; the
+dedup rule is not a substitute for fusion.
 
 ### 4. Chunking is structural and replaceable
 
@@ -382,12 +398,16 @@ part of the semantic contract. A canonical full result is:
 }
 ```
 
-In `detail="full"`, `path` is the raw logical path. `location` uses the same
-compact-location escaping contract. `body_start_line` and `body_end_line`
-describe the range actually returned after `context` expansion. `text` is the
-selected logical body lines joined with `\n`, preserving the characters inside
-each logical line; it is not a byte-for-byte source slice and does not claim to
-preserve original line-ending spelling.
+In `detail="full"`, `query` is the trimmed query actually searched, `mode` is
+the requested authoritative mode, and `profile` echoes the caller's requested
+profile value (`null` when the caller passed no profile); an internally resolved
+default profile/fingerprint belongs in non-semantic diagnostics. `path` is the
+raw logical path. `location` uses the same compact-location escaping contract.
+`body_start_line` and `body_end_line` describe the range actually returned after
+`context` expansion. `text` is the selected logical body lines joined with
+`\n`, preserving the characters inside each logical line; it is not a
+byte-for-byte source slice and does not claim to preserve original line-ending
+spelling.
 
 `diagnostics` is explicitly non-semantic. Implementations may add or omit
 backend/profile-fingerprint diagnostics there for debugging and benchmark
@@ -469,8 +489,9 @@ Every engine normalizes its result ordering into a rank where the best result is
 first. When a numeric score is exposed, larger means better within that search
 call.
 
-Engines first coalesce duplicate raw hit ranges as described in section 3.
-After that, equal scores use this canonical tie-break:
+After the requested mode/profile has produced final hit scores, duplicate raw
+ranges are coalesced as described in section 3. Equal final scores then use this
+canonical tie-break:
 
 ```text
 (score DESC, path ASC, body_start_line ASC, body_end_line ASC)
@@ -594,7 +615,8 @@ Search should exploit the fact that OKF knows concepts and structured metadata.
 The Phase 1 public filters are exactly:
 
 - `concept_type`, with the exact authored-value semantics from section 1;
-- `path_glob`, with the positive RFC 0004 path-pattern semantics from section 1;
+- `path_glob`, with the positive RFC 0004 wildcard/anchoring semantics from
+  section 1;
 - existing bundle `exclude` patterns, applied during ordinary bundle discovery.
 
 Concept identity, arbitrary declared frontmatter predicates and graph/link
@@ -621,10 +643,11 @@ bounded by the concept body.
 The operation order is normative:
 
 1. discover and filter candidates;
-2. rank and coalesce duplicate base ranges;
-3. select up to `limit` base hits;
-4. expand each selected hit by `context`;
-5. render the expanded range.
+2. complete the mode/profile scoring or fusion policy;
+3. coalesce duplicate final base ranges and order them;
+4. select up to `limit` base hits;
+5. expand each selected hit by `context`;
+6. render the expanded range.
 
 Context therefore does not affect score or ranking and does not increase the
 number of hits. The returned location, `body_start_line`, `body_end_line`,
@@ -696,10 +719,10 @@ be invoked. Per-call annotation mutation is not a valid implementation.
 
 ### 17. Runtime ownership and cross-runtime parity are explicit
 
-The search contract is runtime-neutral. Location syntax and escaping, compact
-rendering, filter semantics, literal case folding, argument errors, base
-fallback ordering and shared conformance fixtures belong to the observable
-contract established by RFC 0002.
+The search contract is runtime-neutral. Query trimming, location syntax and
+escaping, compact rendering, filter semantics, literal case folding, argument
+errors, base fallback ordering and shared conformance fixtures belong to the
+observable contract established by RFC 0002.
 
 Phase 1 implementation ownership is:
 
@@ -870,14 +893,14 @@ This is the smallest slice required before agents can use the feature:
 4. add Unicode-case-folded literal substring mode;
 5. implement exact `concept_type`, `path_glob` and existing exclusion filters;
 6. implement compact whole-line snippet rendering and location escaping;
-7. implement base-range deduplication, deterministic tie-breaking and
+7. implement final-range deduplication, deterministic tie-breaking and
    `context` expansion;
 8. implement `compact`, `score` and stable-core `full` detail;
 9. implement explicit profile/mode resolution errors;
 10. expose one `search` capability through Python service, CLI and MCP with the
     Phase 1 static effect annotations;
-11. add shared conformance fixtures for line splitting, paths, filters,
-    multilingual literal matching, locations and compact/full output;
+11. add shared conformance fixtures for query trimming, line splitting, paths,
+    filters, multilingual literal matching, locations and compact/full output;
 12. benchmark actual agent-consumed search-result tokens.
 
 Phase 1A has no embedding, vector, ANN, persistent-sidecar or extension-download
@@ -1075,18 +1098,20 @@ The Phase 1A baseline is complete when it demonstrates:
 10. explicit `detail="score"` column order and a stable-core
     `detail="full"` structured output with backend identity confined to
     non-semantic diagnostics;
-11. deterministic base-range deduplication and ordering by score, raw path,
+11. deterministic final-range deduplication and ordering by score, raw path,
     body start and body end, with no internal `passage_id` tie-break;
-12. `concept_type` exact-value semantics and `path_glob` positive RFC 0004
-    semantics;
+12. exact ASCII query-trimming semantics, `concept_type` exact-value semantics
+    and `path_glob` RFC 0004 wildcard/anchoring semantics without ignore-line
+    control syntax;
 13. explicit unknown/incompatible profile and unavailable-mode errors, with
-    `mode` authoritative over profile;
+    `mode` authoritative over profile and no named-profile registry required by
+    Phase 1;
 14. Phase 1 MCP annotations computed statically for the maximum selectable tool
     effect, consistent with RFC 0008;
 15. no canonical Markdown mutation and no implicit persistent index write;
-16. shared conformance fixtures covering line splitting, location escaping,
-    compact/score/full rendering, exclusions, filters, argument errors,
-    profile/mode errors and multilingual Unicode case folding;
+16. shared conformance fixtures covering query trimming, line splitting,
+    location escaping, compact/score/full rendering, exclusions, filters,
+    argument errors, profile/mode errors and multilingual Unicode case folding;
 17. a benchmark recording actual agent-consumed tokens as the primary cost
     metric, with recall/rank quality/latency as secondary diagnostics.
 
