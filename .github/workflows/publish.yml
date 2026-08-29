@@ -285,7 +285,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p release/npm release/native-npm native-npm-linux-x64/bin
-          version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          version=$(uv run --script scripts/project_version.py)
           wheel=$(find release/python -maxdepth 1 -type f -name "okf_parser-${version}-py3-none-manylinux*_x86_64.whl" -print -quit)
           test -n "$wheel"
           uv run --script scripts/native_from_wheel.py extract "$wheel" native-npm-linux-x64/bin/okf-core
@@ -297,26 +297,14 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          version=$(uv run --script scripts/project_version.py)
           wheel_count=$(find release/python -maxdepth 1 -type f -name "okf_parser-${version}-*.whl" | wc -l)
           sdist_count=$(find release/python -maxdepth 1 -type f -name "okf_parser-${version}.tar.gz" | wc -l)
           npm_native="release/native-npm/okf-parser-native-linux-x64-${version}.tgz"
           test "$wheel_count" -eq 5
           test "$sdist_count" -eq 1
           test -f "$npm_native"
-          for wheel in release/python/okf_parser-"${version}"-*.whl; do
-            PYTHON_WHEEL="$wheel" python - <<'PY'
-          import os
-          import zipfile
-          from pathlib import Path
-
-          wheel = Path(os.environ["PYTHON_WHEEL"])
-          with zipfile.ZipFile(wheel) as archive:
-              scripts = [name for name in archive.namelist() if name.endswith(('.data/scripts/okf-parser', '.data/scripts/okf-parser.exe'))]
-              if len(scripts) != 1:
-                  raise SystemExit(f"{wheel.name}: expected one unified okf-parser script, found {scripts}")
-          PY
-          done
+          uv run --script scripts/verify_wheel_scripts.py             release/python/okf_parser-"${version}"-*.whl
           listing="$(tar -tzf "$npm_native")"
           grep -qx 'package/bin/okf-core' <<<"$listing"
           grep -qx 'package/package.json' <<<"$listing"
@@ -346,7 +334,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          version=$(uv run --script scripts/project_version.py)
           for wheel in release/python/okf_parser-"${version}"-py3-none-manylinux*_x86_64.whl; do
             environment="$RUNNER_TEMP/smoke-wheel"
             rm -rf "$environment"
