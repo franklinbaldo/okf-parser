@@ -1,3 +1,8 @@
+---
+type: Documentation
+title: OKF DuckDB extension
+---
+
 # OKF DuckDB extension
 
 Experimental loadable DuckDB extension from RFC 0010.
