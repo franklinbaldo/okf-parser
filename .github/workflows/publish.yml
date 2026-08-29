@@ -1,0 +1,488 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  wheels-linux:
+    name: Build wheel (linux-${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64
+            runner: ubuntu-latest
+          - target: aarch64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Build manylinux wheel
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          maturin-version: v1.14.1
+          target: ${{ matrix.target }}
+          manylinux: 2_28
+          args: --release --locked --out dist --compatibility pypi
+
+      - name: Prove the executable does not link DuckDB
+        shell: bash
+        run: uv run --script scripts/check_no_duckdb_link.py dist/*.whl
+
+      - name: Install and exercise the wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          environment="$RUNNER_TEMP/smoke"
+          uv venv --python 3.12 "$environment"
+          if [ -d "$environment/Scripts" ]; then
+            bin="$environment/Scripts"
+            python="$bin/python.exe"
+          else
+            bin="$environment/bin"
+            python="$bin/python"
+          fi
+          uv pip install --python "$python" --quiet dist/*.whl
+          mkdir -p "$RUNNER_TEMP/fixture"
+          {
+            echo '---'
+            echo 'type: Note'
+            echo '---'
+            echo '# Note'
+          } > "$RUNNER_TEMP/fixture/note.md"
+          "$bin/okf-parser" --version
+          "$bin/okf-parser" check "$RUNNER_TEMP/fixture"
+          "$bin/okf-parser" duckdb "$RUNNER_TEMP/fixture" "$RUNNER_TEMP/bundle.duckdb"
+          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$python" - <<'PY'
+          import os
+          import duckdb
+
+          with duckdb.connect(os.environ["BUNDLE"], read_only=True) as connection:
+              assert connection.sql("SELECT concept_type FROM okf.concepts").fetchone() == ("Note",)
+          PY
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheel-linux-${{ matrix.target }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  wheels-windows:
+    name: Build wheel (windows-x64)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Build Windows wheel
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          maturin-version: v1.14.1
+          target: x64
+          args: --release --locked --out dist --compatibility pypi
+
+      - name: Prove the executable does not link DuckDB
+        shell: bash
+        run: uv run --script scripts/check_no_duckdb_link.py dist/*.whl
+
+      - name: Install and exercise the wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          environment="$RUNNER_TEMP/smoke"
+          uv venv --python 3.12 "$environment"
+          if [ -d "$environment/Scripts" ]; then
+            bin="$environment/Scripts"
+            python="$bin/python.exe"
+          else
+            bin="$environment/bin"
+            python="$bin/python"
+          fi
+          uv pip install --python "$python" --quiet dist/*.whl
+          mkdir -p "$RUNNER_TEMP/fixture"
+          {
+            echo '---'
+            echo 'type: Note'
+            echo '---'
+            echo '# Note'
+          } > "$RUNNER_TEMP/fixture/note.md"
+          "$bin/okf-parser" --version
+          "$bin/okf-parser" check "$RUNNER_TEMP/fixture"
+          "$bin/okf-parser" duckdb "$RUNNER_TEMP/fixture" "$RUNNER_TEMP/bundle.duckdb"
+          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$python" - <<'PY'
+          import os
+          import duckdb
+
+          with duckdb.connect(os.environ["BUNDLE"], read_only=True) as connection:
+              assert connection.sql("SELECT concept_type FROM okf.concepts").fetchone() == ("Note",)
+          PY
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheel-windows-x64
+          path: dist/*.whl
+          if-no-files-found: error
+
+  wheels-macos:
+    name: Build wheel (macos-${{ matrix.target }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64
+            runner: macos-15-intel
+          - target: aarch64
+            runner: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Build macOS wheel
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          maturin-version: v1.14.1
+          target: ${{ matrix.target }}
+          args: --release --locked --out dist --compatibility pypi
+
+      - name: Prove the executable does not link DuckDB
+        shell: bash
+        run: uv run --script scripts/check_no_duckdb_link.py dist/*.whl
+
+      - name: Install and exercise the wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          environment="$RUNNER_TEMP/smoke"
+          uv venv --python 3.12 "$environment"
+          if [ -d "$environment/Scripts" ]; then
+            bin="$environment/Scripts"
+            python="$bin/python.exe"
+          else
+            bin="$environment/bin"
+            python="$bin/python"
+          fi
+          uv pip install --python "$python" --quiet dist/*.whl
+          mkdir -p "$RUNNER_TEMP/fixture"
+          {
+            echo '---'
+            echo 'type: Note'
+            echo '---'
+            echo '# Note'
+          } > "$RUNNER_TEMP/fixture/note.md"
+          "$bin/okf-parser" --version
+          "$bin/okf-parser" check "$RUNNER_TEMP/fixture"
+          "$bin/okf-parser" duckdb "$RUNNER_TEMP/fixture" "$RUNNER_TEMP/bundle.duckdb"
+          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$python" - <<'PY'
+          import os
+          import duckdb
+
+          with duckdb.connect(os.environ["BUNDLE"], read_only=True) as connection:
+              assert connection.sql("SELECT concept_type FROM okf.concepts").fetchone() == ("Note",)
+          PY
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheel-macos-${{ matrix.target }}
+          path: dist/*.whl
+          if-no-files-found: error
+
+  sdist:
+    name: Build sdist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build sdist
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          maturin-version: v1.14.1
+          command: sdist
+          args: --out dist
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sdist
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  build:
+    name: Collect wheels and verify release set
+    needs: [wheels-linux, wheels-windows, wheels-macos, sdist]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Install Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            typescript/package-lock.json
+            typescript-duckdb/package-lock.json
+
+      - name: Verify tagged source contract
+        run: uv run --script scripts/release_contract.py verify-source --tag "$GITHUB_REF_NAME"
+
+      - name: Install locked build dependencies
+        run: |
+          uv sync --frozen --all-groups --no-install-project
+          npm ci --prefix typescript
+          npm ci --prefix typescript-duckdb
+
+      - name: Download built wheels and sdist
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: "wheel-*"
+          path: release/python
+          merge-multiple: true
+
+      - name: Download sdist
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sdist
+          path: release/python
+
+      - name: Build npm-native and npm release artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release/npm release/native-npm native-npm-linux-x64/bin
+          version=$(uv run --script scripts/project_version.py)
+          wheel=$(find release/python -maxdepth 1 -type f -name "okf_parser-${version}-py3-none-manylinux*_x86_64.whl" -print -quit)
+          test -n "$wheel"
+          uv run --script scripts/native_from_wheel.py extract "$wheel" native-npm-linux-x64/bin/okf-core
+          (cd native-npm-linux-x64 && npm pack --pack-destination ../release/native-npm --silent)
+          (cd typescript && npm pack --pack-destination ../release/npm --silent)
+          (cd typescript-duckdb && npm pack --pack-destination ../release/npm --silent)
+
+      - name: Verify bundled native artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(uv run --script scripts/project_version.py)
+          wheel_count=$(find release/python -maxdepth 1 -type f -name "okf_parser-${version}-*.whl" | wc -l)
+          sdist_count=$(find release/python -maxdepth 1 -type f -name "okf_parser-${version}.tar.gz" | wc -l)
+          npm_native="release/native-npm/okf-parser-native-linux-x64-${version}.tgz"
+          test "$wheel_count" -eq 5
+          test "$sdist_count" -eq 1
+          test -f "$npm_native"
+          uv run --script scripts/verify_wheel_scripts.py             release/python/okf_parser-"${version}"-*.whl
+          listing="$(tar -tzf "$npm_native")"
+          grep -qx 'package/bin/okf-core' <<<"$listing"
+          grep -qx 'package/package.json' <<<"$listing"
+          wheel=$(find release/python -maxdepth 1 -type f -name "okf_parser-${version}-py3-none-manylinux*_x86_64.whl" -print -quit)
+          uv run --script scripts/native_from_wheel.py verify "$wheel" "$npm_native"
+
+      - name: Generate immutable manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --script scripts/release_contract.py build-manifest \
+            --directory release \
+            --repository "$GITHUB_REPOSITORY" \
+            --commit "$(git rev-parse HEAD)" \
+            --ref "$GITHUB_REF_NAME" \
+            --python-version "$(python -c 'import platform; print(platform.python_version())')" \
+            --node-version "$(node --version)" \
+            --npm-version "$(npm --version)" \
+            --uv-version "$(uv --version | awk '{print $2}')"
+          uv run --script scripts/release_contract.py verify-local --manifest release/manifest.json
+          uv run --script scripts/release_contract.py verify-contents --manifest release/manifest.json
+
+      - name: Inspect public registry state
+        run: uv run --script scripts/registry_state.py --manifest release/manifest.json --output release/registry-state.json
+
+      - name: Re-smoke the host wheel with uv and no source fallback
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(uv run --script scripts/project_version.py)
+          for wheel in release/python/okf_parser-"${version}"-py3-none-manylinux*_x86_64.whl; do
+            environment="$RUNNER_TEMP/smoke-wheel"
+            rm -rf "$environment"
+            uv venv --python 3.12 "$environment"
+            python="$environment/bin/python"
+            uv pip install --python "$python" --quiet --only-binary :all: "$wheel"
+            "$environment/bin/okf-parser" --version
+            "$environment/bin/okf-parser" check . --exclude .git --exclude node_modules >/dev/null
+          done
+
+      - name: Upload exact tested release set
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ github.ref_name }}
+          path: release/
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish tested release set
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Download tested release set
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-${{ github.ref_name }}
+          path: release/
+
+      - name: Re-verify exact bytes before publication
+        run: |
+          uv run --script scripts/release_contract.py verify-local --manifest release/manifest.json
+          uv run --script scripts/release_contract.py verify-contents --manifest release/manifest.json
+
+      - name: Publish Python parser (all platform wheels + sdist)
+        env:
+          UV_PUBLISH_CHECK_URL: https://pypi.org/simple
+        run: uv publish release/python/*
+
+  smoke-test-public-index:
+    name: Install from the public PyPI index in a clean environment
+    needs: publish
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-15, macos-15-intel]
+    steps:
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Install okf-parser from PyPI using a binary wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          environment="$RUNNER_TEMP/public-smoke"
+          uv venv --python 3.12 "$environment"
+          if [ -d "$environment/Scripts" ]; then
+            bin="$environment/Scripts"
+            python="$bin/python.exe"
+          else
+            bin="$environment/bin"
+            python="$bin/python"
+          fi
+
+          installed=false
+          for attempt in $(seq 1 30); do
+            if uv pip install \
+              --python "$python" \
+              --quiet \
+              --refresh-package okf-parser \
+              --only-binary :all: \
+              "okf-parser==${version}"; then
+              echo "okf-parser ${version} installed from the public index after ${attempt} attempt(s)"
+              installed=true
+              break
+            fi
+            echo "okf-parser ${version} not installable from the public index yet (attempt ${attempt}/30)"
+            sleep 10
+          done
+          if [ "$installed" != true ]; then
+            echo "::error::okf-parser ${version} was not installable as a wheel from PyPI within 5 minutes"
+            exit 1
+          fi
+
+          "$bin/okf-parser" --version
+          mkdir -p "$RUNNER_TEMP/public-fixture"
+          printf '%s\n' '---' 'type: Note' '---' '# Note' > "$RUNNER_TEMP/public-fixture/note.md"
+          "$bin/okf-parser" check "$RUNNER_TEMP/public-fixture" >/dev/null
+          "$bin/okf-parser" duckdb "$RUNNER_TEMP/public-fixture" "$RUNNER_TEMP/public.duckdb" >/dev/null
+          BUNDLE="$RUNNER_TEMP/public.duckdb" "$python" - <<'PY'
+          import os
+          import duckdb
+
+          with duckdb.connect(os.environ["BUNDLE"], read_only=True) as connection:
+              assert connection.sql("SELECT concept_type FROM okf.concepts").fetchone() == ("Note",)
+          PY
+
+  finalize:
+    name: Finalize GitHub release
+    needs: smoke-test-public-index
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Create GitHub Release after registry publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          # The release body is assembled from every fragment the changes in
+          # this release contributed. Passing the raw file through is what put
+          # a `---` frontmatter block and a BOM in the v0.45.1 release body.
+          notes="$RUNNER_TEMP/release-notes.md"
+          uv run --script scripts/changelog_notes.py "$version" > "$notes"
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            echo "GitHub Release ${GITHUB_REF_NAME} already exists"
+          else
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "okf-parser ${version}" --notes-file "$notes"
+          fi
