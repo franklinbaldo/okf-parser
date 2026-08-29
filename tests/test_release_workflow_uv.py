@@ -5,12 +5,15 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from scripts.project_version import project_version
+
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = (
     ROOT / ".github/workflows/publish.yml",
     ROOT / ".github/workflows/release-dry-run.yml",
 )
 PEP723_HELPERS = (
+    "changelog_notes.py",
     "check_no_duckdb_link.py",
     "release_contract.py",
     "native_from_wheel.py",
@@ -110,3 +113,31 @@ def test_every_scripts_helper_declares_pep723() -> None:
         header = helper.read_text(encoding="utf-8").splitlines()[:8]
         assert header[0] == "#!/usr/bin/env -S uv run --script", helper.name
         assert "# /// script" in header, helper.name
+
+
+def test_the_version_gate_lets_changes_share_a_release() -> None:
+    """A version identifies a release, not a pull request.
+
+    The rule this replaces compared the head against `origin/$BASE` and refused
+    equality. On a stack the base is the previous PR's branch, so the gate
+    itself numbered the #180 -> #186 chain 0.45.3 through 0.45.8, and #175 and
+    #178 still asked for numbers that had already shipped. What must never
+    happen is reusing a published version, so that is what the gate checks.
+    """
+    ci = _workflow_text(ROOT / ".github/workflows/ci.yml")
+    assert "A versão continua" not in ci
+    assert "Cada PR deve adicionar exatamente um changelog" not in ci
+    assert "git tag --list 'v*.*.*'" in ci
+    assert "não supera a última publicada" in ci
+
+
+def test_release_notes_are_assembled_from_fragments() -> None:
+    publish = _workflow_text(WORKFLOWS[0])
+    assert "uv run --script scripts/changelog_notes.py" in publish
+    assert 'notes="changelog/${version}.md"' not in publish
+
+
+def test_the_current_release_has_fragments_not_a_flat_file() -> None:
+    version = project_version(ROOT / "pyproject.toml")
+    assert not (ROOT / "changelog" / f"{version}.md").exists()
+    assert sorted((ROOT / "changelog" / version).glob("*.md"))
