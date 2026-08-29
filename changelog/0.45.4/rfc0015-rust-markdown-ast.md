@@ -1,9 +1,7 @@
 ---
-type: Release
-title: okf-parser 0.45.4
+type: Release Note
+title: Propose RFC 0015, a canonical Rust Markdown AST
 ---
-
-# okf-parser 0.45.4
 
 Documentation/RFC release; no runtime behavior changes.
 
