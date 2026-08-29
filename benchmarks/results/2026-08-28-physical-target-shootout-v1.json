@@ -1,0 +1,114 @@
+{
+  "benchmark": "physical-target-shootout-v1",
+  "date": "2026-08-28",
+  "github_actions": {
+    "repetitions": 3,
+    "run_id": 33226543301,
+    "runner_image": "ubuntu-24.04",
+    "runner_image_version": "20260823.283.1",
+    "runner_os": "Ubuntu 24.04.4 LTS"
+  },
+  "interpretation_50k": {
+    "arrow": {
+      "decision": "do-not-promote-query-target",
+      "interchange_speedup_vs_parquet": 34.442,
+      "point_ratio_duckdb_over_arrow": 0.58,
+      "reason": "Excellent mmap/interchange load, but no query win through DuckDB."
+    },
+    "parquet": {
+      "decision": "do-not-promote-runtime-target",
+      "reason": "Excellent storage density, but no median scan/query runtime win over canonical in-memory DuckDB.",
+      "scan_ratio_duckdb_over_parquet": 0.945,
+      "size_reduction_vs_sqlite": 109.925
+    },
+    "sqlite": {
+      "decision": "promote-existing-target",
+      "outgoing_break_even_queries": 170,
+      "outgoing_speedup_vs_duckdb": 79.551,
+      "point_break_even_queries": 327,
+      "point_speedup_vs_duckdb": 51.879,
+      "reason": "Only derived target with a material runtime win for its intended workload."
+    }
+  },
+  "measured_commit": "d3b6ba2fd17788423ee4c8c4ad5d03721083883a",
+  "median": [
+    {
+      "build_ns": {"arrow": 3970853, "parquet": 5068702, "sqlite": 13487310},
+      "bytes": {"arrow": 273820, "parquet": 8299, "sqlite": 397312},
+      "documents": 1000,
+      "interchange_load_ns": {"arrow": 215469, "parquet": 1483409},
+      "links": 2000,
+      "open_ns": {"arrow": 38578329, "parquet": 12425509, "sqlite": 109074},
+      "outgoing_ns_per_query": {"arrow": 1128650, "duckdb": 595907, "parquet": 920735, "sqlite": 11653},
+      "point_ns_per_query": {"arrow": 883948, "duckdb": 342262, "parquet": 638839, "sqlite": 10073},
+      "projection_ns": {"arrow": 1264931, "duckdb": 639955, "parquet": 998153, "sqlite": 150282},
+      "scan_ns": {"arrow": 1470688, "duckdb": 1114389, "parquet": 1405951, "sqlite": 249719}
+    },
+    {
+      "build_ns": {"arrow": 9734010, "parquet": 16744799, "sqlite": 41172827},
+      "bytes": {"arrow": 2746196, "parquet": 54700, "sqlite": 3710976},
+      "documents": 10000,
+      "interchange_load_ns": {"arrow": 250110, "parquet": 3103424},
+      "links": 20000,
+      "open_ns": {"arrow": 10335297, "parquet": 12420252, "sqlite": 110797},
+      "outgoing_ns_per_query": {"arrow": 1236518, "duckdb": 713809, "parquet": 1475369, "sqlite": 12047},
+      "point_ns_per_query": {"arrow": 932947, "duckdb": 398414, "parquet": 982212, "sqlite": 10463},
+      "projection_ns": {"arrow": 2129122, "duckdb": 1585578, "parquet": 1985327, "sqlite": 1117488},
+      "scan_ns": {"arrow": 2099683, "duckdb": 1728018, "parquet": 1912101, "sqlite": 2641891}
+    },
+    {
+      "build_ns": {"arrow": 36928016, "parquet": 67695032, "sqlite": 202201222},
+      "bytes": {"arrow": 13867860, "parquet": 172447, "sqlite": 18956288},
+      "documents": 50000,
+      "interchange_load_ns": {"arrow": 278893, "parquet": 9605642},
+      "links": 100000,
+      "open_ns": {"arrow": 10296515, "parquet": 12917800, "sqlite": 129622},
+      "outgoing_ns_per_query": {"arrow": 1548459, "duckdb": 1206629, "parquet": 3900912, "sqlite": 15168},
+      "point_ns_per_query": {"arrow": 1091031, "duckdb": 632399, "parquet": 2651323, "sqlite": 12190},
+      "projection_ns": {"arrow": 3000170, "duckdb": 2697383, "parquet": 3927361, "sqlite": 1135444},
+      "scan_ns": {"arrow": 4830010, "duckdb": 3719232, "parquet": 3937458, "sqlite": 15595427}
+    }
+  ],
+  "parity_gate": "point, outgoing adjacency, scan aggregate, and ordered projection must equal canonical DuckDB before timing",
+  "query_count": 1000,
+  "raw_runs": [
+    {
+      "repeat": 1,
+      "job_id": 99031439171,
+      "region": "eastus",
+      "cases": [
+        {"documents":1000,"links":2000,"build_ns":{"arrow":3490437,"parquet":4268229,"sqlite":13487310},"bytes":{"arrow":273820,"parquet":8299,"sqlite":397312},"interchange_load_ns":{"arrow":215469,"parquet":1353619},"open_ns":{"arrow":38578329,"parquet":11634663,"sqlite":96793},"outgoing_ns_per_query":{"arrow":1076451,"duckdb":595907,"parquet":920735,"sqlite":13029},"point_ns_per_query":{"arrow":857915,"duckdb":342262,"parquet":638839,"sqlite":11990},"projection_ns":{"arrow":1122973,"duckdb":614320,"parquet":998508,"sqlite":150282},"scan_ns":{"arrow":1331411,"duckdb":1114389,"parquet":1405951,"sqlite":249719}},
+        {"documents":10000,"links":20000,"build_ns":{"arrow":9734010,"parquet":16744799,"sqlite":41172827},"bytes":{"arrow":2746196,"parquet":54700,"sqlite":3710976},"interchange_load_ns":{"arrow":250110,"parquet":2866013},"open_ns":{"arrow":10472679,"parquet":12480896,"sqlite":167448},"outgoing_ns_per_query":{"arrow":1160066,"duckdb":713809,"parquet":1475369,"sqlite":13450},"point_ns_per_query":{"arrow":913844,"duckdb":398414,"parquet":982212,"sqlite":12074},"projection_ns":{"arrow":2129122,"duckdb":1585578,"parquet":2068473,"sqlite":1117093},"scan_ns":{"arrow":2007672,"duckdb":1728018,"parquet":1841126,"sqlite":2641891}},
+        {"documents":50000,"links":100000,"build_ns":{"arrow":36928016,"parquet":66327856,"sqlite":207717302},"bytes":{"arrow":13867860,"parquet":172447,"sqlite":18956288},"interchange_load_ns":{"arrow":278893,"parquet":9230515},"open_ns":{"arrow":10296515,"parquet":13508211,"sqlite":129622},"outgoing_ns_per_query":{"arrow":1495656,"duckdb":1147274,"parquet":3900912,"sqlite":17265},"point_ns_per_query":{"arrow":1091031,"duckdb":620724,"parquet":2651323,"sqlite":14237},"projection_ns":{"arrow":2911771,"duckdb":2697383,"parquet":4490247,"sqlite":1112056},"scan_ns":{"arrow":4830010,"duckdb":4240978,"parquet":3907925,"sqlite":15595427}}
+      ]
+    },
+    {
+      "repeat": 2,
+      "job_id": 99031439177,
+      "region": "westus3",
+      "cases": [
+        {"documents":1000,"links":2000,"build_ns":{"arrow":4376305,"parquet":5156261,"sqlite":13474593},"bytes":{"arrow":273820,"parquet":8299,"sqlite":397312},"interchange_load_ns":{"arrow":171593,"parquet":1670759},"open_ns":{"arrow":32114431,"parquet":12425509,"sqlite":118571},"outgoing_ns_per_query":{"arrow":1128650,"duckdb":575695,"parquet":887851,"sqlite":6962},"point_ns_per_query":{"arrow":883948,"duckdb":337750,"parquet":597329,"sqlite":5601},"projection_ns":{"arrow":1321529,"duckdb":655163,"parquet":998153,"sqlite":140054},"scan_ns":{"arrow":1470688,"duckdb":1060866,"parquet":1386070,"sqlite":215754}},
+        {"documents":10000,"links":20000,"build_ns":{"arrow":10756299,"parquet":16521674,"sqlite":37652673},"bytes":{"arrow":2746196,"parquet":54700,"sqlite":3710976},"interchange_load_ns":{"arrow":208631,"parquet":3541660},"open_ns":{"arrow":10335297,"parquet":12420252,"sqlite":105734},"outgoing_ns_per_query":{"arrow":1236518,"duckdb":702593,"parquet":1461872,"sqlite":7235},"point_ns_per_query":{"arrow":932947,"duckdb":391841,"parquet":940092,"sqlite":5750},"projection_ns":{"arrow":2399706,"duckdb":1638840,"parquet":1887780,"sqlite":1117488},"scan_ns":{"arrow":2099683,"duckdb":1772301,"parquet":1912101,"sqlite":2479783}},
+        {"documents":50000,"links":100000,"build_ns":{"arrow":36272112,"parquet":67695032,"sqlite":175515230},"bytes":{"arrow":13867860,"parquet":172447,"sqlite":18956288},"interchange_load_ns":{"arrow":203077,"parquet":11046209},"open_ns":{"arrow":10448746,"parquet":12619114,"sqlite":120821},"outgoing_ns_per_query":{"arrow":1567785,"duckdb":1212112,"parquet":3877002,"sqlite":10131},"point_ns_per_query":{"arrow":1087982,"duckdb":681956,"parquet":2568210,"sqlite":7506},"projection_ns":{"arrow":3690608,"duckdb":2488182,"parquet":3901344,"sqlite":1135444},"scan_ns":{"arrow":4355129,"duckdb":3488348,"parquet":3937458,"sqlite":13860340}}
+      ]
+    },
+    {
+      "repeat": 3,
+      "job_id": 99031439173,
+      "region": "westus",
+      "cases": [
+        {"documents":1000,"links":2000,"build_ns":{"arrow":3970853,"parquet":5068702,"sqlite":17404388},"bytes":{"arrow":273820,"parquet":8299,"sqlite":397312},"interchange_load_ns":{"arrow":251169,"parquet":1483409},"open_ns":{"arrow":39660713,"parquet":12770800,"sqlite":109074},"outgoing_ns_per_query":{"arrow":1140018,"duckdb":622963,"parquet":932638,"sqlite":11653},"point_ns_per_query":{"arrow":908674,"duckdb":344030,"parquet":642874,"sqlite":10073},"projection_ns":{"arrow":1264931,"duckdb":639955,"parquet":989888,"sqlite":160069},"scan_ns":{"arrow":1556779,"duckdb":1130911,"parquet":1433236,"sqlite":261769}},
+        {"documents":10000,"links":20000,"build_ns":{"arrow":8956300,"parquet":17683784,"sqlite":47779409},"bytes":{"arrow":2746196,"parquet":54700,"sqlite":3710976},"interchange_load_ns":{"arrow":317333,"parquet":3103424},"open_ns":{"arrow":10202117,"parquet":12417392,"sqlite":110797},"outgoing_ns_per_query":{"arrow":1247203,"duckdb":738392,"parquet":1493593,"sqlite":12047},"point_ns_per_query":{"arrow":960668,"duckdb":401669,"parquet":1016477,"sqlite":10463},"projection_ns":{"arrow":2124496,"duckdb":1559973,"parquet":1985327,"sqlite":1202927},"scan_ns":{"arrow":2128977,"duckdb":1690777,"parquet":2080614,"sqlite":2707315}},
+        {"documents":50000,"links":100000,"build_ns":{"arrow":37028390,"parquet":69589909,"sqlite":202201222},"bytes":{"arrow":13867860,"parquet":172447,"sqlite":18956288},"interchange_load_ns":{"arrow":315759,"parquet":9605642},"open_ns":{"arrow":10214763,"parquet":12917800,"sqlite":131616},"outgoing_ns_per_query":{"arrow":1548459,"duckdb":1206629,"parquet":4004441,"sqlite":15168},"point_ns_per_query":{"arrow":1123370,"duckdb":632399,"parquet":2733390,"sqlite":12190},"projection_ns":{"arrow":3000170,"duckdb":2747749,"parquet":3927361,"sqlite":1221300},"scan_ns":{"arrow":4919042,"duckdb":3719232,"parquet":5357811,"sqlite":15943680}}
+      ]
+    }
+  ],
+  "rounds": 5,
+  "targets": {
+    "arrow": "IPC mmap interchange target queried through DuckDB",
+    "duckdb": "canonical in-memory query baseline",
+    "parquet": "zstd persisted analytical target queried through DuckDB",
+    "sqlite": "indexed point/adjacency target"
+  },
+  "warmups": 1
+}
