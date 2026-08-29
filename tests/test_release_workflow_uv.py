@@ -49,5 +49,8 @@ def test_public_index_smoke_retries_real_binary_install() -> None:
 def test_dry_run_keeps_wheel_and_sdist_paths_distinct() -> None:
     dry_run = _workflow_text(WORKFLOWS[1])
     assert 'if [[ "$artifact" == *.whl ]]; then' in dry_run
-    assert 'uv pip install --python "$environment/bin/python" --only-binary :all: "$artifact"' in dry_run
+    assert (
+        'uv pip install --python "$environment/bin/python" --only-binary :all: "$artifact"'
+        in dry_run
+    )
     assert 'uv pip install --python "$environment/bin/python" "$artifact"' in dry_run
