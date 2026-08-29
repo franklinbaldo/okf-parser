@@ -394,9 +394,7 @@ def _run_tools(  # noqa: PLR0913
     max_calls: int,
 ) -> dict[str, object]:
     started = time.perf_counter_ns()
-    messages: list[dict[str, object]] = [
-        {"role": "user", "content": _task_prompt(task, strategy)}
-    ]
+    messages: list[dict[str, object]] = [{"role": "user", "content": _task_prompt(task, strategy)}]
     usage = Usage()
     tool_calls = 0
     retrieved_items = 0
