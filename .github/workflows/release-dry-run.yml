@@ -69,7 +69,7 @@ jobs:
 
       - name: Prove the executable does not link DuckDB
         shell: bash
-        run: python3 scripts/check_no_duckdb_link.py dist/*.whl
+        run: uv run --script scripts/check_no_duckdb_link.py dist/*.whl
 
       - name: Install and exercise the wheel
         shell: bash
@@ -132,7 +132,7 @@ jobs:
 
       - name: Prove the executable does not link DuckDB
         shell: bash
-        run: python3 scripts/check_no_duckdb_link.py dist/*.whl
+        run: uv run --script scripts/check_no_duckdb_link.py dist/*.whl
 
       - name: Install and exercise the wheel
         shell: bash
@@ -203,7 +203,7 @@ jobs:
 
       - name: Prove the executable does not link DuckDB
         shell: bash
-        run: python3 scripts/check_no_duckdb_link.py dist/*.whl
+        run: uv run --script scripts/check_no_duckdb_link.py dist/*.whl
 
       - name: Install and exercise the wheel
         shell: bash
@@ -300,7 +300,7 @@ jobs:
           if [[ "$DRY_RUN_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             args+=(--tag "$DRY_RUN_REF")
           fi
-          python scripts/release_contract.py verify-source "${args[@]}"
+          uv run --script scripts/release_contract.py verify-source "${args[@]}"
 
       - name: Install locked build dependencies
         run: |
@@ -329,7 +329,7 @@ jobs:
           version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
           wheel=$(find release/python -maxdepth 1 -type f -name "okf_parser-${version}-py3-none-manylinux*_x86_64.whl" -print -quit)
           test -n "$wheel"
-          python scripts/native_from_wheel.py extract "$wheel" native-npm-linux-x64/bin/okf-core
+          uv run --script scripts/native_from_wheel.py extract "$wheel" native-npm-linux-x64/bin/okf-core
           (cd native-npm-linux-x64 && npm pack --pack-destination ../release/native-npm --silent)
           (cd typescript && npm pack --pack-destination ../release/npm --silent)
           (cd typescript-duckdb && npm pack --pack-destination ../release/npm --silent)
@@ -366,13 +366,13 @@ jobs:
           grep -qx 'package/bin/okf-core' <<<"$native_listing"
           grep -qx 'package/package.json' <<<"$native_listing"
           wheel=$(find release/python -maxdepth 1 -type f -name "okf_parser-${expected_version}-py3-none-manylinux*_x86_64.whl" -print -quit)
-          python scripts/native_from_wheel.py verify "$wheel" "$native"
+          uv run --script scripts/native_from_wheel.py verify "$wheel" "$native"
 
       - name: Generate immutable release manifest
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/release_contract.py build-manifest \
+          uv run --script scripts/release_contract.py build-manifest \
             --directory release \
             --repository "$GITHUB_REPOSITORY" \
             --commit "$(git rev-parse HEAD)" \
@@ -501,13 +501,13 @@ jobs:
           node --input-type=module -e 'import("okf-parser-duckdb").then(async ({ exportDuckDb }) => { const result = await exportDuckDb("knowledge", { database: "second.duckdb" }); if (result.concept_count !== 1) process.exit(1) })'
 
       - name: Re-verify exact artifact bytes
-        run: python scripts/release_contract.py verify-local --manifest release/manifest.json
+        run: uv run --script scripts/release_contract.py verify-local --manifest release/manifest.json
 
       - name: Verify shipped package contents
-        run: python scripts/release_contract.py verify-contents --manifest release/manifest.json
+        run: uv run --script scripts/release_contract.py verify-contents --manifest release/manifest.json
 
       - name: Inspect public registry state
-        run: python -m scripts.registry_state --manifest release/manifest.json --output release/registry-state.json
+        run: uv run --script scripts/registry_state.py --manifest release/manifest.json --output release/registry-state.json
 
       - name: Write release summary
         shell: bash
