@@ -1,36 +1,26 @@
 ---
 type: Spec
 title: Procedure
-description: A repeatable sequence of steps a person performs, used by the example bundles
+description: A reusable operational procedure documented as an ordinary OKF concept
 ---
 
 # Procedure
 
-A `Procedure` is a repeatable sequence of steps a person performs — onboarding a
-team member, reviewing access each quarter. It lives in `examples/*/concepts/`.
+A `Procedure` concept describes a repeatable operational activity: what is done, why it is done, and any relationships to other procedures or knowledge needed to perform it.
 
-No `Procedure` describes how this repository is developed. The type exists only
-inside the example bundles, where it demonstrates OKF as an ordinary project
-would use it: a plain domain noun, unknown to the parser, carrying meaning that
-lives in the documents rather than in the tool.
+The minimal example bundle uses this type for its two ordinary concepts under `examples/minimal/concepts/`.
 
 ## Frontmatter
 
 - `type` — always `Procedure`.
-- `title` — the procedure, named as an action.
-- `description` — one sentence on when it is performed.
-- `owner` — optional, the team accountable for it. Not part of OKF v0.2 and not
-  interpreted by the parser; it is carried in `examples/minimal` on purpose, to
-  show that a producer's own vocabulary survives parsing instead of being
-  rejected.
+- `title` — human-readable name of the procedure.
+- `description` — concise statement of the procedure's purpose.
+- additional producer-defined fields are allowed. The example deliberately uses `owner` to demonstrate that OKF preserves vocabulary it does not define.
 
-## What a Procedure is not
+## Relationships
 
-A `Procedure` is not a policy. A policy says what must hold; a procedure says
-what someone does. Where the two appear together, the recurring steps are the
-procedure and the rule they satisfy belongs elsewhere.
+Relations between procedures use ordinary Markdown links. The parser projects resolvable links into the bundle graph; the type itself does not define a separate relation syntax.
 
-Specifying an example type may look like ceremony, but it is the gate working as
-intended: `check --normative-spec` cannot tell an example's vocabulary from the
-repository's own, and it should not — a type in use without a document saying
-what it means is exactly the drift the gate exists to catch.
+## Scope
+
+This specification documents the `Procedure` type used by the markerless compatibility example. It does not make `Procedure` a reserved OKF core type and does not depend on the proposed `.fact/` profile semantics in RFC 0017.
