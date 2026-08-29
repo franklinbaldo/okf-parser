@@ -901,7 +901,7 @@ wheels = [
 
 [[package]]
 name = "okf-parser"
-version = "0.45.7"
+version = "0.45.2"
 source = { editable = "." }
 dependencies = [
     { name = "cyclopts" },
