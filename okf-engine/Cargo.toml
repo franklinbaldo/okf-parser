@@ -1,6 +1,6 @@
 [package]
 name = "okf-engine"
-version = "0.45.2"
+version = "0.45.3"
 edition = "2024"
 license = "MIT"
 description = "DuckDB-independent OKF semantic ingestion engine"

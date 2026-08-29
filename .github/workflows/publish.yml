@@ -373,7 +373,23 @@ jobs:
     steps:
       - name: Wait for PyPI index propagation
         shell: bash
-        run: sleep 30
+        # A flat `sleep 30` raced the index: the v0.45.2 run published fine and
+        # then failed here with "Could not find a version that satisfies the
+        # requirement", because the file was on PyPI but not yet in the simple
+        # index this runner read. Poll the release endpoint instead of guessing
+        # a duration.
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          for attempt in $(seq 1 30); do
+            if curl -sfL -o /dev/null "https://pypi.org/pypi/okf-parser/${version}/json"; then
+              echo "okf-parser ${version} visible on PyPI after ${attempt} attempt(s)"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::okf-parser ${version} did not appear on PyPI within 5 minutes"
+          exit 1
 
       - name: Remove the preinstalled Rust toolchain
         shell: bash
@@ -382,7 +398,15 @@ jobs:
         # to a source build (missing/incompatible wheel for this platform), the
         # install fails loudly here instead of silently succeeding via a slow
         # from-source compile that masks the wheel gap.
-        run: rustup self uninstall -y
+        #
+        # Best-effort: the Homebrew rustup on the macOS runners answers
+        # "self-uninstall is disabled for this build of rustup" and exits 1,
+        # which failed both macOS smoke jobs of v0.45.2 before pip ever ran and
+        # skipped the Finalize job. The guarantee itself no longer depends on
+        # this step succeeding -- the install below passes
+        # `--only-binary=:all:`, which forbids a source build outright and on
+        # every platform.
+        run: rustup self uninstall -y || true
 
       - name: Install okf-parser from PyPI (no Rust toolchain present)
         shell: bash
@@ -391,7 +415,7 @@ jobs:
           version="${GITHUB_REF_NAME#v}"
           python -m venv .smoke
           if [ -f .smoke/bin/activate ]; then . .smoke/bin/activate; else . .smoke/Scripts/activate; fi
-          pip install --quiet "okf-parser==${version}"
+          pip install --quiet --only-binary=:all: "okf-parser==${version}"
           okf-parser --version
           mkdir -p "$RUNNER_TEMP/public-fixture"
           printf '%s\n' '---' 'type: Note' '---' '# Note' > "$RUNNER_TEMP/public-fixture/note.md"
