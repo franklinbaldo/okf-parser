@@ -2,7 +2,7 @@
 type: RFC
 title: Agent-first bundle search and retrieval
 status: proposed
-description: Add one compact search surface over an OKF bundle, with body-line provenance, DuckDB lexical search by default, and optional vector, ANN and hybrid retrieval backends
+description: Define one compact, provenance-preserving search surface over an OKF bundle, with offline lexical search by default and optional vector, hybrid and indexed retrieval profiles
 ---
 
 # RFC 0009: Agent-first bundle search and retrieval
@@ -10,68 +10,71 @@ description: Add one compact search surface over an OKF bundle, with body-line p
 ## Summary
 
 `okf-parser` can validate, inspect, query and export a whole OKF bundle, but it
-currently lacks the most basic operation an agent needs once a bundle becomes
-larger than its useful context window: **find the small part of the bundle that
+does not yet expose the most basic operation an agent needs once a bundle is
+larger than its useful context window: **find the smallest useful passage that
 answers this question**.
 
-This RFC adds one public retrieval primitive:
+This RFC defines one public retrieval primitive:
 
 ```text
 search(path, query, ...)
 ```
 
-The primitive is deliberately stable while the retrieval engine behind it may
-vary. The baseline is lexical search over the full bundle using DuckDB. Optional
-profiles may add exact vector search, approximate nearest-neighbor search,
-hybrid lexical/vector ranking, persistent vector stores and rerankers without
-changing the agent-facing tool.
+The public operation is stable while its retrieval profile may evolve. The
+baseline is local lexical search over the parsed OKF bundle. DuckDB remains the
+relational substrate and its `fts` extension is the preferred BM25
+implementation when already available locally. Embeddings, vector indexes,
+approximate nearest-neighbor acceleration, persistent sidecars and rerankers are
+optional profile choices; they do not create new agent-facing tools.
 
-The design has five invariants:
+The design has six invariants:
 
-1. **Search the body, preserve its coordinates.** Every returned passage is
-   addressable back to the Markdown body by one-based body line numbers.
-2. **Compact output is the default contract.** The model should pay primarily
+1. **Search the body and preserve its coordinates.** Every hit maps back to an
+   exact contiguous range of one-based Markdown body lines.
+2. **Body coordinates are evidence pointers, not stable identifiers.**
+   `path.md#B35-B39` describes the current parsed body only.
+3. **Compact output is the default contract.** The model should pay primarily
    for evidence, not repeated JSON keys and metadata.
-3. **Lexical search is the zero-configuration default.** Embeddings are
-   optional and never silently change the meaning of the default search.
-4. **Indexes are derived state.** Markdown remains canonical; every index is
-   rebuildable from the bundle plus an explicit retrieval profile.
-5. **One tool, multiple engines.** Agents should not need separate tools for
-   BM25, exact vectors, HNSW or hybrid retrieval.
+4. **Offline lexical search is the zero-configuration behavior.** Search never
+   requires an embedding provider or a network fetch merely to work.
+5. **Indexes are derived state.** Markdown remains canonical; indexes and
+   embeddings are rebuildable from the bundle plus an explicit profile.
+6. **One tool, multiple retrieval profiles.** Agents do not choose between
+   BM25, exact KNN, HNSW, Lance or another storage engine as separate tools.
 
-The initial implementation should prioritize body-aware lexical retrieval,
-compact output, filters and line provenance. Vector and ANN capabilities are
-extensions of the same contract, not prerequisites for shipping `search`.
+The initial implementation is intentionally narrow: body-aware lexical
+retrieval, compact rendering, deterministic ordering, safe bundle-relative
+locations and filters. Vector and hybrid retrieval extend the same contract
+later.
 
 ## Motivation
 
 ### Reading the whole bundle is the wrong agent primitive
 
 An OKF bundle may contain exactly the information an agent needs while still
-being too large, too repetitive or too expensive to place wholesale in the
-model context. `inventory`, `graph`, generated schemas and DuckDB export help
-an agent understand the bundle, but none answers a direct retrieval question
-such as:
+being too large, too repetitive or too expensive to place wholesale in model
+context. `inventory`, `graph`, generated schemas and DuckDB export help an agent
+understand the bundle, but none answers a direct retrieval question such as:
 
 ```text
 Where does this bundle discuss prescricao intercorrente?
 ```
 
-Without a first-class search primitive, a client must fall back to filesystem
+Without a first-class search primitive, a client falls back to filesystem
 search, custom SQL, ad-hoc embedding infrastructure, or sending substantially
 more source text to the model than the task requires.
 
-That is especially undesirable for OKF because the bundle already contains a
-natural retrieval unit: the Markdown body of each concept, together with
-structured metadata, stable concept identity and graph relationships.
+OKF already has unusually good retrieval inputs: parsed Markdown bodies,
+producer-defined concept types, deterministic source digests, concept identity
+and graph relationships. Search should expose those strengths directly.
 
 ### Retrieval cost is part of the product
 
-For an agent, the useful cost is not merely bytes on disk or the tokenization
-of the entire representation. It is the number of tokens that must actually
-enter the model context before the task can be solved.
+The primary cost for an agent is not bytes on disk or the tokenization of the
+whole representation. It is the number of tokens that actually enter model
+context before the task can be solved.
 
-A search tool that returns this for every hit:
+A verbose hit such as:
 
 ```json
 {
@@ -85,43 +88,30 @@ A search tool that returns this for every hit:
 }
 ```
 
-is structurally useful but unnecessarily expensive as the default model-facing
-representation. The same evidence can usually be conveyed as:
+is useful for programs but unnecessarily expensive as the default
+model-facing representation. The same evidence can usually be conveyed as:
 
 ```text
-location	snippet
-teses/prescricao.md#B35-B39	A prescricao intercorrente ocorre quando ...
-recursos/apelacao.md#B81-B84	... reconhecimento da prescricao intercorrente ...
+location\tsnippet
+teses/prescricao.md#B35-B39\tA prescricao intercorrente ocorre quando ...
+recursos/apelacao.md#B81-B84\t... reconhecimento da prescricao intercorrente ...
 ```
 
-The ranking order already communicates relative relevance. Fields such as
-score, type, title and digests remain available when requested, but should not
-be repeated into ordinary agent context by default.
+Ranking order already communicates relative relevance. Rich metadata remains
+available through `detail="full"` instead of being repeated in ordinary agent
+context.
 
-### The body has useful internal coordinates
+### The body already has a useful line representation
 
-`okf-parser` already parses each concept into a `body` value. Treating that body
-only as an opaque string throws away a useful addressing system. The body is a
-sequence of lines, and a search hit should say not only *which Markdown file*
-matched but *where in its body* the useful evidence lives.
+`okf-parser` already materializes a concept body as both `__okf_body` and
+`__okf_body_lines VARCHAR[]` in the relational `apply` path. Search must reuse
+the same body splitting semantics rather than inventing an independent notion
+of a line.
 
-This RFC uses one-based body-relative line numbers. `B1` is the first line of
-the parsed Markdown body, regardless of frontmatter length. The compact
-location syntax is:
-
-```text
-relative/path.md#B<start>-B<end>
-```
-
-For example:
-
-```text
-teses/prescricao.md#B35-B39
-```
-
-Adapters may additionally expose physical source-file line numbers for editor
-navigation, but body-relative coordinates are the stable retrieval coordinate
-because they are directly defined by the parsed OKF concept.
+Phase 1 should factor the existing `concept.body.splitlines()` behavior into a
+shared helper/relation that both relational writes and retrieval can consume.
+Search may build additional passage relations for ranking, but the canonical
+body-line coordinate comes from that shared representation.
 
 ## Decision
 
@@ -137,35 +127,153 @@ okf-parser search PATH QUERY
 search(path, query, ...)
 ```
 
-The baseline arguments are:
+The baseline public schema is:
 
 ```text
-path          bundle root
-query         user search text
-mode          lexical | literal | vector | ann | hybrid
-limit         maximum number of returned passages
-context       requested surrounding body lines
-exclude       existing bundle exclusion patterns
-type          optional concept-type filter
-path_glob     optional path filter
-detail        compact | score | full
+path: str
+    Bundle root.
+
+query: str
+    Non-empty search text after trimming surrounding whitespace.
+
+mode: "lexical" | "literal" | "vector" | "hybrid" = "lexical"
+    Retrieval semantics. Exact vs approximate vector execution is deliberately
+    not a public mode.
+
+limit: int = 10
+    Maximum returned passages. Must be >= 1.
+
+context: int = 0
+    Extra surrounding body lines requested by the caller. Must be >= 0.
+
+exclude: list[str] = []
+    Existing bundle exclusion patterns.
+
+concept_type: str | None = None
+    Optional producer-defined concept type filter.
+
+path_glob: str | None = None
+    Optional bundle-relative path filter.
+
+detail: "compact" | "score" | "full" = "compact"
+    Agent-oriented compact rendering, compact rendering with score, or full
+    structured result.
+
+profile: str | None = None
+    Optional named retrieval profile. Backend/index choices live here rather
+    than in the agent-facing mode.
 ```
 
-`mode="lexical"` is the default even when vector infrastructure is configured.
-This makes default behavior reproducible and prevents installation of an
-embedding profile from silently changing search semantics.
+`concept_type` is used instead of `type` to match the bundle relation and avoid
+an ambiguous public schema name.
 
-Additional ranking knobs may be added behind explicit modes or named retrieval
-profiles, but the common case should remain callable with only `path` and
-`query`.
+`mode="lexical"` remains the default even when embeddings are configured.
+Installing or selecting an embedding profile must never silently change default
+search semantics.
 
-### 2. Build a derived retrieval relation with body-line provenance
+`mode="vector"` expresses semantic vector retrieval. Whether that query is
+executed by exact DuckDB array distance, HNSW, Lance, or another compatible
+index is a profile/backend decision. There is no public `mode="ann"`.
 
-Search operates over a relation derived from the already parsed bundle rather
-than reparsing Markdown independently.
+### 2. Paths and locations are bundle-confined
 
-The implementation may use multiple internal relations, but the useful logical
-model is:
+`path` identifies the bundle root using the same root-resolution rules as the
+other `okf-parser` services. Every path *inside* the retrieval contract is then
+bundle-relative.
+
+In particular:
+
+- returned `location` paths are relative to the resolved bundle root;
+- `path_glob` is interpreted only inside that root;
+- absolute document selectors are rejected;
+- any selector containing a traversal that can resolve outside the bundle
+  (including `..`) is rejected;
+- symlink/resolution handling must not permit an apparent bundle-relative
+  selector to escape the resolved root.
+
+A search service must never read an arbitrary path outside the selected bundle
+because a query or filter encoded one.
+
+Canonical path-related errors include:
+
+```text
+path escapes bundle root
+path is outside bundle root
+```
+
+Deployments may separately restrict which bundle roots an MCP server is allowed
+to expose. That authorization boundary is outside this RFC.
+
+### 3. Body-relative location syntax is canonical and ephemeral
+
+Body line numbers are one-based. `B1` is the first line of the parsed Markdown
+body regardless of frontmatter length.
+
+Canonical compact locations are:
+
+```text
+relative/path.md#B37
+relative/path.md#B35-B39
+```
+
+A one-line hit is always serialized as `#B37`, never `#B37-B37`.
+
+**This identifier does not survive Markdown body edits; an agent must treat it
+as ephemeral evidence for the current bundle state.**
+
+Body-relative locations are therefore not concept identifiers, durable anchors,
+or references that should be persisted across edits. A `source_digest` in
+`detail="full"` identifies the source version against which the location was
+computed.
+
+Adapters may additionally expose physical source-file lines for editor
+navigation, but those are not the compact retrieval coordinate.
+
+#### Range normalization and validation
+
+Any component that parses a body range follows one rule set:
+
+- `B0` and negative values are invalid;
+- an inverted range such as `B39-B35` is normalized to `B35-B39`;
+- a range whose end exceeds the body is clamped to the last existing body line;
+- a range whose entire normalized interval is outside the body fails with
+  `interval out of body bounds`;
+- an empty body has no valid `B` location.
+
+Examples:
+
+```text
+# body has 40 lines
+B39-B35  -> B35-B39
+B38-B99  -> B38-B40
+B41-B50  -> error: interval out of body bounds
+B0       -> error: invalid body line
+```
+
+Search itself normally produces valid ranges rather than accepting them as a
+query argument, but the location parser/renderer is part of the shared service
+contract so follow-up retrieval and adapters do not invent incompatible rules.
+
+### 4. Retrieval operates over shared body lines plus derived passages
+
+Search operates over the already parsed bundle rather than reparsing Markdown
+independently.
+
+The existing relational write path already carries:
+
+```text
+__okf_body
+__okf_body_lines
+```
+
+Phase 1 promotes the body-line construction into reusable bundle/search support.
+A logical body-line relation is:
+
+```text
+concept_id | path | body_line | text
+```
+
+Ranking may use a separate passage relation:
 
 ```text
 search_passages
@@ -182,28 +290,18 @@ source_digest
 metadata
 ```
 
-A companion `body_lines` relation may preserve every individual line:
-
-```text
-concept_id | path | body_line | text
-```
-
 The passage relation exists for ranking quality; the line relation exists for
-precise addressing and snippet construction. Search engines are therefore free
-to rank paragraphs, Markdown blocks, overlapping windows or larger sections
-without losing the exact body coordinates returned to the caller.
+precise addressing and snippet construction. Paragraphs, Markdown blocks,
+overlapping windows or sections may be ranked without losing exact body
+coordinates.
 
-The implementation must not manufacture a snippet that cannot be mapped back
-to a contiguous body line range.
+The implementation must not manufacture a hit that cannot be mapped back to a
+contiguous range in the shared body-line representation.
 
-### 3. Chunking is structural and replaceable
+### 5. Chunking is structural and replaceable
 
-The default passage builder should respect Markdown structure before applying a
-size bound. Headings, paragraphs, list blocks, blockquotes and fenced code are
-better natural boundaries than blind fixed-character slicing.
-
-A retrieval profile records the chunking strategy and its parameters. Candidate
-strategies include:
+The passage builder should prefer Markdown structure before applying a size
+bound. Candidate strategies include:
 
 - `line` -- one body line per passage;
 - `paragraph` -- Markdown paragraph/block boundaries;
@@ -215,91 +313,191 @@ The initial implementation may use a simpler line/window strategy, provided it
 preserves body coordinates and does not freeze that choice into the public
 `search` API.
 
-### 4. Compact agent output is normative default behavior
+Chunking parameters belong to a retrieval profile and become part of its
+fingerprint.
 
-The default MCP and CLI human/model-facing rendering is a compact two-column
-representation:
+### 6. Compact output is normative and single-line per hit
+
+The default model-facing rendering is a compact two-column TSV-like form:
 
 ```text
-location	snippet
-teses/prescricao.md#B35-B39	A prescricao intercorrente ocorre quando ...
-recursos/apelacao.md#B81-B84	... reconhecimento da prescricao intercorrente ...
+location\tsnippet
+teses/prescricao.md#B35-B39\tA prescricao intercorrente ocorre quando ...
+recursos/apelacao.md#B81-B84\t... reconhecimento da prescricao intercorrente ...
 ```
 
-The exact alignment used by a terminal is presentation-only. The semantic
-payload is `location + snippet`, ordered by relevance.
+Each hit occupies exactly one physical output line in compact mode.
 
-The default output intentionally omits:
+To make that contract unambiguous:
 
-- repeated `concept_id` when the path already addresses the source;
-- concept type;
-- title;
-- raw engine score;
-- ranking diagnostics;
-- source and parsed digests;
-- the original query;
-- full document bodies.
+- the location and snippet are separated by one tab;
+- line breaks inside the selected body range are rendered as one ASCII space;
+- tabs inside body text are rendered as spaces;
+- runs of rendering whitespace may be collapsed to one space;
+- the underlying body text is not modified; this normalization is only the
+  compact renderer;
+- `detail="full"` exposes the original passage text and body range without
+  depending on this single-line rendering.
 
-`detail="score"` may add a compact score column. `detail="full"` may expose a
-structured representation suitable for programs and debugging.
+This representation is intentionally optimized for model context rather than
+round-tripping source Markdown.
 
-Structured internal data must remain available to Python callers, but adapters
-should not force verbose JSON into the model context merely because the
-implementation uses structured objects internally.
+`detail="score"` adds one compact score column. `detail="full"` returns a
+structured object suitable for programs and debugging.
 
-### 5. Lexical retrieval uses DuckDB first
+Canonical compact example:
 
-`okf-parser` already depends on DuckDB and already exposes the bundle through
-relational operations. Search should exploit that substrate instead of adding a
-second mandatory search database.
+```text
+location\tsnippet
+teses/prescricao.md#B35-B39\tPrescricao intercorrente. O prazo volta a correr ...
+```
 
-The preferred lexical engine is DuckDB's `fts` extension, which provides a
-full-text index and `match_bm25` ranking. It supports indexing multiple text
-columns and configurable stemming, stopwords, case normalization and accent
-stripping.
+Canonical full-detail example:
+
+```json
+{
+  "query": "prescricao intercorrente",
+  "mode": "lexical",
+  "engine": "duckdb_fts",
+  "results": [
+    {
+      "rank": 1,
+      "score": 8.31,
+      "concept_id": "teses/prescricao",
+      "concept_type": "tese",
+      "path": "teses/prescricao.md",
+      "location": "teses/prescricao.md#B35-B39",
+      "body_start_line": 35,
+      "body_end_line": 39,
+      "source_digest": "sha256:...",
+      "text": "Prescricao intercorrente.\nO prazo volta a correr ..."
+    }
+  ]
+}
+```
+
+The exact full-detail serialization may add diagnostics/profile metadata, but
+the compact contract is deliberately small and stable.
+
+### 7. Snippet construction has a deterministic truncation policy
+
+Search ranking and snippet rendering are separate concerns. The engine first
+identifies a ranked body range; the renderer then constructs a bounded snippet.
+
+The Phase 1 truncation policy is:
+
+1. anchor truncation around the highest-relevance matched span within the ranked
+   passage;
+2. when truncation is necessary, prefer a window centered on that span rather
+   than always taking the passage prefix;
+3. never cut in the middle of a word;
+4. prefer a sentence boundary when one is available without materially
+   exceeding the rendering budget;
+5. include at most two preceding lines of structural context (for example a
+   heading or immediately preceding paragraph context), and only when those
+   lines are already part of requested/selected context;
+6. if the ranked passage is already below the snippet ceiling, do not expand it
+   merely to fill the ceiling;
+7. explicit `context=N` may expand the selected body range, after which the same
+   truncation rules apply;
+8. any truncation keeps the returned `location` equal to the body lines from
+   which the rendered snippet was actually drawn.
+
+A target of roughly **96-128 model tokens per hit** is the initial benchmark
+range. Phase 1 may implement that as a deterministic tokenizer-independent
+rendering bound; an exact `max_snippet_tokens` parameter is not normative until
+the project adopts an explicit tokenizer contract.
+
+The benchmark, not intuition, should determine the eventual default.
+
+### 8. Lexical search is offline by contract; DuckDB FTS is preferred when local
+
+DuckDB's `fts` extension provides full-text indexes and BM25 ranking and is the
+preferred lexical implementation when the extension is already installed and
+loadable locally.
 
 Official documentation:
 
 - <https://duckdb.org/docs/current/core_extensions/full_text_search>
-- <https://duckdb.org/docs/current/guides/sql_features/full_text_search>
+- <https://duckdb.org/docs/current/extensions/overview>
 
-The FTS index does not automatically track mutations of its input table. The
-search implementation therefore owns refresh/invalidation and must never
-present a stale derived index as current bundle state.
+DuckDB can transparently autoinstall/autoload known extensions. That may require
+network access on first use. Therefore `okf-parser search` must **not** rely on
+autoload installation to satisfy its zero-configuration contract.
 
-A no-index literal mode remains useful for exact substring/pattern retrieval and
-as a minimal fallback. It may use ordinary DuckDB string predicates over the
-derived body/passages relation.
+For the default local/closed-world search path:
 
-### 6. Vector search does not require ANN
+1. use `fts` when it is already available locally;
+2. do not issue `INSTALL fts` as an implicit side effect of a search call;
+3. do not require network access to make `mode="lexical"` work;
+4. if `fts` is unavailable, use a deterministic built-in lexical fallback over
+   the derived body/passages relation;
+5. expose the resolved engine in `detail="full"` for diagnostics and benchmark
+   reproducibility.
+
+The fallback is a ranked lexical search, not an implicit downgrade to
+`mode="literal"`. Its exact scoring formula is an implementation detail to be
+frozen by tests for Phase 1. A deployment/profile may require `fts` explicitly
+and fail clearly if it is unavailable, but that is not the default.
+
+The FTS index does not automatically track changes to its input table. Search
+therefore owns refresh/invalidation and must never present a stale index as
+current bundle state.
+
+### 9. Literal mode means case-insensitive substring search, not regex
+
+`mode="literal"` is the smallest no-index retrieval semantic:
+
+- query is a literal substring, not a regular expression;
+- matching is case-insensitive using the runtime's documented Unicode
+  case-normalization behavior;
+- punctuation and whitespace in the query are ordinary literal content;
+- results still preserve body-line provenance and deterministic tie-breaking.
+
+Regex search may be added later as an explicit mode/flag. It must not be
+smuggled into `literal`, because regex syntax changes both semantics and error
+behavior.
+
+### 10. Ranking and tie-breaking are deterministic
+
+Every engine normalizes its result ordering into a rank where the best result is
+first. When an exposed numeric score is used, a larger normalized `score` means
+better relevance.
+
+For equal normalized scores, the canonical tie-break is:
+
+```text
+(score DESC, path ASC, body_start_line ASC)
+```
+
+If two passages still tie, `body_end_line ASC` and then `passage_id ASC` finish
+the ordering.
+
+For a fixed bundle, resolved retrieval profile and engine availability, result
+order must be deterministic.
+
+### 11. Vector search does not require ANN
 
 A configured embedding profile may materialize fixed-size vectors alongside
-passages. DuckDB's fixed-size `ARRAY` type is explicitly suitable for embeddings
-and has native distance/similarity functions including:
+passages. DuckDB fixed-size arrays support native distance/similarity functions,
+so `mode="vector"` can begin with exact top-k scanning.
 
-- `array_cosine_distance`;
-- `array_cosine_similarity`;
-- `array_distance`;
-- `array_inner_product`;
-- `array_negative_inner_product`.
+Exact versus approximate execution is deliberately hidden behind the retrieval
+profile:
 
-Official documentation:
+```text
+mode="vector", profile="legal-local-exact"
+mode="vector", profile="legal-local-hnsw"
+mode="vector", profile="legal-lance"
+```
 
-- <https://duckdb.org/docs/current/sql/data_types/array>
-- <https://duckdb.org/docs/current/sql/functions/array>
+All three have the same agent-facing semantics: retrieve by vector similarity
+and return provenance-preserving passages.
 
-Therefore `mode="vector"` can initially implement exact top-k retrieval by
-scanning passage vectors and ordering by the configured metric. For small and
-medium bundles this is deliberately preferable to requiring an approximate
-index: it is simple, exact and has no ANN index lifecycle.
+### 12. Embedding generation is a provider protocol
 
-### 7. Embedding generation is a provider protocol
-
-`okf-parser` must not make one hosted embedding vendor part of the OKF data
-model. Embeddings are derived from canonical text through a configured provider.
-
-The provider abstraction must support the semantic distinction used by modern
-retrieval models:
+Embeddings are derived state, not OKF canonical data. The provider contract
+distinguishes document and query embeddings:
 
 ```text
 embed_documents(texts) -> vectors
@@ -310,180 +508,252 @@ A profile records enough metadata to reject incompatible or stale vectors:
 
 ```text
 provider/model identifier
-provider or model revision/fingerprint when available
+provider/model revision or fingerprint when available
 dimensions
 distance metric
 normalization contract
 chunker + chunker version
+backend/index parameters
 ```
 
 Providers may be local functions, local models, subprocesses, HTTP services or
-hosted APIs. The core search API depends on the provider contract, not on a
-particular SDK.
+hosted APIs. The core search API depends on this contract, not on a particular
+vendor SDK.
 
-An external provider may have privacy, cost and network effects. Those effects
-must be explicit in the configured profile and reflected in MCP annotations at
-server construction time rather than hidden behind the word `search`.
+External providers have privacy, cost and network effects. Those effects are
+explicit profile properties and must be reflected in MCP annotations under RFC
+0008.
 
-### 8. ANN is an optimization of vector search
+### 13. ANN is an acceleration profile, not a mode
 
-`mode="ann"` may use DuckDB's `vss` extension, which supports HNSW indexes over
-`FLOAT[n]` arrays and the L2, cosine and inner-product distance families.
+DuckDB's `vss` extension can provide HNSW acceleration over fixed-size vectors.
+HNSW parameters such as `ef_search`, `M` and `ef_construction` belong to the
+retrieval profile.
 
-Official documentation:
+The public API does not expose `ann` or `hnsw` as retrieval semantics. An agent
+asking for vector relevance should not need to know whether the backend scans
+exactly or uses an approximate index.
 
-- <https://duckdb.org/docs/current/core_extensions/vss>
+ANN indexes remain rebuildable acceleration structures. They are never
+canonical OKF state.
 
-The VSS extension is currently experimental, and persistent HNSW storage is
-explicitly guarded by an experimental persistence setting because of recovery
-limitations. `okf-parser` must therefore treat HNSW as a rebuildable
-acceleration structure, not as canonical or irreplaceable storage.
+### 14. Persistent vector stores are optional backends
 
-The public API must not expose HNSW-specific concepts as requirements for
-ordinary vector search. Parameters such as `ef_search`, `M` and
-`ef_construction` belong in an ANN profile or advanced configuration.
+Large bundles may benefit from a persistent sidecar. That sidecar must preserve
+the same passage identity and body-line provenance as the in-process
+representation.
 
-### 9. Persistent vector stores are optional backends
+Lance is a candidate because the DuckDB Lance extension supports vector, FTS and
+hybrid operations. SQLite-based or other vector adapters may also be supported
+if they satisfy the same retrieval contract.
 
-Large bundles may benefit from a persistent sidecar designed for retrieval.
-That sidecar remains derived state and must preserve the same passage IDs and
-body-line provenance as the in-process DuckDB representation.
-
-Lance is a strong optional candidate because DuckDB's current `lance` extension
-can perform vector search, full-text search and hybrid search over Lance
-datasets through SQL.
-
-Official documentation:
-
-- <https://duckdb.org/docs/current/core_extensions/lance>
-
-Other stores, including SQLite-based vector extensions, may be supported by
-adapters if they satisfy the same retrieval contract. They are not mandatory
-runtime dependencies and do not define OKF semantics.
-
-The backend choice must therefore be replaceable:
+The architecture remains:
 
 ```text
 canonical Markdown bundle
         |
+        +-- shared parsed/body-line representation
         +-- ephemeral DuckDB relations
-        +-- optional DuckDB vector/FTS indexes
-        +-- optional Lance sidecar
-        +-- future compatible sidecars
+        +-- optional local FTS/vector indexes
+        +-- optional persistent retrieval sidecar
 ```
 
-### 10. Hybrid retrieval is a ranking policy, not a second tool
+Backend choice is a profile concern, not an OKF semantic.
+
+### 15. Hybrid retrieval is a ranking policy, not a second tool
 
 `mode="hybrid"` combines lexical and vector candidates behind the same `search`
 contract.
 
-At least two fusion policies are plausible:
+Reciprocal Rank Fusion is the baseline candidate because it combines ranks
+without pretending BM25 scores and vector distances share a common numeric
+scale. Weighted fusion or staged reranking may be profile choices.
 
-1. weighted score fusion after compatible normalization;
-2. Reciprocal Rank Fusion (RRF), which combines ranks without assuming that a
-   BM25 score and a vector distance share a meaningful numeric scale.
+The exact RRF `k`, weights and candidate pool sizes remain benchmark questions,
+not Phase 1 public API.
 
-RRF is the safer baseline when heterogeneous engines are combined. A profile
-may later choose another fusion policy explicitly.
+### 16. Structured OKF filters apply before or during retrieval
 
-Hybrid retrieval may also be staged to reduce work:
-
-```text
-BM25 top N -> vector rerank -> top K
-```
-
-or:
-
-```text
-vector top N -> structured/lexical filtering -> top K
-```
-
-The agent still calls `search` once.
-
-### 11. Structured OKF filters apply before or during retrieval
-
-A generic vector store knows passages. `okf-parser` knows concepts and their
-structured metadata. Search should exploit that distinction.
-
-Filters should be able to narrow candidates by at least:
+Search should exploit the fact that OKF knows concepts and structured metadata.
+Filters may narrow candidates by:
 
 - `concept_type`;
-- path/path glob;
+- bundle-relative path/path glob;
 - concept identity;
 - declared frontmatter fields where safely expressible;
 - later, graph neighborhood or link predicates.
 
 Whenever possible, filters are pushed down before expensive vector ranking.
-This reduces both compute and irrelevant context.
 
-### 12. Result expansion is bounded and explicit
+### 17. Result expansion is bounded and explicit
 
-A hit identifies the smallest useful ranked passage. The caller may request a
-small amount of surrounding body context:
+A hit identifies a useful ranked passage. The caller may request surrounding
+body context:
 
 ```text
 context=2
 ```
 
-A hit anchored at `B37` can then return, for example, `#B35-B39`. Expansion is
-bounded by the body and must update the returned location range accordingly.
+Expansion is clamped to the body and updates the returned location. It never
+silently returns the full body.
 
-The tool must not return the full body by default. Fetching or expanding a
-concept is a separate decision made after retrieval.
+A future exact output-token budget may be added after the project chooses a
+tokenizer/counting contract. Until then, compact rendering is bounded by the
+deterministic snippet policy above.
 
-A later version may support an explicit output budget, for example
-`max_tokens`, but the core implementation must not claim exact token budgeting
-without a declared tokenizer/token-counting policy. Token-aware selection is a
-retrieval policy layered over the same passage representation.
+### 18. Indexes and embeddings are digest-addressed derived state
 
-### 13. Indexes and embeddings are digest-addressed derived state
-
-The project already computes deterministic content digests. Search indexes
-should use those digests for incremental refresh.
-
-For each indexed concept/passage:
+The project already computes deterministic source/parsed digests. Retrieval
+state should use source digests plus a retrieval-profile fingerprint for
+incremental refresh:
 
 ```text
-same source digest + same retrieval profile -> reuse derived rows/vectors
-changed source digest                       -> rebuild affected passages
-removed concept                             -> remove derived passages
-new concept                                 -> add derived passages
+same source digest + same profile -> reuse derived rows/vectors
+changed source digest             -> rebuild affected passages
+removed concept                   -> remove derived passages
+new concept                       -> add derived passages
 ```
 
-The retrieval profile fingerprint must include every choice that changes vector
-meaning or passage identity, including embedding model/revision, dimensions,
-normalization and chunking configuration.
+The profile fingerprint includes every choice that changes passage identity or
+vector meaning.
 
-No `.md` source file is rewritten merely to store an embedding.
+No Markdown file is rewritten merely to store an embedding.
 
-### 14. MCP effect metadata follows the configured search profile
+### 19. MCP effect metadata follows the resolved profile
 
-The zero-configuration lexical search is local inspection and should be exposed
-as read-only, idempotent and closed-world.
+The default offline lexical search is local inspection and can be exposed as
+read-only, idempotent and closed-world.
 
-A server configured with a hosted embedding provider may perform network I/O.
-RFC 0008 requires tool annotations to describe maximum possible effects. The
-MCP builder must therefore annotate `search` conservatively from the configured
-retrieval profile, e.g. `openWorldHint=true` when query embedding can call an
-external provider.
+Search must not silently install DuckDB extensions or write a persistent
+sidecar as part of that call.
 
-Index construction that writes a persistent sidecar is not implicitly smuggled
-into a read-only search call. Persistent index build/update operations, if
-exposed as commands or MCP tools, require their own explicit effect contract.
+A configured hosted embedding provider can perform network I/O, so its MCP
+`search` tool must conservatively advertise `openWorldHint=true` under RFC 0008.
+Persistent index build/update operations, if exposed, receive their own explicit
+effect contract.
 
-### 15. Search becomes a benchmarkable retrieval strategy
+### 20. Runtime ownership and cross-runtime parity are explicit
 
-The benchmark suite should treat compact OKF search as a first-class strategy.
-For a fixed task and fixed source information, measure the tokens that actually
-enter the agent context, including:
+The search *contract* is runtime-neutral. Location syntax, validation, compact
+rendering, literal semantics, ordering, error behavior and conformance fixtures
+belong to the shared observable contract established by RFC 0002.
 
-- the search-tool call arguments;
+Phase 1 implementation ownership is:
+
+- **Python:** the first implementation lives in the existing Python service
+  layer (preferably a focused search module called by `service.py`) and exposes
+  CLI + MCP adapters. DuckDB-backed lexical ranking belongs here.
+- **Rust core:** Rust continues to provide parsing/bundle acceleration where
+  already used. Phase 1 does not add a second Rust search engine. Shared
+  body-line extraction may later move downward only if it preserves the exact
+  conformance contract.
+- **TypeScript core:** no independent search semantics are invented. Shared
+  location/snippet/error fixtures are added to `conformance/` with the Python
+  implementation.
+- **`okf-parser-duckdb` (`typescript-duckdb`):** DuckDB-specific TypeScript
+  search parity belongs in this adapter when implemented, reusing the same
+  conformance cases and compact observable contract.
+
+Python delivery is allowed to land before the TypeScript adapter implementation,
+consistent with RFC 0002's incremental parity model. However, the capability
+must be recorded in the shared conformance surface immediately, and TypeScript
+parity is a named follow-up rather than an unspecified future task.
+
+No release should claim cross-runtime search parity until both implementations
+pass the shared search conformance cases.
+
+### 21. Canonical examples and errors
+
+Minimal call:
+
+```text
+search(
+  path=".",
+  query="prescricao intercorrente"
+)
+```
+
+Compact result:
+
+```text
+location\tsnippet
+teses/prescricao.md#B35-B39\tPrescricao intercorrente. O prazo volta a correr ...
+recursos/apelacao.md#B81-B84\tO recurso sustenta o reconhecimento da prescricao ...
+```
+
+Full detail:
+
+```text
+search(
+  path=".",
+  query="prescricao intercorrente",
+  concept_type="tese",
+  detail="full"
+)
+```
+
+```json
+{
+  "query": "prescricao intercorrente",
+  "mode": "lexical",
+  "engine": "duckdb_fts",
+  "results": [
+    {
+      "rank": 1,
+      "score": 8.31,
+      "concept_id": "teses/prescricao",
+      "concept_type": "tese",
+      "path": "teses/prescricao.md",
+      "location": "teses/prescricao.md#B35-B39",
+      "body_start_line": 35,
+      "body_end_line": 39,
+      "source_digest": "sha256:...",
+      "text": "Prescricao intercorrente.\nO prazo volta a correr ..."
+    }
+  ]
+}
+```
+
+Canonical errors:
+
+```text
+search(path=".", query="   ")
+-> error: query must not be empty
+```
+
+```text
+search(path=".", query="prazo", path_glob="../../secret.md")
+-> error: path escapes bundle root
+```
+
+Location parser examples:
+
+```text
+docs/a.md#B0
+-> error: invalid body line
+```
+
+```text
+docs/a.md#B500-B600
+-> error: interval out of body bounds
+```
+
+Errors should be structured internally even when the CLI renders concise prose.
+
+### 22. Search is a benchmarkable retrieval strategy
+
+The benchmark suite treats compact OKF search as a first-class strategy. For a
+fixed task and fixed source information, the **primary metric** is the number of
+tokens actually placed in the agent context until the task is resolved,
+including:
+
+- search tool-call arguments;
 - compact search results;
-- any follow-up passage/concept retrieval;
+- follow-up passage/concept retrieval;
 - additional tool responses needed to answer;
-- the final evidence context consumed by the model.
+- final evidence context consumed by the model.
 
-This makes it possible to compare, for example:
+Candidate comparisons include:
 
 ```text
 whole Markdown corpus
@@ -494,59 +764,74 @@ OKF vector compact
 OKF hybrid compact
 ```
 
-The primary metric is task completion under actual context consumption, not
-file size or tokenization of representations the agent never reads.
+Secondary diagnostic metrics include:
+
+- task success/answer correctness;
+- recall@k;
+- MRR or equivalent rank quality;
+- latency;
+- index/build cost;
+- embedding/network cost where applicable.
+
+Those diagnostics explain *why* a strategy spends more or fewer context tokens.
+They do not replace actual agent-context consumption as the optimization target.
 
 ## Proposed implementation sequence
 
 ### Phase 1: body-aware lexical search
 
-Ship the useful primitive before vector infrastructure:
-
-1. derive body lines/passages from `load_bundle`;
-2. preserve one-based body line ranges;
-3. add DuckDB lexical/BM25 retrieval plus literal mode;
-4. add concept type and path filters;
-5. add compact `location + snippet` rendering;
-6. expose the same capability through CLI and MCP;
-7. add tests proving line provenance, deterministic ordering, bounded context
-   and compact defaults;
-8. add benchmark cases that count the actual search result tokens consumed by
-   an agent.
+1. factor/reuse the existing body-line splitting semantics;
+2. add body/passages relations with one-based coordinates;
+3. implement offline lexical ranking;
+4. use local DuckDB FTS/BM25 when available without implicit installation;
+5. add case-insensitive literal substring mode;
+6. implement `concept_type` and safe bundle-relative path filters;
+7. implement canonical location parsing/range validation;
+8. implement deterministic snippet rendering and truncation;
+9. implement deterministic tie-breaking;
+10. expose one `search` capability through Python service, CLI and MCP;
+11. add shared conformance fixtures for locations, errors and compact output;
+12. benchmark actual agent-consumed search-result tokens.
 
 ### Phase 2: exact vectors
 
-1. define the embedding-provider/profile protocol;
-2. materialize passage vectors as `FLOAT[n]`;
-3. use native DuckDB array distance functions for exact top-k;
+1. define embedding provider/profile protocol;
+2. materialize passage vectors as fixed-size arrays;
+3. use native DuckDB distance functions for exact top-k;
 4. use source/profile digests for incremental reuse;
 5. keep vector search opt-in.
 
 ### Phase 3: hybrid retrieval
 
 1. retrieve lexical and vector candidate sets;
-2. implement deterministic RRF;
+2. implement deterministic RRF or another measured fusion policy;
 3. push structured filters before expensive ranking;
 4. measure quality and agent-token cost against lexical-only retrieval.
 
-### Phase 4: ANN and persistent sidecars
+### Phase 4: indexed acceleration and persistent sidecars
 
-1. add optional DuckDB VSS/HNSW acceleration;
+1. add optional HNSW/VSS as a vector profile/backend optimization;
 2. benchmark recall/latency against exact vector search;
-3. evaluate Lance as the preferred persistent large-bundle backend;
+3. evaluate Lance and compatible sidecars for large bundles;
 4. keep every index rebuildable and provenance-preserving.
 
-### Phase 5: advanced policies
+### Phase 5: TypeScript search parity
 
-Candidates, only after measurement justifies them:
+1. implement the shared search contract in the appropriate TypeScript surface;
+2. put DuckDB-specific search in `typescript-duckdb`;
+3. run the same conformance fixtures;
+4. document when cross-runtime search parity is achieved.
+
+### Phase 6: advanced policies
+
+Only after benchmark evidence justifies them:
 
 - reranker providers;
-- token-budget-aware result packing;
+- tokenizer-aware result packing;
 - graph-neighborhood expansion;
 - diversity/MMR-style selection;
-- multiple named embedding profiles for the same bundle;
-- query classification/routing between literal, lexical, vector and hybrid
-  modes.
+- multiple named embedding profiles;
+- query routing among literal, lexical, vector and hybrid modes.
 
 None requires a new agent-facing search tool.
 
@@ -554,96 +839,105 @@ None requires a new agent-facing search tool.
 
 This RFC does not:
 
-- make embeddings part of the OKF canonical format;
-- require network access to search a bundle;
+- make embeddings part of the canonical OKF format;
+- require network access for default bundle search;
 - require a hosted embedding vendor;
 - require VSS/HNSW;
+- expose ANN/HNSW as a public retrieval semantic;
 - turn `okf-parser` into a general-purpose vector database;
-- promise semantic search in the initial implementation;
-- require full document bodies in search results;
+- promise semantic/vector search in Phase 1;
+- return full document bodies by default;
 - define one permanent chunking algorithm;
 - make a persistent sidecar authoritative over Markdown;
-- automatically execute external embedding calls without explicit
-  configuration.
+- make body-line locations stable across edits;
+- silently install extensions or execute hosted embedding calls;
+- require Rust to own search ranking.
 
 ## Alternatives considered
 
 ### Separate MCP tools for each algorithm
 
-For example `search_bm25`, `search_vector`, `search_hnsw` and `search_hybrid`.
-This leaks implementation detail into the agent's tool-selection problem,
-increases schema/context overhead and makes backend evolution harder. Rejected
-in favor of one `search` tool with explicit mode/profile selection.
+`search_bm25`, `search_vector`, `search_hnsw` and `search_hybrid` leak backend
+details into the agent's tool-selection problem and increase schema/context
+overhead. Rejected in favor of one `search` tool.
+
+### Public `ann` mode
+
+`ann` describes an execution strategy, not user retrieval intent. It also leaks
+HNSW-like concerns into the stable API. Rejected; exact versus approximate
+execution belongs to the vector profile.
+
+### Network-dependent FTS as the only lexical path
+
+DuckDB can autoinstall `fts`, which may fetch an extension on first use. Making
+that the only implementation would contradict offline zero-configuration
+search. Rejected. Local FTS is preferred, with an offline lexical fallback.
 
 ### JSON-only output
 
-JSON is convenient for programs but unnecessarily verbose for the dominant
-agent-reading case. Rejected as the default. Full structured detail remains
-opt-in.
+JSON is useful for programs but expensive for the dominant agent-reading case.
+Rejected as the default; `detail="full"` keeps structured data available.
 
-### Whole-document embeddings only
+### Durable body-line anchors
 
-This loses precise evidence locality and forces the agent to consume an entire
-concept after retrieval. Rejected as the default representation. Passage
-embeddings must preserve body line ranges.
-
-### Line embeddings only
-
-Line granularity gives excellent coordinates but often destroys enough context
-to hurt semantic ranking. Rejected as the only chunking strategy. The design
-keeps a line relation for addressing while allowing larger structural passages
-for ranking.
+Hashes or heading anchors could make evidence locations survive some edits, but
+they complicate Phase 1 and do not improve the immediate retrieval problem.
+Rejected for now. Body-line locations are intentionally ephemeral.
 
 ### Dedicated vector database as a mandatory dependency
 
-This adds deployment complexity before the project has demonstrated that exact
-DuckDB vector search is insufficient. Rejected. Specialized persistent stores
-remain optional backends.
-
-### HNSW as the canonical vector representation
-
-ANN indexes trade exactness for speed and have their own lifecycle and
-persistence constraints. Rejected. HNSW is an acceleration structure over
-derived vectors.
+This adds deployment complexity before exact DuckDB vector search has shown
+itself insufficient. Rejected; specialized stores remain optional backends.
 
 ## Open questions
 
-Implementation work should answer these empirically rather than freezing them
-prematurely in the public contract:
+These should be answered empirically rather than frozen prematurely:
 
-1. What default passage strategy gives the best retrieval quality per returned
-   token for typical OKF bundles?
-2. Should lexical Phase 1 index passages, body lines, or both?
-3. What compact snippet width/context default minimizes follow-up calls without
-   bloating first-pass results?
-4. At what corpus size does DuckDB exact vector scan become materially worse
-   than HNSW for expected bundle workloads?
-5. Does RRF materially outperform simpler staged lexical/vector reranking for
-   the benchmark tasks?
-6. Should a persistent retrieval profile live in a bundle-local config file,
-   project configuration, or remain caller-supplied until usage stabilizes?
-7. Which tokenizer contract, if any, is appropriate for an exact
-   `max_tokens` result budget across heterogeneous agent models?
+1. Which structural passage strategy gives the best retrieval quality per
+   returned token?
+2. Should lexical Phase 1 rank passages, individual body lines, or a two-stage
+   combination?
+3. What deterministic fallback lexical scorer best approximates useful BM25
+   behavior when local `fts` is unavailable?
+4. What exact snippet ceiling within the 96-128-token target minimizes follow-up
+   calls?
+5. At what corpus size does exact vector scan become materially worse than an
+   ANN profile?
+6. Does RRF materially outperform staged lexical/vector reranking?
+7. Where should named retrieval profiles live?
+8. Which tokenizer contract, if any, should govern a future exact
+   `max_snippet_tokens`/`max_tokens` API?
+9. When should Rust take on retrieval preprocessing, if profiling demonstrates
+   Python-side passage construction is material?
 
-These are benchmark questions. They should not block the Phase 1 search
-primitive.
+These questions do not block Phase 1.
 
 ## Acceptance criteria
 
-This RFC is successfully implemented when the baseline release can demonstrate:
+The baseline implementation is complete when it demonstrates:
 
-1. `okf-parser search PATH QUERY` and MCP `search(path, query)` over the whole
-   bundle;
-2. default lexical retrieval with no embedding provider;
-3. each hit mapped to an exact contiguous one-based body line range;
-4. default compact output containing only location and useful snippet text;
-5. explicit opt-in for richer metadata;
-6. deterministic ranking/tie-breaking for a fixed bundle and configuration;
-7. bounded result count and context expansion;
-8. no canonical Markdown mutation as a side effect of search;
-9. tests for multilingual/accented body text, line provenance, exclusions and
-   filters;
-10. a benchmark recording actual agent-consumed tokens for compact OKF search.
+1. `okf-parser search PATH QUERY` and MCP `search(path, query)` over a bundle;
+2. default lexical retrieval with no embedding provider and no required network
+   access;
+3. local DuckDB FTS/BM25 use when available, with deterministic offline lexical
+   fallback;
+4. each hit mapped to an exact contiguous one-based body line range;
+5. canonical single-line and range locations, including range validation rules;
+6. explicit warning/contract that body locations are ephemeral across edits;
+7. compact one-physical-line-per-hit `location + snippet` output;
+8. deterministic snippet truncation behavior;
+9. explicit `detail="full"` structured output;
+10. deterministic ordering by normalized score, path and body start line;
+11. safe bundle confinement for path filters/selectors;
+12. non-empty-query validation and stable errors;
+13. reuse of the existing body-line semantics instead of an independent split;
+14. no canonical Markdown mutation or implicit extension installation as a side
+    effect of default search;
+15. shared conformance fixtures covering location rendering, compact output,
+    errors, exclusions and filters;
+16. tests for multilingual/accented body text;
+17. a benchmark recording actual agent-consumed tokens as the primary cost
+    metric, with recall/rank quality/latency as secondary diagnostics.
 
-Vector, ANN, hybrid and persistent-sidecar support are accepted extensions of
-this architecture, but are not blockers for the first implementation.
+Vector, hybrid, ANN acceleration and persistent sidecars are accepted extensions
+of this architecture, not blockers for Phase 1.
