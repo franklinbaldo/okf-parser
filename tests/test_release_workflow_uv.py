@@ -5,9 +5,10 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = (
-    Path(".github/workflows/publish.yml"),
-    Path(".github/workflows/release-dry-run.yml"),
+    ROOT / ".github/workflows/publish.yml",
+    ROOT / ".github/workflows/release-dry-run.yml",
 )
 PEP723_HELPERS = (
     "check_no_duckdb_link.py",
