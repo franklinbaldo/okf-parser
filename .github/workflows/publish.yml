@@ -44,7 +44,7 @@ jobs:
 
       - name: Prove the executable does not link DuckDB
         shell: bash
-        run: python3 scripts/check_no_duckdb_link.py dist/*.whl
+        run: uv run --script scripts/check_no_duckdb_link.py dist/*.whl
 
       - name: Install and exercise the wheel
         shell: bash
@@ -105,7 +105,7 @@ jobs:
 
       - name: Prove the executable does not link DuckDB
         shell: bash
-        run: python3 scripts/check_no_duckdb_link.py dist/*.whl
+        run: uv run --script scripts/check_no_duckdb_link.py dist/*.whl
 
       - name: Install and exercise the wheel
         shell: bash
@@ -174,7 +174,7 @@ jobs:
 
       - name: Prove the executable does not link DuckDB
         shell: bash
-        run: python3 scripts/check_no_duckdb_link.py dist/*.whl
+        run: uv run --script scripts/check_no_duckdb_link.py dist/*.whl
 
       - name: Install and exercise the wheel
         shell: bash
@@ -259,7 +259,7 @@ jobs:
             typescript-duckdb/package-lock.json
 
       - name: Verify tagged source contract
-        run: python scripts/release_contract.py verify-source --tag "$GITHUB_REF_NAME"
+        run: uv run --script scripts/release_contract.py verify-source --tag "$GITHUB_REF_NAME"
 
       - name: Install locked build dependencies
         run: |
@@ -288,7 +288,7 @@ jobs:
           version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
           wheel=$(find release/python -maxdepth 1 -type f -name "okf_parser-${version}-py3-none-manylinux*_x86_64.whl" -print -quit)
           test -n "$wheel"
-          python scripts/native_from_wheel.py extract "$wheel" native-npm-linux-x64/bin/okf-core
+          uv run --script scripts/native_from_wheel.py extract "$wheel" native-npm-linux-x64/bin/okf-core
           (cd native-npm-linux-x64 && npm pack --pack-destination ../release/native-npm --silent)
           (cd typescript && npm pack --pack-destination ../release/npm --silent)
           (cd typescript-duckdb && npm pack --pack-destination ../release/npm --silent)
@@ -321,13 +321,13 @@ jobs:
           grep -qx 'package/bin/okf-core' <<<"$listing"
           grep -qx 'package/package.json' <<<"$listing"
           wheel=$(find release/python -maxdepth 1 -type f -name "okf_parser-${version}-py3-none-manylinux*_x86_64.whl" -print -quit)
-          python scripts/native_from_wheel.py verify "$wheel" "$npm_native"
+          uv run --script scripts/native_from_wheel.py verify "$wheel" "$npm_native"
 
       - name: Generate immutable manifest
         shell: bash
         run: |
           set -euo pipefail
-          python scripts/release_contract.py build-manifest \
+          uv run --script scripts/release_contract.py build-manifest \
             --directory release \
             --repository "$GITHUB_REPOSITORY" \
             --commit "$(git rev-parse HEAD)" \
@@ -336,11 +336,11 @@ jobs:
             --node-version "$(node --version)" \
             --npm-version "$(npm --version)" \
             --uv-version "$(uv --version | awk '{print $2}')"
-          python scripts/release_contract.py verify-local --manifest release/manifest.json
-          python scripts/release_contract.py verify-contents --manifest release/manifest.json
+          uv run --script scripts/release_contract.py verify-local --manifest release/manifest.json
+          uv run --script scripts/release_contract.py verify-contents --manifest release/manifest.json
 
       - name: Inspect public registry state
-        run: python -m scripts.registry_state --manifest release/manifest.json --output release/registry-state.json
+        run: uv run --script scripts/registry_state.py --manifest release/manifest.json --output release/registry-state.json
 
       - name: Re-smoke the host wheel with uv and no source fallback
         shell: bash
@@ -394,8 +394,8 @@ jobs:
 
       - name: Re-verify exact bytes before publication
         run: |
-          python scripts/release_contract.py verify-local --manifest release/manifest.json
-          python scripts/release_contract.py verify-contents --manifest release/manifest.json
+          uv run --script scripts/release_contract.py verify-local --manifest release/manifest.json
+          uv run --script scripts/release_contract.py verify-contents --manifest release/manifest.json
 
       - name: Publish Python parser (all platform wheels + sdist)
         env:
