@@ -53,10 +53,35 @@ Before building, `scripts/release_contract.py verify-source` requires all of the
 - versions in the npm manifests;
 - `PROTOCOL_VERSION` in `typescript/src/version.ts`;
 - the `okf-parser` peer range in the DuckDB adapter;
-- `changelog/X.Y.Z.md` frontmatter title;
+- at least one release-note fragment in `changelog/X.Y.Z/`;
 - an optional stable tag, exactly `vX.Y.Z`.
 
 Prereleases are deliberately rejected until npm dist-tag policy is implemented.
+
+## Version numbers and release notes
+
+A version number identifies a **release**, not a pull request. Several changes may declare the same number, because that is the version they will all carry once they merge. A stack of pull requests should therefore share one version rather than climbing by one at every level -- the CI gate used to force that climb, by comparing each head against its base, and produced chains numbered 0.45.3 through 0.45.8 that nobody intended.
+
+The gate now checks the invariant that matters: the declared version must outrank every published `v*.*.*` tag. It may equal the base's version, and it may not regress below it.
+
+Each change contributes its own note to `changelog/X.Y.Z/`, so changes sharing a version never compete for one file:
+
+```text
+changelog/
+├── 0.45.2.md              # releases up to 0.45.2 keep their flat file
+└── 0.45.3/
+    ├── correct-0-45-2-notes.md
+    ├── pep723-workflow-python.md
+    └── uv-first-release-validation.md
+```
+
+A fragment is a `type: Release Note` concept with a title and a body of bullets. `scripts/changelog_notes.py X.Y.Z` assembles them, in sorted file-name order, into the body `finalize` publishes as the GitHub Release; prefix a file name if a fragment must sort somewhere particular. The assembler strips frontmatter, which the old `--notes-file changelog/X.Y.Z.md` did not -- v0.45.1's release body still opens with a byte-order mark and a `---` block.
+
+Preview a release's notes at any time:
+
+```bash
+uv run --script scripts/changelog_notes.py "$(uv run --script scripts/project_version.py)"
+```
 
 ## Python packaging
 

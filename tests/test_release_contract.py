@@ -69,8 +69,9 @@ def _write_source(root: Path, *, protocol_version: str = VERSION) -> None:
     (root / "typescript" / "src" / "version.ts").write_text(
         f'export const PROTOCOL_VERSION = "{protocol_version}";\n', encoding="utf-8"
     )
-    (root / "changelog" / f"{VERSION}.md").write_text(
-        f"---\ntype: Release\ntitle: okf-parser {VERSION}\ndescription: Test\n---\n",
+    (root / "changelog" / VERSION).mkdir()
+    (root / "changelog" / VERSION / "test-note.md").write_text(
+        "---\ntype: Release Note\ntitle: Test\n---\n\n- Test.\n",
         encoding="utf-8",
     )
     (root / "README.md").write_text(
