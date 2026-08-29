@@ -53,6 +53,12 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
       - name: Build manylinux wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
@@ -69,9 +75,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m venv "$RUNNER_TEMP/smoke"
-          if [ -d "$RUNNER_TEMP/smoke/Scripts" ]; then bin="$RUNNER_TEMP/smoke/Scripts"; else bin="$RUNNER_TEMP/smoke/bin"; fi
-          "$bin/python" -m pip install --quiet dist/*.whl
+          environment="$RUNNER_TEMP/smoke"
+          uv venv --python 3.12 "$environment"
+          if [ -d "$environment/Scripts" ]; then
+            bin="$environment/Scripts"
+            python="$bin/python.exe"
+          else
+            bin="$environment/bin"
+            python="$bin/python"
+          fi
+          uv pip install --python "$python" --quiet --only-binary :all: dist/*.whl
           mkdir -p "$RUNNER_TEMP/fixture"
           {
             echo '---'
@@ -82,7 +95,7 @@ jobs:
           "$bin/okf-parser" --version
           "$bin/okf-parser" check "$RUNNER_TEMP/fixture"
           "$bin/okf-parser" duckdb "$RUNNER_TEMP/fixture" "$RUNNER_TEMP/bundle.duckdb"
-          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$bin/python" - <<'PY'
+          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$python" - <<'PY'
           import os
           import duckdb
 
@@ -104,6 +117,12 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
       - name: Build Windows wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
@@ -119,9 +138,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m venv "$RUNNER_TEMP/smoke"
-          if [ -d "$RUNNER_TEMP/smoke/Scripts" ]; then bin="$RUNNER_TEMP/smoke/Scripts"; else bin="$RUNNER_TEMP/smoke/bin"; fi
-          "$bin/python" -m pip install --quiet dist/*.whl
+          environment="$RUNNER_TEMP/smoke"
+          uv venv --python 3.12 "$environment"
+          if [ -d "$environment/Scripts" ]; then
+            bin="$environment/Scripts"
+            python="$bin/python.exe"
+          else
+            bin="$environment/bin"
+            python="$bin/python"
+          fi
+          uv pip install --python "$python" --quiet --only-binary :all: dist/*.whl
           mkdir -p "$RUNNER_TEMP/fixture"
           {
             echo '---'
@@ -132,7 +158,7 @@ jobs:
           "$bin/okf-parser" --version
           "$bin/okf-parser" check "$RUNNER_TEMP/fixture"
           "$bin/okf-parser" duckdb "$RUNNER_TEMP/fixture" "$RUNNER_TEMP/bundle.duckdb"
-          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$bin/python" - <<'PY'
+          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$python" - <<'PY'
           import os
           import duckdb
 
@@ -162,6 +188,12 @@ jobs:
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
       - name: Build macOS wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
@@ -177,9 +209,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m venv "$RUNNER_TEMP/smoke"
-          if [ -d "$RUNNER_TEMP/smoke/Scripts" ]; then bin="$RUNNER_TEMP/smoke/Scripts"; else bin="$RUNNER_TEMP/smoke/bin"; fi
-          "$bin/python" -m pip install --quiet dist/*.whl
+          environment="$RUNNER_TEMP/smoke"
+          uv venv --python 3.12 "$environment"
+          if [ -d "$environment/Scripts" ]; then
+            bin="$environment/Scripts"
+            python="$bin/python.exe"
+          else
+            bin="$environment/bin"
+            python="$bin/python"
+          fi
+          uv pip install --python "$python" --quiet --only-binary :all: dist/*.whl
           mkdir -p "$RUNNER_TEMP/fixture"
           {
             echo '---'
@@ -190,7 +229,7 @@ jobs:
           "$bin/okf-parser" --version
           "$bin/okf-parser" check "$RUNNER_TEMP/fixture"
           "$bin/okf-parser" duckdb "$RUNNER_TEMP/fixture" "$RUNNER_TEMP/bundle.duckdb"
-          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$bin/python" - <<'PY'
+          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$python" - <<'PY'
           import os
           import duckdb
 
@@ -361,7 +400,11 @@ jobs:
             label=$(basename "$artifact" | tr '.-' '__')
             environment="$RUNNER_TEMP/python-$label"
             uv venv --python 3.12 "$environment"
-            uv pip install --python "$environment/bin/python" "$artifact"
+            if [[ "$artifact" == *.whl ]]; then
+              uv pip install --python "$environment/bin/python" --only-binary :all: "$artifact"
+            else
+              uv pip install --python "$environment/bin/python" "$artifact"
+            fi
             EXPECTED_VERSION="$expected_version" "$environment/bin/python" -c 'import importlib.metadata, os; assert importlib.metadata.version("okf-parser") == os.environ["EXPECTED_VERSION"]'
             "$environment/bin/okf-parser" --help >/dev/null
             test -x "$environment/bin/okf-parser"
