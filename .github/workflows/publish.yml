@@ -1,4 +1,4 @@
-﻿name: Release
+name: Release
 
 on:
   push:
@@ -28,6 +28,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
       - name: Build manylinux wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
@@ -44,9 +50,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m venv "$RUNNER_TEMP/smoke"
-          if [ -d "$RUNNER_TEMP/smoke/Scripts" ]; then bin="$RUNNER_TEMP/smoke/Scripts"; else bin="$RUNNER_TEMP/smoke/bin"; fi
-          "$bin/python" -m pip install --quiet dist/*.whl
+          environment="$RUNNER_TEMP/smoke"
+          uv venv --python 3.12 "$environment"
+          if [ -d "$environment/Scripts" ]; then
+            bin="$environment/Scripts"
+            python="$bin/python.exe"
+          else
+            bin="$environment/bin"
+            python="$bin/python"
+          fi
+          uv pip install --python "$python" --quiet dist/*.whl
           mkdir -p "$RUNNER_TEMP/fixture"
           {
             echo '---'
@@ -57,7 +70,7 @@ jobs:
           "$bin/okf-parser" --version
           "$bin/okf-parser" check "$RUNNER_TEMP/fixture"
           "$bin/okf-parser" duckdb "$RUNNER_TEMP/fixture" "$RUNNER_TEMP/bundle.duckdb"
-          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$bin/python" - <<'PY'
+          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$python" - <<'PY'
           import os
           import duckdb
 
@@ -77,6 +90,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
       - name: Build Windows wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
@@ -92,9 +111,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m venv "$RUNNER_TEMP/smoke"
-          if [ -d "$RUNNER_TEMP/smoke/Scripts" ]; then bin="$RUNNER_TEMP/smoke/Scripts"; else bin="$RUNNER_TEMP/smoke/bin"; fi
-          "$bin/python" -m pip install --quiet dist/*.whl
+          environment="$RUNNER_TEMP/smoke"
+          uv venv --python 3.12 "$environment"
+          if [ -d "$environment/Scripts" ]; then
+            bin="$environment/Scripts"
+            python="$bin/python.exe"
+          else
+            bin="$environment/bin"
+            python="$bin/python"
+          fi
+          uv pip install --python "$python" --quiet dist/*.whl
           mkdir -p "$RUNNER_TEMP/fixture"
           {
             echo '---'
@@ -105,7 +131,7 @@ jobs:
           "$bin/okf-parser" --version
           "$bin/okf-parser" check "$RUNNER_TEMP/fixture"
           "$bin/okf-parser" duckdb "$RUNNER_TEMP/fixture" "$RUNNER_TEMP/bundle.duckdb"
-          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$bin/python" - <<'PY'
+          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$python" - <<'PY'
           import os
           import duckdb
 
@@ -133,6 +159,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
       - name: Build macOS wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
@@ -148,9 +180,16 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 -m venv "$RUNNER_TEMP/smoke"
-          if [ -d "$RUNNER_TEMP/smoke/Scripts" ]; then bin="$RUNNER_TEMP/smoke/Scripts"; else bin="$RUNNER_TEMP/smoke/bin"; fi
-          "$bin/python" -m pip install --quiet dist/*.whl
+          environment="$RUNNER_TEMP/smoke"
+          uv venv --python 3.12 "$environment"
+          if [ -d "$environment/Scripts" ]; then
+            bin="$environment/Scripts"
+            python="$bin/python.exe"
+          else
+            bin="$environment/bin"
+            python="$bin/python"
+          fi
+          uv pip install --python "$python" --quiet dist/*.whl
           mkdir -p "$RUNNER_TEMP/fixture"
           {
             echo '---'
@@ -161,7 +200,7 @@ jobs:
           "$bin/okf-parser" --version
           "$bin/okf-parser" check "$RUNNER_TEMP/fixture"
           "$bin/okf-parser" duckdb "$RUNNER_TEMP/fixture" "$RUNNER_TEMP/bundle.duckdb"
-          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$bin/python" - <<'PY'
+          BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$python" - <<'PY'
           import os
           import duckdb
 
@@ -303,18 +342,19 @@ jobs:
       - name: Inspect public registry state
         run: python -m scripts.registry_state --manifest release/manifest.json --output release/registry-state.json
 
-      - name: Re-smoke the host wheel without a Rust toolchain
+      - name: Re-smoke the host wheel with uv and no source fallback
         shell: bash
         run: |
           set -euo pipefail
-          rustup self uninstall -y 2>/dev/null || true
           version=$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
           for wheel in release/python/okf_parser-"${version}"-py3-none-manylinux*_x86_64.whl; do
-            python -m venv /tmp/smoke-wheel
-            /tmp/smoke-wheel/bin/pip install --quiet "$wheel"
-            /tmp/smoke-wheel/bin/okf-parser --version
-            /tmp/smoke-wheel/bin/okf-parser check . --exclude .git --exclude node_modules >/dev/null
-            rm -rf /tmp/smoke-wheel
+            environment="$RUNNER_TEMP/smoke-wheel"
+            rm -rf "$environment"
+            uv venv --python 3.12 "$environment"
+            python="$environment/bin/python"
+            uv pip install --python "$python" --quiet --only-binary :all: "$wheel"
+            "$environment/bin/okf-parser" --version
+            "$environment/bin/okf-parser" check . --exclude .git --exclude node_modules >/dev/null
           done
 
       - name: Upload exact tested release set
@@ -371,57 +411,53 @@ jobs:
       matrix:
         os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, macos-15, macos-15-intel]
     steps:
-      - name: Wait for PyPI index propagation
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Install okf-parser from PyPI using a binary wheel
         shell: bash
-        # A flat `sleep 30` raced the index: the v0.45.2 run published fine and
-        # then failed here with "Could not find a version that satisfies the
-        # requirement", because the file was on PyPI but not yet in the simple
-        # index this runner read. Poll the release endpoint instead of guessing
-        # a duration.
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
+          environment="$RUNNER_TEMP/public-smoke"
+          uv venv --python 3.12 "$environment"
+          if [ -d "$environment/Scripts" ]; then
+            bin="$environment/Scripts"
+            python="$bin/python.exe"
+          else
+            bin="$environment/bin"
+            python="$bin/python"
+          fi
+
+          installed=false
           for attempt in $(seq 1 30); do
-            if curl -sfL -o /dev/null "https://pypi.org/pypi/okf-parser/${version}/json"; then
-              echo "okf-parser ${version} visible on PyPI after ${attempt} attempt(s)"
-              exit 0
+            if uv pip install \
+              --python "$python" \
+              --quiet \
+              --refresh-package okf-parser \
+              --only-binary :all: \
+              "okf-parser==${version}"; then
+              echo "okf-parser ${version} installed from the public index after ${attempt} attempt(s)"
+              installed=true
+              break
             fi
+            echo "okf-parser ${version} not installable from the public index yet (attempt ${attempt}/30)"
             sleep 10
           done
-          echo "::error::okf-parser ${version} did not appear on PyPI within 5 minutes"
-          exit 1
+          if [ "$installed" != true ]; then
+            echo "::error::okf-parser ${version} was not installable as a wheel from PyPI within 5 minutes"
+            exit 1
+          fi
 
-      - name: Remove the preinstalled Rust toolchain
-        shell: bash
-        # A hosted runner ships rustup/cargo by default. Removing it makes this
-        # job a real regression test for okf-parser#147: if pip ever falls back
-        # to a source build (missing/incompatible wheel for this platform), the
-        # install fails loudly here instead of silently succeeding via a slow
-        # from-source compile that masks the wheel gap.
-        #
-        # Best-effort: the Homebrew rustup on the macOS runners answers
-        # "self-uninstall is disabled for this build of rustup" and exits 1,
-        # which failed both macOS smoke jobs of v0.45.2 before pip ever ran and
-        # skipped the Finalize job. The guarantee itself no longer depends on
-        # this step succeeding -- the install below passes
-        # `--only-binary=:all:`, which forbids a source build outright and on
-        # every platform.
-        run: rustup self uninstall -y || true
-
-      - name: Install okf-parser from PyPI (no Rust toolchain present)
-        shell: bash
-        run: |
-          set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
-          python -m venv .smoke
-          if [ -f .smoke/bin/activate ]; then . .smoke/bin/activate; else . .smoke/Scripts/activate; fi
-          pip install --quiet --only-binary=:all: "okf-parser==${version}"
-          okf-parser --version
+          "$bin/okf-parser" --version
           mkdir -p "$RUNNER_TEMP/public-fixture"
           printf '%s\n' '---' 'type: Note' '---' '# Note' > "$RUNNER_TEMP/public-fixture/note.md"
-          okf-parser check "$RUNNER_TEMP/public-fixture" >/dev/null
-          okf-parser duckdb "$RUNNER_TEMP/public-fixture" "$RUNNER_TEMP/public.duckdb" >/dev/null
-          BUNDLE="$RUNNER_TEMP/public.duckdb" python - <<'PY'
+          "$bin/okf-parser" check "$RUNNER_TEMP/public-fixture" >/dev/null
+          "$bin/okf-parser" duckdb "$RUNNER_TEMP/public-fixture" "$RUNNER_TEMP/public.duckdb" >/dev/null
+          BUNDLE="$RUNNER_TEMP/public.duckdb" "$python" - <<'PY'
           import os
           import duckdb
 
