@@ -320,11 +320,27 @@ def _verify_readme_action(root: Path, version: str) -> None:
 
 
 def _verify_changelog(root: Path, version: str) -> Path:
-    path = root / "changelog" / f"{version}.md"
-    metadata = _frontmatter(path)
-    if metadata.get("type") != "Release" or metadata.get("title") != f"okf-parser {version}":
-        _fail(f"changelog metadata does not identify okf-parser {version}")
-    return path
+    """Check the release-note fragments this version publishes.
+
+    A version identifies a release, not a pull request: several changes land
+    together under one number, so each contributes a fragment to
+    `changelog/<version>/` rather than competing for a single file. The release
+    needs at least one, and each must be a readable note -- the assembled body
+    is what reaches the GitHub Release.
+    """
+    directory = root / "changelog" / version
+    if not directory.is_dir():
+        _fail(f"changelog/{version}/ does not exist; a release needs at least one note fragment")
+    fragments = sorted(path for path in directory.glob("*.md") if path.is_file())
+    if not fragments:
+        _fail(f"changelog/{version}/ has no *.md fragment")
+    for fragment in fragments:
+        metadata = _frontmatter(fragment)
+        if metadata.get("type") != "Release Note":
+            _fail(f"{fragment.relative_to(root).as_posix()} must declare type: Release Note")
+        if not metadata.get("title"):
+            _fail(f"{fragment.relative_to(root).as_posix()} must declare a title")
+    return directory
 
 
 def _verify_rust_crates(root: Path, version: str) -> None:

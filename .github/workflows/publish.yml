@@ -463,6 +463,12 @@ jobs:
       - name: Check out release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
       - name: Create GitHub Release after registry publication
         env:
           GH_TOKEN: ${{ github.token }}
@@ -470,8 +476,11 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          notes="changelog/${version}.md"
-          test -f "$notes"
+          # The release body is assembled from every fragment the changes in
+          # this release contributed. Passing the raw file through is what put
+          # a `---` frontmatter block and a BOM in the v0.45.1 release body.
+          notes="$RUNNER_TEMP/release-notes.md"
+          uv run --script scripts/changelog_notes.py "$version" > "$notes"
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             echo "GitHub Release ${GITHUB_REF_NAME} already exists"
           else
