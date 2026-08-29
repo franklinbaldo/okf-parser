@@ -1,0 +1,166 @@
+{
+  "corpus": {
+    "body_bytes": 512,
+    "documents": 1000,
+    "same_authored_source_for_all_strategies": true,
+    "target_index": 137
+  },
+  "diagnostics": {
+    "full_representation_bytes": {
+      "authored_markdown": 604889,
+      "okf_canonical_projection": 847914
+    },
+    "full_representation_tokens": {
+      "authored_markdown": 123000,
+      "okf_canonical_projection": 196010
+    },
+    "storage_size": {
+      "authored_markdown_bytes": 563890
+    }
+  },
+  "measurement": {
+    "context_window": 1050000,
+    "live_driver_calls_per_task": 0,
+    "mode": "deterministic-context-trace",
+    "model": "gpt-5.6-sol",
+    "primary_metric": "cumulative agent input/context tokens",
+    "retrieval_planner": "deterministic and identical task oracle; planner tokens excluded",
+    "rounds": 2,
+    "token_source": "local tokenizer",
+    "tokenizer": "o200k_base",
+    "tokenizer_fallback_used": false
+  },
+  "schema": "okf-agent-token-cost-result-v1",
+  "source": {
+    "artifact": "agent-workload-smoke",
+    "generated_at": "2026-08-29T17:33:58Z",
+    "github_actions_run_id": 33265896256
+  },
+  "strategy_aggregates": [
+    {
+      "calls_mean": 1.0,
+      "input_tokens_mean": 123093.5,
+      "input_tokens_p50": 123096,
+      "input_tokens_p95": 123100,
+      "output_tokens_mean": null,
+      "retrieved_items_p50": 1000,
+      "runs": 12,
+      "strategy": "direct-markdown",
+      "success_rate": 1.0,
+      "successes": 12,
+      "tokens_per_success": 123093.5
+    },
+    {
+      "calls_mean": 1.0,
+      "input_tokens_mean": 134.33333333333334,
+      "input_tokens_p50": 130,
+      "input_tokens_p95": 192,
+      "output_tokens_mean": null,
+      "retrieved_items_p50": 2,
+      "runs": 12,
+      "strategy": "generic-retrieval",
+      "success_rate": 1.0,
+      "successes": 12,
+      "tokens_per_success": 134.33333333333334
+    },
+    {
+      "calls_mean": 1.0,
+      "input_tokens_mean": 141.33333333333334,
+      "input_tokens_p50": 137,
+      "input_tokens_p95": 199,
+      "output_tokens_mean": null,
+      "retrieved_items_p50": 2,
+      "runs": 12,
+      "strategy": "okf-parser",
+      "success_rate": 1.0,
+      "successes": 12,
+      "tokens_per_success": 141.33333333333334
+    }
+  ],
+  "task_comparison": [
+    {
+      "category": "lookup factual simples",
+      "direct_markdown_input_tokens_p50": 123098,
+      "generic_retrieval_input_tokens_p50": 131,
+      "okf_delta_vs_generic_fraction": 0.05343511450381679,
+      "okf_delta_vs_generic_tokens": 7,
+      "okf_parser_input_tokens_p50": 138,
+      "success_rate": {
+        "direct-markdown": 1.0,
+        "generic-retrieval": 1.0,
+        "okf-parser": 1.0
+      },
+      "task": "lookup_factual"
+    },
+    {
+      "category": "busca por conceito/tipo",
+      "direct_markdown_input_tokens_p50": 123081,
+      "generic_retrieval_input_tokens_p50": 96,
+      "okf_delta_vs_generic_fraction": 0.07291666666666667,
+      "okf_delta_vs_generic_tokens": 7,
+      "okf_parser_input_tokens_p50": 103,
+      "success_rate": {
+        "direct-markdown": 1.0,
+        "generic-retrieval": 1.0,
+        "okf-parser": 1.0
+      },
+      "task": "find_concept_type"
+    },
+    {
+      "category": "cruza informação de vários pontos",
+      "direct_markdown_input_tokens_p50": 123100,
+      "generic_retrieval_input_tokens_p50": 192,
+      "okf_delta_vs_generic_fraction": 0.036458333333333336,
+      "okf_delta_vs_generic_tokens": 7,
+      "okf_parser_input_tokens_p50": 199,
+      "success_rate": {
+        "direct-markdown": 1.0,
+        "generic-retrieval": 1.0,
+        "okf-parser": 1.0
+      },
+      "task": "cross_reference"
+    },
+    {
+      "category": "navegação por relações",
+      "direct_markdown_input_tokens_p50": 123088,
+      "generic_retrieval_input_tokens_p50": 129,
+      "okf_delta_vs_generic_fraction": 0.05426356589147287,
+      "okf_delta_vs_generic_tokens": 7,
+      "okf_parser_input_tokens_p50": 136,
+      "success_rate": {
+        "direct-markdown": 1.0,
+        "generic-retrieval": 1.0,
+        "okf-parser": 1.0
+      },
+      "task": "relation_navigation"
+    },
+    {
+      "category": "síntese de várias evidências",
+      "direct_markdown_input_tokens_p50": 123095,
+      "generic_retrieval_input_tokens_p50": 126,
+      "okf_delta_vs_generic_fraction": 0.05555555555555555,
+      "okf_delta_vs_generic_tokens": 7,
+      "okf_parser_input_tokens_p50": 133,
+      "success_rate": {
+        "direct-markdown": 1.0,
+        "generic-retrieval": 1.0,
+        "okf-parser": 1.0
+      },
+      "task": "synthesis"
+    },
+    {
+      "category": "maioria do corpus irrelevante",
+      "direct_markdown_input_tokens_p50": 123099,
+      "generic_retrieval_input_tokens_p50": 132,
+      "okf_delta_vs_generic_fraction": 0.05303030303030303,
+      "okf_delta_vs_generic_tokens": 7,
+      "okf_parser_input_tokens_p50": 139,
+      "success_rate": {
+        "direct-markdown": 1.0,
+        "generic-retrieval": 1.0,
+        "okf-parser": 1.0
+      },
+      "task": "irrelevant_corpus"
+    }
+  ]
+}

@@ -1,0 +1,144 @@
+name: Agent workload benchmark
+
+on:
+  pull_request:
+    paths:
+      - "benchmarks/**"
+      - "src/okf_parser/**"
+      - "okf-engine/**"
+      - "rust-core/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - ".github/workflows/agent-workload-benchmark.yml"
+  workflow_dispatch:
+  schedule:
+    - cron: "23 5 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Agent token cost + tool workload smoke
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+      - run: uv sync --frozen --all-groups
+      - name: Validate benchmark harness
+        run: |
+          uv run ruff format --check --diff \
+            benchmarks/agent_workload.py \
+            benchmarks/agent_token_cost.py \
+            benchmarks/generic_agent_baseline.py \
+            benchmarks/litellm_agent_driver.py \
+            benchmarks/litellm_agentic_workload.py \
+            benchmarks/verify_agent_benchmark.py
+          uv run ruff check \
+            benchmarks/agent_workload.py \
+            benchmarks/agent_token_cost.py \
+            benchmarks/generic_agent_baseline.py \
+            benchmarks/litellm_agent_driver.py \
+            benchmarks/litellm_agentic_workload.py \
+            benchmarks/verify_agent_benchmark.py
+          uv run ty check benchmarks/agent_workload.py benchmarks/generic_agent_baseline.py
+          uv run --script benchmarks/litellm_agentic_workload.py --help >/dev/null
+          bash -n benchmarks/generic_agent_baseline.sh benchmarks/install_okf_competitors.sh
+      - name: Run deterministic tool smoke
+        run: |
+          uv run --script benchmarks/agent_workload.py \
+            --documents 200 --rounds 2 --warmups 1 \
+            --adapters bash-python,okf-parser \
+            --output "$RUNNER_TEMP/tool-workload.json" >/dev/null
+      - name: Run primary token-cost trace
+        run: |
+          uv run --script benchmarks/agent_token_cost.py \
+            --documents 1000 \
+            --rounds 2 \
+            --output "$RUNNER_TEMP/token-cost.json" \
+            --report "$RUNNER_TEMP/token-cost.md" >/dev/null
+      - name: Verify token-cost contract
+        run: |
+          uv run --script benchmarks/verify_agent_benchmark.py "$RUNNER_TEMP/token-cost.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-workload-smoke
+          path: |
+            ${{ runner.temp }}/tool-workload.json
+            ${{ runner.temp }}/token-cost.json
+            ${{ runner.temp }}/token-cost.md
+
+  competitors:
+    name: Latest competitor smoke
+    if: github.event_name != 'schedule'
+    continue-on-error: true
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: stable
+          cache: false
+      - run: uv sync --frozen --all-groups
+      - name: Install latest competitors
+        run: bash benchmarks/install_okf_competitors.sh "$RUNNER_TEMP/competitors"
+      - name: Run latest-competitor smoke
+        env:
+          OKFCLI_CMD: ${{ runner.temp }}/competitors/bin/okfcli-bench
+          SKOSOVSKY_OKF_CMD: ${{ runner.temp }}/competitors/bin/skosovsky-okf-bench
+          OKF_GENERATOR_CMD: ${{ runner.temp }}/competitors/bin/okf-generator-bench
+        run: |
+          source "$RUNNER_TEMP/competitors/versions.env"
+          uv run --script benchmarks/agent_workload.py \
+            --documents 200 --rounds 2 --warmups 1 \
+            --output "$RUNNER_TEMP/competitors.json" >/dev/null
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-workload-competitors
+          path: ${{ runner.temp }}/competitors.json
+
+  full:
+    name: Weekly full benchmark matrix
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: stable
+          cache: false
+      - run: uv sync --frozen --all-groups
+      - name: Install latest competitors
+        run: bash benchmarks/install_okf_competitors.sh "$RUNNER_TEMP/competitors"
+      - name: Run 1k / 10k / 50k matrix
+        env:
+          OKFCLI_CMD: ${{ runner.temp }}/competitors/bin/okfcli-bench
+          SKOSOVSKY_OKF_CMD: ${{ runner.temp }}/competitors/bin/skosovsky-okf-bench
+          OKF_GENERATOR_CMD: ${{ runner.temp }}/competitors/bin/okf-generator-bench
+        run: |
+          source "$RUNNER_TEMP/competitors/versions.env"
+          mkdir -p "$RUNNER_TEMP/results"
+          for documents in 1000 10000 50000; do
+            uv run --script benchmarks/agent_workload.py \
+              --documents "$documents" --rounds 5 --warmups 1 \
+              --output "$RUNNER_TEMP/results/tool-$documents.json" >/dev/null
+            uv run --script benchmarks/agent_token_cost.py \
+              --documents "$documents" --rounds 1 \
+              --output "$RUNNER_TEMP/results/token-$documents.json" \
+              --report "$RUNNER_TEMP/results/token-$documents.md" >/dev/null
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: agent-workload-full-${{ github.run_id }}
+          path: ${{ runner.temp }}/results/*
