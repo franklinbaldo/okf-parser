@@ -10,10 +10,12 @@ when_to_use: >-
   Use when source code should become disposable OKF knowledge. The bundled Python recipe extracts
   modules, classes, functions, methods, imports, signatures, parameters, returns, docstrings,
   decorators, bases, fields and syntactic call observations.
-script: scripts/python_codebase_to_okf.py
+scripts:
+  - scripts/python_codebase_to_okf.py
+  - scripts/query_codebase_okf.py
 compatibility: >-
-  Standalone execution requires uv and Python 3.12+. The PEP 723 recipe installs okf-parser for
-  itself and requires no credentials after dependencies are available.
+  Standalone execution requires uv and Python 3.12+. The PEP 723 recipes install okf-parser for
+  themselves and require no credentials after dependencies are available.
 ---
 
 # Project a codebase into OKF
@@ -25,7 +27,7 @@ Keep this boundary:
 
 ```text
 source code
-  → source-specific recipe in this skill
+  → source-specific recipes in this skill
   → derived OKF concepts and observations
   → okf-parser generic validation / graph / relations / schema / search
 ```
@@ -34,10 +36,10 @@ Do not add Python AST, Tree-sitter grammars, LSP clients, compiler APIs, or prod
 types to `okf-parser` merely to enrich this recipe. Promote a primitive only if it would still be a
 good parser feature for unrelated producers such as OpenAPI, SQL schemas, legislation, or API data.
 
-## Run the Python recipe
+## Generate a Python projection
 
-The executable recipe is bundled with the skill rather than embedded in this document so an agent
-does not need to ingest implementation code merely to discover or use the capability.
+The executable recipes are bundled with the skill rather than embedded in this document so an
+agent does not need to ingest implementation code merely to discover or use the capability.
 
 ```bash
 uv run skills/codebase-to-okf/scripts/python_codebase_to_okf.py \
@@ -53,7 +55,30 @@ uv run skills/codebase-to-okf/scripts/python_codebase_to_okf.py \
 
 Use repeated `--exclude-dir NAME` for project-specific generated or vendor directories.
 
-## What it emits
+## Query before reopening source
+
+Use the code-aware query recipe to keep agent context small. It loads the bundle through the public,
+generic `okf-parser` `Bundle` API and applies only code-domain filters inside this skill.
+
+```bash
+# Symbol lookup
+uv run skills/codebase-to-okf/scripts/query_codebase_okf.py \
+  ./.derived/codebase-okf --name hello
+
+# Which lexical callers contain a call named hello?
+uv run skills/codebase-to-okf/scripts/query_codebase_okf.py \
+  ./.derived/codebase-okf --callee hello
+
+# Other useful filters
+uv run skills/codebase-to-okf/scripts/query_codebase_okf.py \
+  ./.derived/codebase-okf --type CodeClass --source services/
+```
+
+The default result is compact JSON. Add `--full` only when the complete concept body/frontmatter is
+needed. Prefer querying the derived bundle before reading source; open source when the projection is
+insufficient for the task.
+
+## What the generator emits
 
 The Python reference frontend uses the standard-library AST and emits producer-defined types:
 
