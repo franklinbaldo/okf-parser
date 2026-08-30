@@ -30,8 +30,8 @@ validation / relations / graph / schema / search
 ```
 
 The initial `codebase-to-okf` skill demonstrates the boundary for Python source. `SKILL.md` remains
-small, authored and queryable as `type: Skill`; executable implementation lives in a bundled PEP
-723 script so agents need not ingest implementation code merely to discover or invoke the skill.
+small, authored and queryable as `type: Skill`; executable implementation lives in bundled PEP 723
+scripts so agents need not ingest implementation code merely to discover or invoke the skill.
 
 ## Decision
 
@@ -88,6 +88,19 @@ safe overwrite behavior, and parser validation before reporting success.
 The initial recipe emits `CodeModule`, `CodeClass`, `CodeFunction`, `CodeMethod`, `CodeImport`, and
 `CodeCall`. These are recipe vocabulary, not normative parser types. The parser must continue to
 preserve and expose producer-defined types without gaining code-specific models.
+
+Repository-owned producer types that participate in the repository's normative type-spec policy
+must use the parser's own scaffold workflow. Do not hand-create a spec file just to satisfy CI.
+Preview and then write the missing specs with:
+
+```bash
+uv run okf-parser init . --spec-template 'docs/types/{slug}.md'
+uv run okf-parser init . --spec-template 'docs/types/{slug}.md' --write
+```
+
+`init` creates the canonical `type: Spec` stub for each missing type. The stub is then authored to
+document the producer-defined fields and semantics, and repository conformance is verified with the
+same type-spec convention. The `Skill` specification in this change follows that flow.
 
 ### 6. Evidence precedes resolution
 
@@ -148,13 +161,15 @@ refused, and unchanged input regenerates byte-for-byte identical output.
 Repository tests must verify both layers:
 
 1. `SKILL.md` is itself a conformant typed OKF concept;
-2. the bundled script declares PEP 723 metadata and compiles as Python;
+2. the bundled scripts declare PEP 723 metadata and compile as Python;
 3. a representative codebase generates a conformant bundle;
 4. signatures, parameters, return annotations, decorators, bases, fields and docstrings survive;
 5. same-name definitions remain distinct;
 6. `CodeCall` records identify callers and syntax while remaining explicitly unresolved;
 7. name-matched candidate links are navigable but labeled non-authoritative;
-8. forced regeneration is byte-for-byte deterministic.
+8. forced regeneration is byte-for-byte deterministic;
+9. `okf-parser init` discovers and scaffolds the repository specification for any newly introduced producer type;
+10. the whole repository passes the normative type-spec check after the generated stub is documented.
 
 ## Non-goals
 
