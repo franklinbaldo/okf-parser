@@ -12,13 +12,16 @@ from okf_parser.declared_schema import (
     declared_schema_relative_path,
     parse_declared_schema,
 )
-from okf_parser.projections import PROJECTION_TYPE
+from okf_parser.projections import PROJECTION_TYPE, compile_projections, load_projections
 from okf_parser.pydantic_projection import (
     build_dynamic_pydantic_models,
     render_pydantic_source,
 )
 from okf_parser.relational_schema import load_relational_schema
 from okf_parser.schema_contract import (
+    ListNode,
+    ObjectNode,
+    RefNode,
     SchemaCastError,
     SchemaExportError,
     SchemaNameCollisionError,
@@ -113,34 +116,47 @@ def build_schema_contracts(
 
     `relational_schema` is the opt-in half: given the bundle's `okf.schema.sql`,
     every field participating in a declared foreign key compiles to a reference
-    node. Omitted, the contracts are exactly what they have always been.
+    node. Projection documents compose a root contract with named sibling-schema
+    references; they never become concept types themselves.
     """
     observed = {
         # A projection is a composed shape over the concept types, not one of
-        # them: RFC 0018 section 5. Compiling it here would mint a `Projection`
+        # them: RFC 0018 section 5. Compiling it as observations would mint a
         # contract whose fields are `name`, `root` and `include`.
         concept_type: documents
         for concept_type, documents in documents_by_type(path, exclude).items()
         if concept_type != PROJECTION_TYPE
     }
     declared_by_type = _declared_types_by_type(path, tuple(observed), spec_template)
-    contracts = compile_contracts(
+    concept_contracts = compile_contracts(
         observed,
         infer_types=infer_types,
         casts=casts,
         declared_types_by_type=declared_by_type,
     )
+    projections = load_projections(path, exclude, relational_schema=relational_schema)
     if relational_schema is None:
         if refs == "embed":
             message = "--refs=embed needs a relational schema to know what to embed"
             raise SchemaExportError(message)
-        return contracts
+        return concept_contracts
+
     declared = Path(relational_schema)
     # `check --relational-schema` resolves a relative path against the bundle
     # root; the same flag has to mean the same file here.
     resolved = declared if declared.is_absolute() else Path(path) / declared
     schema = load_relational_schema(resolved)
-    return apply_references(contracts, schema.foreign_keys, embed=refs == "embed")
+
+    # A projection controls composition itself. Its root therefore keeps the
+    # row-shaped/key form while only declared members become embedded sibling
+    # references. Flat concept exports continue to honor the run-level refs mode.
+    key_contracts = apply_references(concept_contracts, schema.foreign_keys, embed=False)
+    flat_contracts = (
+        key_contracts
+        if refs == "key"
+        else apply_references(concept_contracts, schema.foreign_keys, embed=True)
+    )
+    return (*flat_contracts, *compile_projections(projections, key_contracts))
 
 
 def build_pydantic_models(
@@ -189,6 +205,17 @@ def export_pydantic_source(
     return render_pydantic_source(contracts)
 
 
+def _has_embedded_reference(node: object) -> bool:
+    """Whether a contract subtree needs the shared sibling-schema definition pool."""
+    if isinstance(node, RefNode):
+        return node.embedded
+    if isinstance(node, ListNode):
+        return _has_embedded_reference(node.item)
+    if isinstance(node, ObjectNode):
+        return any(_has_embedded_reference(field.value) for field in node.fields)
+    return False
+
+
 def export_json_schema(
     path: str,
     exclude: Sequence[str] = (),
@@ -217,9 +244,10 @@ def export_json_schema(
         "casts": list(casts),
         "schemas": schemas,
     }
-    if refs == "embed":
-        # Every `$ref` points at `#/$defs/<type>`, so a consumer embedding one
-        # schema needs the pool those pointers resolve against.
+    if any(_has_embedded_reference(contract.root) for contract in contracts):
+        # Every embedded `$ref` points at `#/$defs/<type>`, so a consumer needs
+        # the common pool those pointers resolve against. Projection members are
+        # embedded even when flat concept export uses the default key mode.
         payload["defs"] = schemas
     return payload
 
