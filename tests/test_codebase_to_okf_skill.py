@@ -29,7 +29,12 @@ def _snapshot(root: Path) -> dict[str, bytes]:
     }
 
 
-def _run_recipe(script: Path, source: Path, output: Path, *extra: str) -> subprocess.CompletedProcess[str]:
+def _run_recipe(
+    script: Path,
+    source: Path,
+    output: Path,
+    *extra: str,
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(  # noqa: S603
         [sys.executable, str(script), str(source), str(output), *extra],
         check=False,
