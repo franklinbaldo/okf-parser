@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -11,6 +12,7 @@ from okf_parser import validate_path
 SKILL_ROOT = Path(__file__).parents[1] / "skills" / "codebase-to-okf"
 SKILL_PATH = SKILL_ROOT / "SKILL.md"
 SCRIPT_PATH = SKILL_ROOT / "scripts" / "python_codebase_to_okf.py"
+QUERY_SCRIPT_PATH = SKILL_ROOT / "scripts" / "query_codebase_okf.py"
 
 
 def _snapshot(root: Path) -> dict[str, bytes]:
@@ -34,24 +36,39 @@ def _run_recipe(
     )
 
 
+def _run_query(
+    bundle: Path,
+    *args: str,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(  # noqa: S603
+        [sys.executable, str(QUERY_SCRIPT_PATH), str(bundle), *args],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
 def test_skill_is_itself_a_typed_okf_concept() -> None:
     report = validate_path(SKILL_ROOT)
     assert report.is_conformant
     assert report.concept_count == 1
 
 
-def test_recipe_is_bundled_pep723_code_not_skill_context() -> None:
+def test_recipes_are_bundled_pep723_code_not_skill_context() -> None:
     skill = SKILL_PATH.read_text(encoding="utf-8")
     recipe = SCRIPT_PATH.read_text(encoding="utf-8")
+    query_recipe = QUERY_SCRIPT_PATH.read_text(encoding="utf-8")
 
     assert "scripts/python_codebase_to_okf.py" in skill
+    assert "scripts/query_codebase_okf.py" in skill
     assert "# /// script" not in skill
-    assert recipe.startswith('# /// script\n# requires-python = ">=3.12"\n')
-    assert '"okf-parser>=0.45.2,<0.46"' in recipe
-    compile(recipe, str(SCRIPT_PATH), "exec")
+    for path, source in ((SCRIPT_PATH, recipe), (QUERY_SCRIPT_PATH, query_recipe)):
+        assert source.startswith('# /// script\n# requires-python = ">=3.12"\n')
+        assert '"okf-parser>=0.45.2,<0.46"' in source
+        compile(source, str(path), "exec")
 
 
-def test_recipe_generates_rich_deterministic_conformant_bundle(tmp_path: Path) -> None:
+def test_recipe_generates_rich_queryable_deterministic_bundle(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()
     (source / "app.py").write_text(
@@ -123,6 +140,22 @@ def main() -> str:
     assert '"resolution": "syntactic-unresolved"' in hello_call_text
     assert "app.py::Greeter.hello@" in hello_call_text
     assert "navigation hints, not dispatch claims" in hello_call_text
+
+    query = _run_query(output, "--callee", "hello")
+    assert query.returncode == 0, query.stderr
+    results = json.loads(query.stdout)
+    assert len(results) == 1
+    assert results[0]["type"] == "CodeCall"
+    assert results[0]["caller"] == "main"
+    assert results[0]["callee"] == "hello"
+    assert results[0]["candidate_targets"][0].startswith("app.py::Greeter.hello@")
+
+    lookup = _run_query(output, "--name", "hello")
+    assert lookup.returncode == 0, lookup.stderr
+    symbol_results = json.loads(lookup.stdout)
+    assert len(symbol_results) == 1
+    assert symbol_results[0]["type"] == "CodeMethod"
+    assert symbol_results[0]["signature"] == "def hello(name: str = 'world') -> str"
 
     first_snapshot = _snapshot(output)
     second = _run_recipe(source, output, "--force")
