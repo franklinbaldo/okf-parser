@@ -17,8 +17,13 @@ from okf_parser.edit import preview_concept_edit as _preview_concept_edit
 from okf_parser.edit import write_concept_edit as _write_concept_edit
 from okf_parser.formatting import FormatReport, format_path
 from okf_parser.graphql_adapter import export_graphql_sdl
+from okf_parser.schema_export import (
+    RefsMode,
+    export_json_schema,
+    export_pydantic_source,
+    export_zod_schema,
+)
 from okf_parser.schema_export import documents_by_type as _documents_by_type
-from okf_parser.schema_export import export_json_schema, export_pydantic_source, export_zod_schema
 from okf_parser.spec_scaffold import scaffold_missing_declared_schemas, scaffold_missing_specs
 
 if TYPE_CHECKING:
@@ -151,8 +156,15 @@ def schema_bundle(  # service mirrors the independent public schema flags.
     casts: Sequence[str] = (),
     zod_import: ZodImport = "zod",
     spec_template: str | None = None,
+    relational_schema: str | None = None,
+    refs: RefsMode = "key",
 ) -> dict[str, object] | str:
-    """Export JSON Schema, Zod, Pydantic source, or deterministic GraphQL SDL."""
+    """Export JSON Schema, Zod, Pydantic source, or deterministic GraphQL SDL.
+
+    `relational_schema` points at the bundle's `okf.schema.sql`; with it, a
+    field participating in a declared foreign key exports as a reference.
+    GraphQL keeps its own shape and ignores the flag for now.
+    """
     if fmt == "graphql":
         return export_graphql_sdl(
             path,
@@ -165,6 +177,8 @@ def schema_bundle(  # service mirrors the independent public schema flags.
         return export_zod_schema(
             path,
             exclude,
+            relational_schema=relational_schema,
+            refs=refs,
             infer_types=infer_types,
             casts=casts,
             zod_import=zod_import,
@@ -174,6 +188,8 @@ def schema_bundle(  # service mirrors the independent public schema flags.
         return export_pydantic_source(
             path,
             exclude,
+            relational_schema=relational_schema,
+            refs=refs,
             infer_types=infer_types,
             casts=casts,
             spec_template=spec_template,
@@ -181,6 +197,8 @@ def schema_bundle(  # service mirrors the independent public schema flags.
     return export_json_schema(
         path,
         exclude,
+        relational_schema=relational_schema,
+        refs=refs,
         infer_types=infer_types,
         casts=casts,
         spec_template=spec_template,

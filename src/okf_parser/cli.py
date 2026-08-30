@@ -30,6 +30,7 @@ from okf_parser.service import (
 type McpTransport = Literal["stdio", "http", "sse"]
 type SchemaFormat = Literal["json", "zod", "pydantic", "graphql"]
 type ZodImport = Literal["zod", "astro"]
+type RefsMode = Literal["key", "embed"]
 type CliSchemaFormat = Annotated[SchemaFormat, Parameter(name="format")]
 type ImportConflictPolicy = Literal["skip", "verify-identical"]
 type RepeatableStrings = list[str] | None
@@ -159,6 +160,8 @@ def schema(  # each argument is an independent public CLI flag.
     exclude: RepeatableStrings = None,
     zod_import: ZodImport = "zod",
     spec_template: str | None = None,
+    relational_schema: str | None = None,
+    refs: RefsMode = "key",
 ) -> CliResult[JsonPayload | str]:
     """Export JSON Schema, Zod, Pydantic source, or GraphQL SDL."""
     return CliResult(
@@ -170,6 +173,8 @@ def schema(  # each argument is an independent public CLI flag.
             casts=cast or (),
             zod_import=zod_import,
             spec_template=spec_template,
+            relational_schema=relational_schema,
+            refs=refs,
         )
     )
 
