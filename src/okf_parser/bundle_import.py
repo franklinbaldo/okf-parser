@@ -305,7 +305,12 @@ def import_bundle(  # each argument is an independent public CLI flag.
     for relative, text in to_write.items():
         destination = root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(text, encoding="utf-8")
+        # Stage and rename like write_support.write_raw does for apply/edit:
+        # writing destinations directly meant one crash mid-import left a
+        # truncated concept behind, detectable only by a later OKF001.
+        staged = destination.with_name(f".{destination.name}.okf-write.tmp")
+        staged.write_text(text, encoding="utf-8")
+        staged.replace(destination)
         created.append(relative)
     return {
         "created": sorted(created),
