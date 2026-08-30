@@ -1,5 +1,5 @@
 ---
-type: Benchmark
+type: BenchmarkResult
 title: Agent token cost — 1k deterministic trace
 description: Reproducible 1,000-document context trace comparing full Markdown, generic retrieval, and okf-parser
 date: 2026-08-29
