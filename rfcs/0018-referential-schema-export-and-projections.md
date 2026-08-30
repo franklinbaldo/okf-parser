@@ -102,10 +102,61 @@ the referenced document. Export therefore has two modes, chosen per run:
   `x-okf-references` metadata. This is what a row-shaped consumer wants.
 - `--refs=embed`: the field becomes the referenced contract.
 
-`--refs=embed` is what projections use, and it is where cycles become
-reachable, hence the `z.lazy`/`model_rebuild` rules above.
+The mode is per run, not per field. A projection already declares which
+members come composed and which stay keys, so a per-field CLI selector
+would be a second place to say the same thing — the thing this RFC exists
+to prevent.
 
-### 4. Declared projections
+Per-run embedding alone, however, is all-or-nothing, and a domain graph is
+usually cyclic: in the motivating bundle `Pessoa -> Processo -> Publicacao
+-> Processo` closes a loop, so a global embed renders nearly every node
+through `z.lazy` and every Pydantic model through `model_rebuild()`.
+Correct, unreadable.
+
+The missing control is therefore depth, not per-field granularity:
+
+- `--depth=N` bounds how many reference hops `--refs=embed` follows.
+  Beyond the bound, a reference degrades to its `--refs=key` form rather
+  than being dropped, so the shape stays honest about what it omitted.
+- `--depth=1`, the default when `--refs=embed` is given, embeds direct
+  children only. It answers the real request ("a `Processo` with its
+  publications") and makes cycles unreachable by construction instead of
+  survivable through `lazy`.
+- `--depth=0` is `--refs=key`. An unbounded depth must be asked for
+  explicitly (`--depth=max`), and only then do the cycle-rendering rules
+  in section 2 apply.
+
+### 3.1. Composite foreign keys
+
+`ForeignKeyConstraint` already carries `columns` and `referenced_columns`
+as ordered tuples, so the relational contract has described composite keys
+since RFC 0007. The identity model of the motivating consumer is composite
+by design — `(fonte, tipo, source_id)` namespaces every record read from a
+source — so `EventoProcessual -> Publicacao` is a composite reference in
+the first bundle that will use this feature. Excluding composite keys would
+ship a mechanism that fails on its own first case.
+
+The two modes are not symmetric, though:
+
+- **`--refs=key` supports composite keys.** Each participating column
+  carries `x-okf-references` naming the whole constraint and the column's
+  position in it. Nothing has to be renamed, because no field disappears.
+- **`--refs=embed`, run standalone, supports single-column keys only.**
+  Embedding replaces *N* fields with *one* object-valued member, and
+  outside a projection there is no name for it: `processo_fonte`,
+  `processo_tipo` and `processo_source_id` do not compose into an obvious
+  member name, and inventing one (longest common prefix, target type name)
+  would put a naming convention in the parser — which section 1 forbids.
+  A composite key under standalone `--refs=embed` is a normative error
+  naming the constraint and saying that embedding it requires a projection.
+- **Projections embed composite keys.** The member's `as` is the name, so
+  the ambiguity disappears at the point where an author already had to
+  choose one.
+
+This is a declared limit, not a silent gap: the error points at the
+mechanism that does support the case.
+
+### 5. Declared projections
 
 A projection is an OKF document with `type: Projection` in a bundle:
 
@@ -142,7 +193,7 @@ the same `--format` values, with the same reference rules. Projections do
 not become concept types: they have no documents, they are never
 materialized as typed relations, and they do not participate in `apply`.
 
-### 5. Emit type aliases in the Zod renderer
+### 6. Emit type aliases in the Zod renderer
 
 `render_zod` gains `--emit-types`, adding one line per contract:
 
@@ -189,7 +240,8 @@ Stacked, each step independently reviewable and releasable:
 1. this RFC;
 2. `RefNode` + `--relational-schema` + `--refs=key` metadata across the
    three formats;
-3. `--refs=embed`, with cycle rendering and its conformance corpus;
+3. `--refs=embed` with `--depth`, the composite-key error, and the
+   cycle-rendering corpus that `--depth=max` needs;
 4. `Projection` documents: parsing, resolution against the relational
    contract, and normative errors;
 5. projection export across the three formats;
@@ -198,11 +250,15 @@ Stacked, each step independently reviewable and releasable:
 
 ## Open questions
 
-1. Should `--refs=embed` be per-field rather than per-run? A projection can
-   express the same thing declaratively, so per-run may be enough for v1.
-2. Should a projection be allowed to exclude fields of its root type?
+1. Should a projection be allowed to exclude fields of its root type?
    Excluding is how a projection stays small, but it also lets a projection
    disagree with the type it projects. v1 says no; the composed shape is the
    root type plus declared members.
-3. Should composite foreign keys be embeddable in v1, or only single-column
-   ones?
+2. Is `--depth=max` worth shipping in v1 at all? It is the only mode that
+   needs cycle rendering, and a projection can always state the shape it
+   wants explicitly.
+
+Two questions from the first draft are now answered in sections 3 and 3.1:
+`--refs=embed` is per run, with `--depth` rather than per-field selection,
+and composite keys are supported by `--refs=key` and by projections, but
+rejected with a named error under standalone `--refs=embed`.
