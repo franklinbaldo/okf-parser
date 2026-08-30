@@ -48,28 +48,7 @@ def _run_query(
     )
 
 
-def test_skill_is_itself_a_typed_okf_concept() -> None:
-    report = validate_path(SKILL_ROOT)
-    assert report.is_conformant
-    assert report.concept_count == 1
-
-
-def test_recipes_are_bundled_pep723_code_not_skill_context() -> None:
-    skill = SKILL_PATH.read_text(encoding="utf-8")
-    recipe = SCRIPT_PATH.read_text(encoding="utf-8")
-    query_recipe = QUERY_SCRIPT_PATH.read_text(encoding="utf-8")
-
-    assert "scripts/python_codebase_to_okf.py" in skill
-    assert "scripts/query_codebase_okf.py" in skill
-    assert "# /// script" not in skill
-    for path, source in ((SCRIPT_PATH, recipe), (QUERY_SCRIPT_PATH, query_recipe)):
-        assert source.startswith('# /// script\n# requires-python = ">=3.12"\n')
-        assert '"okf-parser>=0.45.2,<0.46"' in source
-        compile(source, str(path), "exec")
-
-
-def test_recipe_generates_rich_queryable_deterministic_bundle(tmp_path: Path) -> None:
-    source = tmp_path / "source"
+def _write_fixture(source: Path) -> None:
     source.mkdir()
     (source / "app.py").write_text(
         '''"""Example module."""
@@ -97,14 +76,8 @@ def main() -> str:
         encoding="utf-8",
     )
 
-    output = tmp_path / "bundle"
-    first = _run_recipe(source, output)
-    assert first.returncode == 0, first.stderr
 
-    report = validate_path(output)
-    assert report.is_conformant
-    assert report.concept_count == 8
-
+def _assert_symbol_projection(output: Path) -> None:
     main_files = list((output / "symbols").glob("app-main-*.md"))
     assert len(main_files) == 2
 
@@ -127,6 +100,8 @@ def main() -> str:
     assert '"fields": [' in greeter_text
     assert '"prefix"' in greeter_text
 
+
+def _assert_call_projection(output: Path) -> None:
     call_files = list((output / "calls").glob("*.md"))
     assert len(call_files) == 2
     hello_call = next(
@@ -139,6 +114,8 @@ def main() -> str:
     assert "app.py::Greeter.hello@" in hello_call_text
     assert "navigation hints, not dispatch claims" in hello_call_text
 
+
+def _assert_query_projection(output: Path) -> None:
     query = _run_query(output, "--callee", "hello")
     assert query.returncode == 0, query.stderr
     results = json.loads(query.stdout)
@@ -154,6 +131,42 @@ def main() -> str:
     assert len(symbol_results) == 1
     assert symbol_results[0]["type"] == "CodeMethod"
     assert symbol_results[0]["signature"] == "def hello(name: str = 'world') -> str"
+
+
+def test_skill_is_itself_a_typed_okf_concept() -> None:
+    report = validate_path(SKILL_ROOT)
+    assert report.is_conformant
+    assert report.concept_count == 1
+
+
+def test_recipes_are_bundled_pep723_code_not_skill_context() -> None:
+    skill = SKILL_PATH.read_text(encoding="utf-8")
+    recipe = SCRIPT_PATH.read_text(encoding="utf-8")
+    query_recipe = QUERY_SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "scripts/python_codebase_to_okf.py" in skill
+    assert "scripts/query_codebase_okf.py" in skill
+    assert "# /// script" not in skill
+    for path, source in ((SCRIPT_PATH, recipe), (QUERY_SCRIPT_PATH, query_recipe)):
+        assert source.startswith('# /// script\n# requires-python = ">=3.12"\n')
+        assert '"okf-parser>=0.45.2,<0.46"' in source
+        compile(source, str(path), "exec")
+
+
+def test_recipe_generates_rich_queryable_deterministic_bundle(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    _write_fixture(source)
+
+    output = tmp_path / "bundle"
+    first = _run_recipe(source, output)
+    assert first.returncode == 0, first.stderr
+
+    report = validate_path(output)
+    assert report.is_conformant
+    assert report.concept_count == 8
+    _assert_symbol_projection(output)
+    _assert_call_projection(output)
+    _assert_query_projection(output)
 
     first_snapshot = _snapshot(output)
     second = _run_recipe(source, output, "--force")
