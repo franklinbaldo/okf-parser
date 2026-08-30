@@ -1,5 +1,5 @@
 ---
-type: Node
+type: Documentation
 title: Example node
 ---
 # Example node
