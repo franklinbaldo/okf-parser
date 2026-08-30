@@ -2,6 +2,18 @@ name: DuckDB Rust extension
 
 on:
   pull_request:
+    paths:
+      - "duckdb-extension/**"
+      - "okf-engine/**"
+      - ".github/workflows/duckdb-extension.yml"
+      - "Cargo.toml"
+  push:
+    branches: [main]
+    paths:
+      - "duckdb-extension/**"
+      - "okf-engine/**"
+      - ".github/workflows/duckdb-extension.yml"
+      - "Cargo.toml"
 
 permissions:
   contents: read
@@ -26,21 +38,52 @@ jobs:
           git -C duckdb-extension/extension-ci-tools checkout --detach a285602bf745d6ceaa704b5df47f08b00ca296ae
       - name: Build loadable development artifact
         run: make -C duckdb-extension configure debug
-      - name: Load artifact in stock DuckDB and query concepts
+      - name: Load artifact in stock DuckDB and query full read surface
         shell: bash
         run: |
           duckdb-extension/configure/venv/bin/python - <<'PY'
           import pathlib
+          import shutil
+          import tempfile
+
           import duckdb
 
-          root = pathlib.Path("duckdb-extension/test/knowledge").resolve()
+          source_root = pathlib.Path("duckdb-extension/test/knowledge").resolve()
+          temporary = tempfile.TemporaryDirectory(prefix="okf-duckdb-read-surface-")
+          root = pathlib.Path(temporary.name)
+          shutil.copytree(source_root, root, dirs_exist_ok=True)
+          (root / "bad.md").write_text("# Missing frontmatter\n", encoding="utf-8")
+          with (root / "node.md").open("a", encoding="utf-8") as handle:
+              handle.write("\n[Missing](missing.md)\n")
+
           extension = pathlib.Path("duckdb-extension/build/debug/okf.duckdb_extension").resolve()
           assert extension.is_file() and extension.stat().st_size > 0
+
           con = duckdb.connect(config={"allow_unsigned_extensions": "true"})
           con.execute(f"LOAD '{extension.as_posix()}'")
-          rows = con.execute(
+
+          concepts = con.execute(
               "SELECT concept_id, concept_type, title FROM okf_concepts(?)",
               [str(root)],
           ).fetchall()
-          assert rows == [("node", "Documentation", "Example node")], rows
+          assert concepts == [("node", "Documentation", "Example node")], concepts
+
+          links = con.execute(
+              "SELECT source_id, raw_target, target_id, exists FROM okf_links(?)",
+              [str(root)],
+          ).fetchall()
+          assert links == [("node", "missing.md", None, False)], links
+
+          reserved = con.execute(
+              "SELECT path, filename FROM okf_reserved(?)",
+              [str(root)],
+          ).fetchall()
+          assert reserved == [("index.md", "index.md")], reserved
+
+          diagnostics = con.execute(
+              "SELECT path, severity FROM okf_diagnostics(?) ORDER BY path, severity",
+              [str(root)],
+          ).fetchall()
+          assert diagnostics == [("bad.md", "error"), ("node.md", "warning")], diagnostics
+          temporary.cleanup()
           PY
