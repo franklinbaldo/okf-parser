@@ -12,6 +12,7 @@ when_to_use: >-
   decorators, bases, fields and syntactic call observations.
 scripts:
   - scripts/python_codebase_to_okf.py
+  - scripts/finalize_codebase_okf.py
   - scripts/query_codebase_okf.py
 compatibility: >-
   Standalone execution requires uv and Python 3.12+. The PEP 723 recipes install okf-parser for
@@ -54,6 +55,28 @@ uv run skills/codebase-to-okf/scripts/python_codebase_to_okf.py \
 ```
 
 Use repeated `--exclude-dir NAME` for project-specific generated or vendor directories.
+
+## Finalize producer-defined types
+
+After generation, make the derived bundle self-describing with the same type-spec lifecycle used by
+`okf-parser` itself:
+
+```bash
+uv run skills/codebase-to-okf/scripts/finalize_codebase_okf.py \
+  ./.derived/codebase-okf
+```
+
+The finalizer does not invent type-spec paths. It reuses the application service behind
+`okf-parser init`, lets that service scaffold the missing `docs/types/{slug}.md` files, authors the
+code-domain semantics only after the canonical paths exist, and repeats until the introduced `Spec`
+type is itself specified. It then requires normative coverage equivalent to:
+
+```bash
+uv run okf-parser check ./.derived/codebase-okf \
+  --require-spec 'docs/types/{slug}.md' --normative-spec
+```
+
+Running the finalizer again is intentionally a no-op when the bundle is already complete.
 
 ## Query before reopening source
 
@@ -111,11 +134,12 @@ a genuinely source-neutral primitive missing from `okf-parser`.
 ## Agent workflow
 
 1. Run the narrowest recipe that supports the source language.
-2. Inspect its compact JSON summary and validation result.
-3. Query the generated OKF before opening source files.
-4. Open source only when the generated facts are insufficient for the task.
-5. Treat candidate targets as candidates until a resolver establishes a stronger relation.
-6. Delete and regenerate derived knowledge whenever source or extraction policy changes.
+2. Finalize the generated bundle so every producer-defined type has a canonical normative spec.
+3. Inspect the compact JSON summaries and validation result.
+4. Query the generated OKF before opening source files.
+5. Open source only when the generated facts are insufficient for the task.
+6. Treat candidate targets as candidates until a resolver establishes a stronger relation.
+7. Delete and regenerate derived knowledge whenever source or extraction policy changes.
 
 ## Guardrails
 
@@ -130,5 +154,6 @@ a genuinely source-neutral primitive missing from `okf-parser`.
 
 A codebase projection is complete when extraction succeeds atomically, output is deterministic for
 unchanged input, every concept retains source-relative provenance, structural Markdown links
-resolve, `okf-parser` reports the bundle conformant, and semantic claims do not exceed the evidence
-available to the chosen frontend.
+resolve, every producer-defined type in use has a canonical normative specification,
+`okf-parser` reports the bundle conformant, and semantic claims do not exceed the evidence available
+to the chosen frontend.
