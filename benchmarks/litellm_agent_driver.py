@@ -26,12 +26,12 @@ def _usage(response: Any) -> dict[str, int]:  # noqa: ANN401
     total_tokens = getattr(usage, "total_tokens", None)
     if not isinstance(input_tokens, int) or not isinstance(output_tokens, int):
         message = "LiteLLM provider usage must include integer prompt/completion tokens"
-        raise RuntimeError(message)
+        raise TypeError(message)
     if total_tokens is None:
         total_tokens = input_tokens + output_tokens
     if not isinstance(total_tokens, int):
         message = "LiteLLM provider usage total_tokens must be an integer"
-        raise RuntimeError(message)
+        raise TypeError(message)
     return {
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
