@@ -85,19 +85,21 @@ The embedded program is tested as executable source.
 
 ### 3. PEP 723 contains recipe-only dependencies
 
-An embedded Python recipe declares:
+An embedded Python recipe declares a bounded dependency range whose lower bound is an already
+published release providing the generic API it consumes. For the initial recipe:
 
 ```python
 # /// script
 # requires-python = ">=3.12"
 # dependencies = [
-#   "okf-parser>=0.45.4",
+#   "okf-parser>=0.45.2,<0.46",
 # ]
 # ///
 ```
 
 Source-specific dependencies belong in that block. They do not enter the main package dependency
-set merely because one recipe needs them.
+set merely because one recipe needs them. The recipe must not require an unreleased repository
+version merely because it happens to be authored in that development cycle.
 
 A future Tree-sitter recipe can therefore carry its own grammar packages; a compiler-backed Rust
 recipe can choose a different implementation; neither choice changes the `okf-parser` install.
@@ -199,6 +201,8 @@ The recipe:
 
 - ignores common dependency/build/cache directories and accepts repeated `--exclude-dir` values;
 - uses source-relative paths and deterministic hashed filenames;
+- includes a definition's source line in generated symbol identity, so legal Python redefinitions
+  with the same qualified name do not silently overwrite each other;
 - parses all source files before mutating the output, so a syntax/UTF-8 failure does not create a
   partial projection;
 - refuses a non-empty output unless `--force` is explicit;
@@ -214,10 +218,11 @@ for every code-intelligence workload.
 Repository tests must treat the embedded code as code rather than prose. The implementation test:
 
 1. extracts the uniquely marked Python fence from `SKILL.md`;
-2. asserts that the PEP 723 script metadata is present;
-3. executes the extracted program against a temporary Python codebase in the current test
-   environment;
-4. verifies the generated bundle is conformant through `okf-parser`;
+2. asserts that the PEP 723 script metadata is present and names an installable release range;
+3. executes the extracted program against a temporary Python codebase that includes a legal symbol
+   redefinition;
+4. verifies the generated bundle is conformant through `okf-parser` and that both definitions
+   survive as distinct concepts;
 5. reruns with `--force` and verifies byte-for-byte deterministic output.
 
 CI does not need to invoke `uv` or download the package to test this repository-owned recipe; PEP
