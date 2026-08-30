@@ -44,6 +44,21 @@ if TYPE_CHECKING:
     from okf_parser.duckdb_types import DuckDBLogicalType
 
 
+def _restore_projection_booleans(frontmatter: dict[str, object]) -> None:
+    """Restore bools lost by the bundle's scalar-normalized frontmatter view."""
+    include = frontmatter.get("include")
+    if not isinstance(include, list):
+        return
+    for member in include:
+        if not isinstance(member, dict):
+            continue
+        optional = member.get("optional")
+        if optional == "true":
+            member["optional"] = True
+        elif optional == "false":
+            member["optional"] = False
+
+
 def documents_by_type(
     path: str,
     exclude: Sequence[str],
@@ -61,7 +76,10 @@ def documents_by_type(
         if not isinstance(frontmatter, dict):
             message = f"concept {row.get('path')!r} frontmatter is not an object"
             raise SchemaExportError(message)
-        by_type.setdefault(concept_type, []).append(cast("dict[str, object]", frontmatter))
+        typed_frontmatter = cast("dict[str, object]", frontmatter)
+        if concept_type == PROJECTION_TYPE:
+            _restore_projection_booleans(typed_frontmatter)
+        by_type.setdefault(concept_type, []).append(typed_frontmatter)
     return by_type
 
 
