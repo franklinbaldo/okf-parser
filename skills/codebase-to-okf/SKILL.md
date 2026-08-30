@@ -14,6 +14,7 @@ scripts:
   - scripts/codebase_to_okf.py
   - scripts/python_codebase_to_okf.py
   - scripts/finalize_codebase_okf.py
+  - scripts/resolve_codebase_okf.py
   - scripts/query_codebase_okf.py
 compatibility: >-
   Standalone execution requires uv and Python 3.12+. The PEP 723 recipes install okf-parser for
@@ -31,6 +32,7 @@ Keep this boundary:
 source code
   → source-specific recipes in this skill
   → derived OKF concepts and observations
+  → optional source-specific resolution claims
   → okf-parser generic validation / graph / relations / schema / search
 ```
 
@@ -59,6 +61,25 @@ uv run skills/codebase-to-okf/scripts/codebase_to_okf.py \
 Use repeated `--exclude-dir NAME` for project-specific generated or vendor directories. A successful
 JSON result reports both source-concept counts and the generated specification count, with
 `normative_specs: true`.
+
+## Resolve local imports conservatively
+
+Resolution is a separate enrichment step because syntax observations and inferred relations have
+different authority. The first resolver only maps import targets that match a unique `CodeModule`
+inside the projected source tree:
+
+```bash
+uv run skills/codebase-to-okf/scripts/resolve_codebase_okf.py \
+  ./.derived/codebase-okf
+```
+
+It never rewrites the original `CodeImport`. Instead it emits separate `CodeImportResolution`
+concepts with `source-tree-resolved` or `source-tree-partial` status and a versioned
+`resolution_method`. Imports with no local module match remain only as syntax observations.
+
+A source-tree match is deliberately weaker than a runtime import claim: Python import hooks,
+`sys.path`, environment differences, rebinding, monkey-patching and call dispatch remain outside
+what this resolver asserts.
 
 ## Lower-level generation and type finalization
 
@@ -99,6 +120,10 @@ uv run skills/codebase-to-okf/scripts/query_codebase_okf.py \
 uv run skills/codebase-to-okf/scripts/query_codebase_okf.py \
   ./.derived/codebase-okf --callee hello
 
+# Which import-resolution claims point at a projected local module?
+uv run skills/codebase-to-okf/scripts/query_codebase_okf.py \
+  ./.derived/codebase-okf --dependency pkg.utils
+
 # Other useful filters
 uv run skills/codebase-to-okf/scripts/query_codebase_okf.py \
   ./.derived/codebase-okf --type CodeClass --source services/
@@ -116,8 +141,11 @@ The Python reference frontend uses the standard-library AST and emits producer-d
 - `CodeClass` — class definitions, including bases, decorators and direct class fields;
 - `CodeFunction` — functions outside an immediate class scope;
 - `CodeMethod` — methods, including signature, parameters, return annotation and docstring;
-- `CodeImport` — import statements with source location and unresolved status;
+- `CodeImport` — immutable syntax-level import observations;
 - `CodeCall` — syntactic call observations with caller, callee text, expression and source location.
+
+Optional enrichment recipes may add claim types such as `CodeImportResolution`; they do not erase or
+upgrade the authority of the underlying observations.
 
 Symbols retain source-relative path, qualified name and line range. Legal same-name redefinitions
 remain distinct through source-line identity.
@@ -142,10 +170,11 @@ a genuinely source-neutral primitive missing from `okf-parser`.
 
 1. Run the narrowest one-shot recipe that supports the source language.
 2. Inspect its compact JSON summary and normative validation result.
-3. Query the generated OKF before opening source files.
-4. Open source only when the generated facts are insufficient for the task.
-5. Treat candidate targets as candidates until a resolver establishes a stronger relation.
-6. Delete and regenerate derived knowledge whenever source or extraction policy changes.
+3. Run an optional resolver only when the task benefits from stronger derived relations.
+4. Query the generated OKF before opening source files.
+5. Open source only when the generated facts are insufficient for the task.
+6. Keep syntax observations, source-tree resolution and runtime claims epistemically distinct.
+7. Delete and regenerate derived knowledge whenever source or extraction policy changes.
 
 ## Guardrails
 
@@ -162,4 +191,4 @@ A codebase projection is complete when extraction succeeds atomically, output is
 unchanged input, every concept retains source-relative provenance, structural Markdown links
 resolve, every producer-defined type in use has a canonical normative specification,
 `okf-parser` reports the bundle conformant, and semantic claims do not exceed the evidence available
-to the chosen frontend.
+to the chosen frontend or resolver.
