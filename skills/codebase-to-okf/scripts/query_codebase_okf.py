@@ -133,7 +133,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--caller", help="filter call observations by caller")
     parser.add_argument("--callee", help="filter call observations by callee")
     parser.add_argument("--source", help="filter by source-relative path")
-    parser.add_argument("--dependency", help="filter source-tree import resolutions by local module")
+    parser.add_argument(
+        "--dependency",
+        help="filter source-tree import resolutions by local module",
+    )
     parser.add_argument("--limit", type=int, default=10, help="maximum results")
     parser.add_argument(
         "--full",
