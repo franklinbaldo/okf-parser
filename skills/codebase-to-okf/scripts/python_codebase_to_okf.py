@@ -4,7 +4,6 @@
 #   "okf-parser>=0.45.2,<0.46",
 # ]
 # ///
-# ruff: noqa
 """Project Python source into a deterministic, disposable OKF bundle."""
 
 from __future__ import annotations

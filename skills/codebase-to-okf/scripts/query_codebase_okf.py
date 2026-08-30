@@ -4,7 +4,6 @@
 #   "okf-parser>=0.45.2,<0.46",
 # ]
 # ///
-# ruff: noqa
 """Query a codebase-to-OKF projection through okf-parser's generic Bundle API."""
 
 from __future__ import annotations
