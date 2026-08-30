@@ -44,7 +44,7 @@ def _run_recipe(
 
 
 def test_skill_is_itself_a_typed_okf_concept() -> None:
-    report = validate_path(SKILL_PATH)
+    report = validate_path(SKILL_PATH.parent)
     assert report.is_conformant
     assert report.concept_count == 1
 
