@@ -43,6 +43,12 @@ def _run_recipe(
     )
 
 
+def test_skill_is_itself_a_typed_okf_concept() -> None:
+    report = validate_path(SKILL_PATH)
+    assert report.is_conformant
+    assert report.concept_count == 1
+
+
 def test_embedded_recipe_declares_pep723_metadata() -> None:
     recipe = _recipe_source()
     assert recipe.startswith("# /// script\n")
@@ -66,12 +72,8 @@ def main() -> str:
     return Greeter().hello(\"world\")
 
 
-def replaceable() -> int:
-    return 1
-
-
-def replaceable() -> int:
-    return 2
+def main() -> str:
+    return \"second definition\"
 """,
         encoding="utf-8",
     )
@@ -85,8 +87,9 @@ def replaceable() -> int:
 
     report = validate_path(output)
     assert report.is_conformant
-    assert report.concept_count == 7
-    assert len(list((output / "symbols").glob("*.md"))) == 5
+    assert report.concept_count == 6
+    symbol_files = list((output / "symbols").glob("app-main-*.md"))
+    assert len(symbol_files) == 2
     first_snapshot = _snapshot(output)
 
     second = _run_recipe(script, source, output, "--force")
