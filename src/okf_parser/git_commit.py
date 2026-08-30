@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping
+from typing import TYPE_CHECKING, cast
 
 from okf_parser.digests import canonical_json, normalize_newlines, parsed_digest, source_digest
-from okf_parser.models import YamlValue
 from okf_parser.parser import DocumentParseError, parse_document_text
+
+if TYPE_CHECKING:
+    from okf_parser.models import YamlValue
 
 _RESERVED_KEYS = frozenset(
     {
@@ -38,6 +41,7 @@ class GitCommitMessageError(ValueError):
     """Report a structural error in a subject-first OKF commit message."""
 
     def __init__(self, code: str, message: str, *, line: int | None = None) -> None:
+        """Store a stable error code and optional source line."""
         super().__init__(message)
         self.code = code
         self.line = line
@@ -58,9 +62,7 @@ class GitCommitMessage:
     @property
     def concept_type(self) -> str:
         """Return the effective semantic OKF type."""
-        value = self.effective_frontmatter["type"]
-        assert isinstance(value, str)
-        return value
+        return cast(str, self.effective_frontmatter["type"])
 
 
 def _parse_metadata(block: str) -> dict[str, YamlValue]:
@@ -69,7 +71,9 @@ def _parse_metadata(block: str) -> dict[str, YamlValue]:
     try:
         parsed = parse_document_text(Path("<git-commit-metadata>"), source)
     except DocumentParseError as exc:
-        raise GitCommitMessageError("GIT_MESSAGE_YAML", str(exc)) from exc
+        code = "GIT_MESSAGE_YAML"
+        message = str(exc)
+        raise GitCommitMessageError(code, message) from exc
     return dict(parsed.frontmatter)
 
 
@@ -77,21 +81,17 @@ def _validate_metadata(metadata: dict[str, YamlValue]) -> str:
     reserved = sorted(set(metadata) & _RESERVED_KEYS)
     if reserved:
         joined = ", ".join(reserved)
-        raise GitCommitMessageError(
-            "GIT_MESSAGE_RESERVED_KEY",
-            f"commit metadata uses adapter-owned key(s): {joined}",
-            line=3,
-        )
+        code = "GIT_MESSAGE_RESERVED_KEY"
+        message = f"commit metadata uses adapter-owned key(s): {joined}"
+        raise GitCommitMessageError(code, message, line=3)
 
     if "type" not in metadata:
         return "Commit"
     raw_type = metadata["type"]
     if not isinstance(raw_type, str) or not raw_type.strip():
-        raise GitCommitMessageError(
-            "GIT_MESSAGE_TYPE",
-            "commit metadata type must be a non-empty string",
-            line=3,
-        )
+        code = "GIT_MESSAGE_TYPE"
+        message = "commit metadata type must be a non-empty string"
+        raise GitCommitMessageError(code, message, line=3)
     return raw_type.strip()
 
 
@@ -99,11 +99,9 @@ def _find_closing_delimiter(envelope_source: str) -> tuple[str, str, int]:
     """Return metadata block, post-close text and the closing line number."""
     lines = envelope_source.splitlines(keepends=True)
     if not lines or lines[0].removesuffix("\n") != "--- okf":
-        raise GitCommitMessageError(
-            "GIT_MESSAGE_ENVELOPE",
-            "structured commit metadata must start with exact '--- okf'",
-            line=3,
-        )
+        code = "GIT_MESSAGE_ENVELOPE"
+        message = "structured commit metadata must start with exact '--- okf'"
+        raise GitCommitMessageError(code, message, line=3)
 
     offset = len(lines[0])
     for index, line in enumerate(lines[1:], start=1):
@@ -114,11 +112,9 @@ def _find_closing_delimiter(envelope_source: str) -> tuple[str, str, int]:
             return metadata.removesuffix("\n"), after, index + 3
         offset += len(line)
 
-    raise GitCommitMessageError(
-        "GIT_MESSAGE_UNTERMINATED_ENVELOPE",
-        "structured commit metadata has no closing '---' delimiter",
-        line=3,
-    )
+    code = "GIT_MESSAGE_UNTERMINATED_ENVELOPE"
+    message = "structured commit metadata has no closing '---' delimiter"
+    raise GitCommitMessageError(code, message, line=3)
 
 
 def parse_git_commit_message(source: str) -> GitCommitMessage:
@@ -127,11 +123,9 @@ def parse_git_commit_message(source: str) -> GitCommitMessage:
     normalized = normalize_newlines(source).removeprefix("\ufeff")
     subject, separator, remainder = normalized.partition("\n")
     if not subject.strip():
-        raise GitCommitMessageError(
-            "GIT_MESSAGE_EMPTY_SUBJECT",
-            "commit subject must be non-empty",
-            line=1,
-        )
+        code = "GIT_MESSAGE_EMPTY_SUBJECT"
+        message = "commit subject must be non-empty"
+        raise GitCommitMessageError(code, message, line=1)
 
     has_blank_separator = separator == "\n" and remainder.startswith("\n")
     candidate = remainder[1:] if has_blank_separator else remainder
@@ -142,17 +136,14 @@ def parse_git_commit_message(source: str) -> GitCommitMessage:
     if has_envelope:
         block, after, closing_line = _find_closing_delimiter(candidate)
         if after and not after.startswith("\n"):
-            raise GitCommitMessageError(
-                "GIT_MESSAGE_BODY_SEPARATOR",
-                "structured commit metadata must be followed by a blank line before the body",
-                line=closing_line + 1,
-            )
+            code = "GIT_MESSAGE_BODY_SEPARATOR"
+            message = "structured commit metadata must be followed by a blank line before the body"
+            raise GitCommitMessageError(code, message, line=closing_line + 1)
         body = after[1:] if after.startswith("\n") else ""
         if any(line == "--- okf" for line in body.splitlines()):
-            raise GitCommitMessageError(
-                "GIT_MESSAGE_DUPLICATE_ENVELOPE",
-                "commit message contains more than one OKF envelope",
-            )
+            code = "GIT_MESSAGE_DUPLICATE_ENVELOPE"
+            message = "commit message contains more than one OKF envelope"
+            raise GitCommitMessageError(code, message)
         metadata = _parse_metadata(block)
     else:
         metadata = {}
@@ -182,11 +173,9 @@ def validate_git_commit_message(
     """Validate one prospective commit message and return its canonical projection."""
     parsed = parse_git_commit_message(source)
     if require_envelope and not parsed.has_envelope:
-        raise GitCommitMessageError(
-            "GIT_MESSAGE_ENVELOPE_REQUIRED",
-            "repository policy requires an OKF commit envelope",
-            line=3,
-        )
+        code = "GIT_MESSAGE_ENVELOPE_REQUIRED"
+        message = "repository policy requires an OKF commit envelope"
+        raise GitCommitMessageError(code, message, line=3)
     return parsed
 
 
