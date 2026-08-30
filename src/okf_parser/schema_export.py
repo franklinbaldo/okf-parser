@@ -52,11 +52,12 @@ def _restore_projection_booleans(frontmatter: dict[str, object]) -> None:
     for member in include:
         if not isinstance(member, dict):
             continue
-        optional = member.get("optional")
+        typed_member = cast("dict[str, object]", member)
+        optional = typed_member.get("optional")
         if optional == "true":
-            member["optional"] = True
+            typed_member["optional"] = True
         elif optional == "false":
-            member["optional"] = False
+            typed_member["optional"] = False
 
 
 def documents_by_type(
