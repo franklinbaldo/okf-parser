@@ -12,7 +12,8 @@ from okf_parser.declared_schema import (
     declared_schema_relative_path,
     parse_declared_schema,
 )
-from okf_parser.projections import PROJECTION_TYPE, compile_projections, load_projections
+from okf_parser.projection_export import compile_projections
+from okf_parser.projections import PROJECTION_TYPE, load_projections
 from okf_parser.pydantic_projection import (
     build_dynamic_pydantic_models,
     render_pydantic_source,
