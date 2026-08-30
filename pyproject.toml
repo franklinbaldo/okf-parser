@@ -1,6 +1,6 @@
 [project]
 name = "okf-parser"
-version = "0.38.0"
+version = "0.45.4"
 description = "Relational inspection and validation for Open Knowledge Format bundles"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -23,13 +23,12 @@ dependencies = [
   "ruamel.yaml>=0.18,<0.20",
 ]
 
-[project.scripts]
-okf-parser = "okf_parser.cli:main"
-okf-parser-mcp = "okf_parser.cli:run_mcp_stdio"
-okf-commit-msg = "okf_parser.git_commit_cli:main"
+[project.optional-dependencies]
+graphql = ["graphql-core>=3.2,<4"]
 
 [dependency-groups]
 dev = [
+  "graphql-core>=3.2,<4",
   "pytest>=8,<10",
   "pytest-cov>=6,<7",
   "ruff>=0.15,<0.16",
@@ -38,16 +37,8 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.hatch.build.targets.sdist]
-# Repository automation is not part of the published source distribution: the
-# release workflows are a privileged CI boundary, not consumer-installable code.
-exclude = [
-  ".github",
-  ".gitignore",
-]
+requires = ["maturin>=1.10,<2"]
+build-backend = "maturin"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -64,31 +55,17 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["ALL"]
-ignore = [
-  "COM812",
-  "ISC001",
-]
+ignore = ["COM812", "ISC001"]
 
 [tool.ruff.lint.flake8-type-checking]
-# Pydantic evaluates model annotations at runtime, so their imports must stay
-# outside a type-checking block.
 runtime-evaluated-base-classes = ["pydantic.BaseModel"]
 
 [tool.ruff.lint.per-file-ignores]
-# PLR0913: every listed function's arguments are independent public CLI/API
-# flags or distinct compile/write-path inputs, not a sign the function
-# should take fewer of them - see each module's docstring.
-# S608: the only dynamic SQL in these files quotes identifiers and
-# '-doubles string literals rather than interpolating raw input (apply.py's
-# `_build_sugar_sql`, bundle_import.py's source-path replacement scan).
-# A002: cli.py's `type` parameters name the domain concept `type`, matching
-# every other surface (frontmatter, service functions) for the same flag.
-# BLE001: apply.py's frontmatter round-trip probe treats any load/dump
-# failure alike, by construction - see `_round_trips_losslessly`.
 "src/okf_parser/apply.py" = ["BLE001", "PLR0913", "S608"]
 "src/okf_parser/bundle_import.py" = ["PLR0913", "S608"]
 "src/okf_parser/declared_schema.py" = ["S608"]
 "src/okf_parser/duckdb.py" = ["PLR0913"]
+"src/okf_parser/graphql_adapter.py" = ["PLR0913"]
 "src/okf_parser/typed_tables.py" = ["S608"]
 "src/okf_parser/cli.py" = ["A002", "PLR0913", "T201"]
 "src/okf_parser/schema_export.py" = ["PLR0913"]
@@ -105,7 +82,15 @@ include = [
 ]
 
 [tool.ty.overrides.rules]
-# Pydantic intentionally uses a non-None annotation with a None Field default
-# to represent "may be absent, but explicit null is invalid". Runtime tests pin
-# that behavior; ty currently treats Field(default=None) as a plain assignment.
 invalid-assignment = "ignore"
+
+[tool.maturin]
+manifest-path = "rust-core/Cargo.toml"
+bindings = "bin"
+module-name = "okf_parser"
+python-source = "src"
+python-packages = ["okf_parser"]
+strip = true
+locked = true
+sdist-generator = "git"
+exclude = [{ path = ".github/**", format = "sdist" }]

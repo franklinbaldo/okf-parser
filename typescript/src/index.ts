@@ -13,7 +13,6 @@ export {
   isReservedDocument,
   iterHeadings,
   iterMarkdownLinks,
-  loadBundle,
   looksLikeFrontmatterLink,
   parseDocument,
   parseDocumentContent,
@@ -38,13 +37,8 @@ export type {
   ReservedRecord,
   Severity,
 } from "./core.js";
-export {
-  GitCommitMessageError,
-  formatGitCommitMessage,
-  parseGitCommitMessage,
-  validateGitCommitMessage,
-} from "./git-commit.js";
-export type { GitCommitMessage } from "./git-commit.js";
+export { loadBundle } from "./engine.js";
+export type { EngineLoadOptions } from "./engine.js";
 export { ingestDocuments } from "./ingestion.js";
 export type {
   DocumentEnvelope,
@@ -102,7 +96,14 @@ export {
   typeSlug,
 } from "./type-specs.js";
 export { PROTOCOL_VERSION } from "./version.js";
-export { RustCoreError, rustLoadBundle, rustMarkdownFactsBatch } from "./rust-core.js";
+export {
+  RustCoreError,
+  packagedRustCore,
+  resolveRustCore,
+  rustLoadBundle,
+  rustMarkdownFactsBatch,
+} from "./rust-core.js";
+export type { EngineMode } from "./rust-core.js";
 import { PROTOCOL_VERSION } from "./version.js";
 
 export const capabilityManifest = Object.freeze({

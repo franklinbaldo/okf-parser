@@ -1,3 +1,10 @@
+#!/usr/bin/env -S uv run --script
+#
+# /// script
+# requires-python = ">=3.12"
+# dependencies = [
+# ]
+# ///
 """Validate synchronized release metadata and artifact bytes."""
 
 from __future__ import annotations
@@ -25,14 +32,49 @@ ACTION_REF: Final = re.compile(
 PROTOCOL_VERSION: Final = re.compile(
     r'^export const PROTOCOL_VERSION = "(?P<version>[^"]+)";\s*$', re.MULTILINE
 )
-KINDS: Final = ("python-wheel", "python-sdist", "npm-parser", "npm-duckdb")
-Kind = Literal["python-wheel", "python-sdist", "npm-parser", "npm-duckdb"]
+# One `bindings="bin"` maturin wheel per supported platform — no separate
+# `okf-parser-native` companion package (RFC: single public `okf-parser`
+# distribution, Rust embedded). Each wheel is `py3-none-<platform tag>`,
+# never `py3-none-any`: PyPI rejects unqualified `linux_x86_64`/`macosx_*`
+# platform tags on binary wheels (only `manylinux_*`/`musllinux_*` are
+# accepted for Linux), which is exactly what silently broke the v0.41.3
+# release — see okf-parser#147. The wheel-pattern glob below is
+# deliberately loose on the exact manylinux policy number
+# (`manylinux*` not `manylinux_2_28`) so bumping the manylinux container
+# image in the workflow doesn't also require editing this contract.
+WHEEL_KINDS: Final = (
+    "python-wheel-linux-x86_64",
+    "python-wheel-linux-aarch64",
+    "python-wheel-windows-x86_64",
+    "python-wheel-macos-x86_64",
+    "python-wheel-macos-arm64",
+)
+WHEEL_PATTERNS: Final[dict[str, str]] = {
+    "python-wheel-linux-x86_64": "okf_parser-{version}-py3-none-manylinux*_x86_64.whl",
+    "python-wheel-linux-aarch64": "okf_parser-{version}-py3-none-manylinux*_aarch64.whl",
+    "python-wheel-windows-x86_64": "okf_parser-{version}-py3-none-win_amd64.whl",
+    "python-wheel-macos-x86_64": "okf_parser-{version}-py3-none-macosx_*_x86_64.whl",
+    "python-wheel-macos-arm64": "okf_parser-{version}-py3-none-macosx_*_arm64.whl",
+}
+KINDS: Final = (*WHEEL_KINDS, "python-sdist", "npm-parser", "npm-duckdb", "npm-native")
+Kind = Literal[
+    "python-wheel-linux-x86_64",
+    "python-wheel-linux-aarch64",
+    "python-wheel-windows-x86_64",
+    "python-wheel-macos-x86_64",
+    "python-wheel-macos-arm64",
+    "python-sdist",
+    "npm-parser",
+    "npm-duckdb",
+    "npm-native",
+]
 Artifact = dict[str, object]
 ROOT_PREFIXES: Final[dict[str, str | None]] = {
-    "python-wheel": None,
+    **dict.fromkeys(WHEEL_KINDS),
     "python-sdist": "okf_parser-{version}/",
     "npm-parser": "package/",
     "npm-duckdb": "package/",
+    "npm-native": "package/",
 }
 FORBIDDEN_DIRECTORIES: Final = frozenset(
     {
@@ -110,11 +152,12 @@ class ContentPolicy:
     forbidden_prefixes: tuple[str, ...] = ()
 
 
+_WHEEL_CONTENT_POLICY: Final = ContentPolicy(
+    required=("okf_parser/__init__.py", "okf_parser/cli.py", "okf_parser/parser.py"),
+    forbidden_prefixes=("tests/", "scripts/", "typescript/", "typescript-duckdb/"),
+)
 CONTENT_POLICIES: Final[dict[str, ContentPolicy]] = {
-    "python-wheel": ContentPolicy(
-        required=("okf_parser/__init__.py", "okf_parser/cli.py", "okf_parser/parser.py"),
-        forbidden_prefixes=("tests/", "scripts/", "typescript/", "typescript-duckdb/"),
-    ),
+    **dict.fromkeys(WHEEL_KINDS, _WHEEL_CONTENT_POLICY),
     "python-sdist": ContentPolicy(
         required=("PKG-INFO", "README.md", "pyproject.toml", "src/okf_parser/__init__.py"),
         forbidden_prefixes=(),
@@ -140,6 +183,10 @@ CONTENT_POLICIES: Final[dict[str, ContentPolicy]] = {
             "dist/index.d.ts",
             "dist/cli.js",
         ),
+        forbidden_prefixes=("src/", "test/", "scripts/", "tsconfig"),
+    ),
+    "npm-native": ContentPolicy(
+        required=("package.json", "README.md", "bin/okf-core"),
         forbidden_prefixes=("src/", "test/", "scripts/", "tsconfig"),
     ),
 }
@@ -235,7 +282,12 @@ def _verify_npm_manifest(path: Path, package: str, version: str) -> dict[str, ob
 
 def _verify_npm_contract(root: Path, version: str) -> None:
     parser_path = root / "typescript" / "package.json"
-    _verify_npm_manifest(parser_path, "okf-parser", version)
+    parser = _verify_npm_manifest(parser_path, "okf-parser", version)
+    optional = _mapping(parser.get("optionalDependencies"), "optionalDependencies")
+    if _string(optional, "okf-parser-native-linux-x64", "optionalDependencies") != version:
+        _fail(f"native optional dependency must be {version}")
+    native_path = root / "native-npm-linux-x64" / "package.json"
+    _verify_npm_manifest(native_path, "okf-parser-native-linux-x64", version)
     adapter_path = root / "typescript-duckdb" / "package.json"
     adapter = _verify_npm_manifest(adapter_path, "okf-parser-duckdb", version)
     peers = _mapping(adapter.get("peerDependencies"), "peerDependencies")
@@ -268,11 +320,51 @@ def _verify_readme_action(root: Path, version: str) -> None:
 
 
 def _verify_changelog(root: Path, version: str) -> Path:
-    path = root / "changelog" / f"{version}.md"
-    metadata = _frontmatter(path)
-    if metadata.get("type") != "Release" or metadata.get("title") != f"okf-parser {version}":
-        _fail(f"changelog metadata does not identify okf-parser {version}")
-    return path
+    """Check the release-note fragments this version publishes.
+
+    A version identifies a release, not a pull request: several changes land
+    together under one number, so each contributes a fragment to
+    `changelog/<version>/` rather than competing for a single file. The release
+    needs at least one, and each must be a readable note -- the assembled body
+    is what reaches the GitHub Release.
+    """
+    directory = root / "changelog" / version
+    if not directory.is_dir():
+        _fail(f"changelog/{version}/ does not exist; a release needs at least one note fragment")
+    fragments = sorted(path for path in directory.glob("*.md") if path.is_file())
+    if not fragments:
+        _fail(f"changelog/{version}/ has no *.md fragment")
+    for fragment in fragments:
+        metadata = _frontmatter(fragment)
+        if metadata.get("type") != "Release Note":
+            _fail(f"{fragment.relative_to(root).as_posix()} must declare type: Release Note")
+        if not metadata.get("title"):
+            _fail(f"{fragment.relative_to(root).as_posix()} must declare a title")
+    return directory
+
+
+def _verify_rust_crates(root: Path, version: str) -> None:
+    """Check the Rust crate versions against the workspace version.
+
+    docs/releasing.md lists "the Rust crate version" among what verify-source
+    requires, but nothing read any Cargo.toml and okf-engine silently drifted
+    to 0.39.1 while the workspace published 0.45.0 (issue #172). rust-core
+    additionally pins okf-engine as an internal path dependency, so all three
+    numbers must move together.
+    """
+    for crate_root, name in ((root / "okf-engine", "okf-engine"), (root / "rust-core", "okf-core")):
+        path = crate_root / "Cargo.toml"
+        try:
+            manifest = tomllib.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
+            _fail(f"cannot read {path}: {exc}")
+        package = _mapping(manifest.get("package"), f"{path} [package]")
+        if _string(package, "version", str(path)) != version:
+            _fail(f"{name} crate version must be {version}")
+    dependencies = _mapping(manifest.get("dependencies"), "rust-core/Cargo.toml dependencies")
+    internal = _mapping(dependencies.get("okf-engine"), "rust-core okf-engine dependency")
+    if _string(internal, "version", "rust-core okf-engine dependency") != version:
+        _fail(f"rust-core internal okf-engine dependency must be {version}")
 
 
 def verify_source(root: Path, tag: str | None = None) -> SourceContract:
@@ -280,6 +372,7 @@ def verify_source(root: Path, tag: str | None = None) -> SourceContract:
     version = _project_version(root)
     _verify_npm_contract(root, version)
     _verify_protocol(root, version)
+    _verify_rust_crates(root, version)
     changelog = _verify_changelog(root, version)
     _verify_readme_action(root, version)
     if tag is not None and tag != f"v{version}":
@@ -289,11 +382,14 @@ def verify_source(root: Path, tag: str | None = None) -> SourceContract:
 
 def _expected(version: str) -> tuple[ExpectedArtifact, ...]:
     return (
-        ExpectedArtifact(
-            "python-wheel",
-            "okf-parser",
-            "python",
-            pattern=f"okf_parser-{version}-*.whl",
+        *(
+            ExpectedArtifact(
+                kind,
+                "okf-parser",
+                "python",
+                pattern=WHEEL_PATTERNS[kind].format(version=version),
+            )
+            for kind in WHEEL_KINDS
         ),
         ExpectedArtifact(
             "python-sdist",
@@ -312,6 +408,12 @@ def _expected(version: str) -> tuple[ExpectedArtifact, ...]:
             "okf-parser-duckdb",
             "npm",
             filename=f"okf-parser-duckdb-{version}.tgz",
+        ),
+        ExpectedArtifact(
+            "npm-native",
+            "okf-parser-native-linux-x64",
+            "native-npm",
+            filename=f"okf-parser-native-linux-x64-{version}.tgz",
         ),
     )
 
@@ -385,7 +487,7 @@ def _tar_names(path: Path, kind: Kind) -> list[str]:
 
 
 def _archive_names(path: Path, kind: Kind) -> list[str]:
-    if kind == "python-wheel":
+    if kind in WHEEL_KINDS:
         try:
             with zipfile.ZipFile(path) as archive:
                 return [item.filename for item in archive.infolist() if not item.is_dir()]
@@ -457,7 +559,7 @@ def verify_contents(root: Path, manifest_path: Path) -> dict[str, object]:
 
 
 def _identity(path: Path, kind: Kind) -> tuple[str, str]:
-    if kind == "python-wheel":
+    if kind in WHEEL_KINDS:
         return _wheel_identity(path)
     data = _tar_metadata(path, kind)
     if kind == "python-sdist":
@@ -508,7 +610,7 @@ def _artifact_record(
 def _reject_unexpected(release: Path, expected_paths: set[Path]) -> None:
     actual_paths = {
         path.resolve()
-        for name in ("python", "npm")
+        for name in ("python", "npm", "native-npm")
         for path in (release / name).iterdir()
         if path.is_file()
     }

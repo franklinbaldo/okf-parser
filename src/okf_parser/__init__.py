@@ -1,13 +1,16 @@
 """Relational inspection and validation for Open Knowledge Format bundles."""
 
-from okf_parser.bundle import Bundle, load_bundle, validate_path
+from okf_parser.bundle import Bundle, validate_path
+from okf_parser.concepts import concept, resolve_relations
 from okf_parser.edit import EditError, preview_concept_edit, write_concept_edit
-from okf_parser.git_commit import (
-    GitCommitMessage,
-    GitCommitMessageError,
-    format_git_commit_message,
-    parse_git_commit_message,
-    validate_git_commit_message,
+from okf_parser.engine import load_bundle
+from okf_parser.graphql_adapter import (
+    GraphQLAdapterUnavailableError,
+    GraphQLNameCollisionError,
+    GraphQLReadAdapter,
+    GraphQLResult,
+    build_graphql_schema,
+    export_graphql_sdl,
 )
 from okf_parser.ingestion import DocumentEnvelope, IngestionCapability, ingest_documents
 from okf_parser.models import Severity, ValidationReport, Violation
@@ -17,19 +20,22 @@ __all__ = [
     "Bundle",
     "DocumentEnvelope",
     "EditError",
-    "GitCommitMessage",
-    "GitCommitMessageError",
+    "GraphQLAdapterUnavailableError",
+    "GraphQLNameCollisionError",
+    "GraphQLReadAdapter",
+    "GraphQLResult",
     "IngestionCapability",
     "Severity",
     "TypedRelations",
     "ValidationReport",
     "Violation",
-    "format_git_commit_message",
+    "build_graphql_schema",
+    "concept",
+    "export_graphql_sdl",
     "ingest_documents",
     "load_bundle",
-    "parse_git_commit_message",
     "preview_concept_edit",
-    "validate_git_commit_message",
+    "resolve_relations",
     "validate_path",
     "write_concept_edit",
 ]
