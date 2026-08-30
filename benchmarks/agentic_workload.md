@@ -1,5 +1,5 @@
 ---
-type: BenchmarkProtocol
+type: Documentation
 title: Live agentic token-cost benchmark
 description: Model-selected retrieval benchmark routed through LiteLLM with cumulative provider usage
 ---
