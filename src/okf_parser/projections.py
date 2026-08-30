@@ -1,4 +1,4 @@
-"""Parse, resolve, and compile `type: Projection` documents.
+"""Parse and resolve `type: Projection` documents against the relational contract.
 
 RFC 0018 section 5. A projection names one root concept type and the declared
 relations to traverse; every relation it lists must already exist as a
@@ -6,6 +6,9 @@ relations to traverse; every relation it lists must already exist as a
 declares and can never invent a relationship. Projections do not become concept
 types: they have no documents of their own, they are not materialized as typed
 relations, and they do not participate in ``apply``.
+
+This module is resolution only. Compiling a resolved projection into a
+``TypeContract`` and exporting it is the next step of the same RFC.
 """
 
 from __future__ import annotations
@@ -15,16 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn, cast
 
 from okf_parser.relational_schema import load_relational_schema
-from okf_parser.schema_contract import (
-    FieldContract,
-    ListNode,
-    ObjectNode,
-    RefNode,
-    ScalarNode,
-    SchemaExportError,
-    TypeContract,
-    unique_model_names,
-)
+from okf_parser.schema_contract import SchemaExportError
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -74,9 +68,7 @@ def _text(document: Mapping[str, object], key: str, missing: str) -> str:
     return text
 
 
-def _member_mappings(
-    document: Mapping[str, object], name: str
-) -> tuple[Mapping[str, object], ...]:
+def _member_mappings(document: Mapping[str, object], name: str) -> tuple[Mapping[str, object], ...]:
     include = document.get("include", [])
     if include is None:
         return ()
@@ -85,9 +77,7 @@ def _member_mappings(
     members: list[Mapping[str, object]] = []
     for entry in include:
         if not isinstance(entry, dict):
-            _fail(
-                f"projection {name!r}: include member must be a mapping, got {entry!r}"
-            )
+            _fail(f"projection {name!r}: include member must be a mapping, got {entry!r}")
         members.append(cast("Mapping[str, object]", entry))
     return tuple(members)
 
@@ -110,11 +100,7 @@ def _resolve_foreign_key(
     name: str,
     foreign_keys: Sequence[ForeignKeyConstraint],
 ) -> ForeignKeyConstraint:
-    matches = [
-        item
-        for item in foreign_keys
-        if item.table == from_type and column in item.columns
-    ]
+    matches = [item for item in foreign_keys if item.table == from_type and column in item.columns]
     if not matches:
         message = (
             f"projection {name!r}: the relational contract does not declare a foreign "
@@ -134,9 +120,7 @@ def _resolve_foreign_key(
 def _optional_flag(entry: Mapping[str, object], relation: str, name: str) -> bool:
     value = entry.get("optional", False)
     if not isinstance(value, bool):
-        message = (
-            f"projection {name!r}: {relation!r} optional must be a boolean, got {value!r}"
-        )
+        message = f"projection {name!r}: {relation!r} optional must be a boolean, got {value!r}"
         _fail(message)
     return value
 
@@ -155,11 +139,7 @@ def _member(
         )
         _fail(message)
     relation = _text(entry, "relation", f"projection {name!r}: member has no relation")
-    alias = _text(
-        entry,
-        "as",
-        f"projection {name!r}: member {relation!r} has no 'as' name",
-    )
+    alias = _text(entry, "as", f"projection {name!r}: member {relation!r} has no 'as' name")
     from_type, column = _split_relation(relation, name)
     foreign_key = _resolve_foreign_key(from_type, column, relation, name, foreign_keys)
     # RFC 0007 makes N:1 the primitive, so a key *pointing at* the root is the
@@ -189,8 +169,7 @@ def _members(
     foreign_keys: Sequence[ForeignKeyConstraint],
 ) -> tuple[ProjectionMember, ...]:
     members = tuple(
-        _member(entry, name, root, foreign_keys)
-        for entry in _member_mappings(document, name)
+        _member(entry, name, root, foreign_keys) for entry in _member_mappings(document, name)
     )
     seen: set[str] = set()
     for member in members:
@@ -216,11 +195,7 @@ def _projection(
     if root not in concept_types:
         message = f"projection {name!r}: root {root!r} is an unknown concept type"
         _fail(message)
-    return Projection(
-        name=name,
-        root=root,
-        members=_members(document, name, root, foreign_keys),
-    )
+    return Projection(name=name, root=root, members=_members(document, name, root, foreign_keys))
 
 
 def parse_projections(
@@ -280,79 +255,11 @@ def load_projections(
     return parse_projections(documents, schema.foreign_keys, concept_types=concept_types)
 
 
-def _projection_reference(member: ProjectionMember) -> RefNode:
-    """Represent one composed member as a named sibling-schema reference."""
-    return RefNode(
-        concept_type=member.concept_type,
-        columns=member.foreign_key.columns,
-        referenced_columns=member.foreign_key.referenced_columns,
-        position=0,
-        value=ScalarNode("string"),
-        embedded=True,
-    )
-
-
-def compile_projections(
-    projections: Sequence[Projection],
-    concept_contracts: Sequence[TypeContract],
-) -> tuple[TypeContract, ...]:
-    """Compile resolved projections from existing concept contracts.
-
-    The root contract is copied as-is: v1 does not permit projection field
-    exclusion. Declared members are appended as named references to sibling
-    contracts, never by copying the sibling structure. A member is always
-    present; RFC 0018's ``optional`` modifier makes its value nullable.
-    """
-    contracts_by_type = {
-        contract.concept_type: contract for contract in concept_contracts
-    }
-    names = unique_model_names(tuple(item.name for item in projections), "Projection")
-    compiled: list[TypeContract] = []
-    for projection in projections:
-        root_contract = contracts_by_type.get(projection.root)
-        if root_contract is None:
-            _fail(
-                f"projection {projection.name!r}: root contract {projection.root!r} "
-                "was not compiled"
-            )
-        root_names = {field.name for field in root_contract.root.fields}
-        members: list[FieldContract] = []
-        for member in projection.members:
-            if member.alias in root_names:
-                _fail(
-                    f"projection {projection.name!r}: member {member.alias!r} collides "
-                    "with a field of the root contract"
-                )
-            reference = _projection_reference(member)
-            value = (
-                ListNode(item=reference, item_nullable=False)
-                if member.collection
-                else reference
-            )
-            members.append(
-                FieldContract(
-                    name=member.alias,
-                    required=True,
-                    nullable=member.optional,
-                    value=value,
-                )
-            )
-        compiled.append(
-            TypeContract(
-                concept_type=projection.name,
-                model_name=names[projection.name],
-                root=ObjectNode((*root_contract.root.fields, *members)),
-            )
-        )
-    return tuple(compiled)
-
-
 __all__ = [
     "PROJECTION_TYPE",
     "Projection",
     "ProjectionError",
     "ProjectionMember",
-    "compile_projections",
     "load_projections",
     "parse_projections",
 ]
