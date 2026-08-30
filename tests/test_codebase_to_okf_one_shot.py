@@ -10,6 +10,7 @@ from pathlib import Path
 from okf_parser import validate_path
 
 SKILL_ROOT = Path(__file__).parents[1] / "skills" / "codebase-to-okf"
+SKILL_PATH = SKILL_ROOT / "SKILL.md"
 SCRIPT = SKILL_ROOT / "scripts" / "codebase_to_okf.py"
 SPEC_TEMPLATE = "docs/types/{slug}.md"
 EXPECTED_SPECS = {
@@ -56,6 +57,15 @@ def main() -> str:
 """,
         encoding="utf-8",
     )
+
+
+def test_one_shot_recipe_is_bundled_pep723_code() -> None:
+    skill = SKILL_PATH.read_text(encoding="utf-8")
+    script = SCRIPT.read_text(encoding="utf-8")
+    assert "scripts/codebase_to_okf.py" in skill
+    assert script.startswith('# /// script\n# requires-python = ">=3.12"\n')
+    assert '"okf-parser>=0.45.4,<0.46"' in script
+    compile(script, str(SCRIPT), "exec")
 
 
 def test_one_shot_recipe_returns_only_after_normative_fixed_point(tmp_path: Path) -> None:
