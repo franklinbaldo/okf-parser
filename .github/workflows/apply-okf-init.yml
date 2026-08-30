@@ -25,7 +25,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python - <<'PY'
+          uv run python - <<'PY'
           from importlib.metadata import version
           print('repository okf-parser version:', version('okf-parser'))
           PY
