@@ -22,7 +22,7 @@ This RFC makes a different distribution unit first-class in the repository:
 ```text
 source material
     ↓
-Agent Skill + embedded PEP 723 recipe
+typed Agent Skill + embedded PEP 723 recipe
     ↓
 derived OKF bundle
     ↓
@@ -34,6 +34,8 @@ validation / relations / graph / schema / search
 The skill owns source-specific extraction. `okf-parser` owns the generic OKF boundary. The first
 reference implementation is `skills/codebase-to-okf/SKILL.md`, whose embedded Python recipe
 projects Python source into a disposable OKF bundle and validates the result with `okf-parser`.
+The skill itself remains authored, typed OKF knowledge and is therefore visible to the same
+inventory, schema, graph and retrieval surfaces as other concept documents.
 
 ## Motivation
 
@@ -82,6 +84,13 @@ materializes the marked code block to a temporary `.py` file and runs it with `u
 
 This is intentionally different from making the Markdown code block decorative documentation.
 The embedded program is tested as executable source.
+
+Repository-owned recipe skills should also remain valid typed OKF concept documents when their
+frontmatter can carry the required metadata without compromising the host skill format. The
+initial recipe therefore declares `type: Skill` and stays inside the repository's ordinary OKF
+dogfood rather than being hidden through `.okfignore`. Authored operational knowledge and generated
+derived knowledge have different authority, but both can be first-class queryable OKF knowledge.
+This lets an agent discover, search, relate and inspect available recipes using `okf-parser` itself.
 
 ### 3. PEP 723 contains recipe-only dependencies
 
@@ -215,15 +224,17 @@ for every code-intelligence workload.
 
 ## Testing
 
-Repository tests must treat the embedded code as code rather than prose. The implementation test:
+Repository tests must treat both the skill and the embedded code as executable/queryable contract.
+The implementation test:
 
-1. extracts the uniquely marked Python fence from `SKILL.md`;
-2. asserts that the PEP 723 script metadata is present and names an installable release range;
-3. executes the extracted program against a temporary Python codebase that includes a legal symbol
+1. validates `SKILL.md` itself as one conformant typed OKF concept;
+2. extracts the uniquely marked Python fence from `SKILL.md`;
+3. asserts that the PEP 723 script metadata is present and names an installable release range;
+4. executes the extracted program against a temporary Python codebase that includes a legal symbol
    redefinition;
-4. verifies the generated bundle is conformant through `okf-parser` and that both definitions
+5. verifies the generated bundle is conformant through `okf-parser` and that both definitions
    survive as distinct concepts;
-5. reruns with `--force` and verifies byte-for-byte deterministic output.
+6. reruns with `--force` and verifies byte-for-byte deterministic output.
 
 CI does not need to invoke `uv` or download the package to test this repository-owned recipe; PEP
 723 is comment syntax to Python, so the extracted program can execute in the already provisioned
@@ -233,7 +244,8 @@ project test environment. The PEP 723 declaration governs copied/standalone use.
 
 Recipe skills are repository resources and examples. They are not part of the stable Python import
 API and do not need to be present in an installed wheel. Their canonical location is the GitHub
-repository at the commit/tag being consulted.
+repository at the commit/tag being consulted. Within the source repository they remain ordinary,
+typed OKF knowledge and should be discoverable by the repository's own parser surfaces.
 
 A future skill registry or packaging mechanism may distribute them separately without changing the
 core/parser boundary defined here.
@@ -255,6 +267,10 @@ This RFC does not:
 The core stays small and source-neutral while the repository can still demonstrate substantial,
 agent-usable integrations. Recipes can evolve at the speed of their source ecosystem, carry their
 own dependencies, and be copied or adapted without creating permanent runtime coupling.
+
+Because recipe skills are also typed OKF concepts, the repository can use its own inventory,
+schema, graph and retrieval surfaces to understand the recipes it offers. This avoids a parallel
+metadata registry and keeps the operational knowledge visible to agents.
 
 The cost is that a skill author must maintain the adapter contract and executable recipe together.
 That is deliberate: the source-specific knowledge needed to run the adapter correctly belongs next
