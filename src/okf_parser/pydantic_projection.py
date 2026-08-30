@@ -298,6 +298,8 @@ class _SourceContext:
     registry: PydanticModelNameRegistry = field(default_factory=PydanticModelNameRegistry)
     imports: _SourceImports = field(default_factory=_SourceImports)
     models: list[_SourceModel] = field(default_factory=list)
+    reference_names: dict[str, str] = field(default_factory=dict)
+    forward_referenced: set[str] = field(default_factory=set)
 
 
 def _string_literal_parts(value: str) -> tuple[str, ...]:
@@ -396,6 +398,11 @@ def _source_annotation(
     path: StructuralPath,
     context: _SourceContext,
 ) -> _SourceAnnotation:
+    if isinstance(node, RefNode) and node.embedded:
+        emitted = context.reference_names.get(node.concept_type)
+        if emitted is not None:
+            context.forward_referenced.add(emitted)
+            return _SourceAnnotation(emitted)
     carried = node
     while isinstance(carried, RefNode):
         # A reference is metadata about the value; the annotation is the value's.
@@ -471,7 +478,9 @@ def _collect_source_model(
     return emitted_name
 
 
-def _render_imports(imports: _SourceImports, *, has_models: bool) -> list[str]:
+def _render_imports(
+    imports: _SourceImports, *, has_models: bool, postponed: bool = False
+) -> list[str]:
     standard: list[str] = []
     if imports.datetime_names:
         standard.append(f"from datetime import {', '.join(sorted(imports.datetime_names))}")
@@ -483,6 +492,10 @@ def _render_imports(imports: _SourceImports, *, has_models: bool) -> list[str]:
         standard.append("from uuid import UUID")
 
     lines = ['"""Generated Pydantic models from OKF schema contracts."""']
+    if postponed:
+        # Only a forward reference needs postponed evaluation, and only an
+        # embedded reference can produce one; every other module stays as it was.
+        lines.extend(["", "from __future__ import annotations"])
     if standard:
         lines.extend(["", *standard])
     if has_models:
@@ -594,6 +607,10 @@ def _render_field(field_contract: _SourceField) -> list[str]:
 def render_pydantic_source(contracts: tuple[TypeContract, ...]) -> str:
     """Render deterministic importable Pydantic v2 source from shared contracts."""
     context = _SourceContext()
+    context.reference_names = {
+        contract.concept_type: _pydantic_model_name(contract.model_name, (contract.concept_type,))
+        for contract in contracts
+    }
     for contract in contracts:
         _collect_source_model(
             contract.model_name,
@@ -602,7 +619,11 @@ def render_pydantic_source(contracts: tuple[TypeContract, ...]) -> str:
             context=context,
         )
 
-    lines = _render_imports(context.imports, has_models=bool(context.models))
+    lines = _render_imports(
+        context.imports,
+        has_models=bool(context.models),
+        postponed=bool(context.forward_referenced),
+    )
     for model in context.models:
         lines.extend(["", "", f"class {model.name}(BaseModel):"])
         lines.extend(
@@ -616,7 +637,16 @@ def render_pydantic_source(contracts: tuple[TypeContract, ...]) -> str:
             lines.append("")
             for field_contract in model.fields:
                 lines.extend(_render_field(field_contract))
+    lines.extend(_render_rebuilds(context))
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _render_rebuilds(context: _SourceContext) -> list[str]:
+    """Resolve the forward references a cycle needs, once every class exists."""
+    if not context.forward_referenced:
+        return []
+    names = [model.name for model in context.models if model.name in context.forward_referenced]
+    return ["", "", *(f"{name}.model_rebuild()" for name in sorted(names))]
 
 
 __all__ = [

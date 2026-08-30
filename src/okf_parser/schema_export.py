@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from okf_parser.bundle import load_bundle
 from okf_parser.declared_schema import (
@@ -28,6 +28,8 @@ from okf_parser.schema_contract import (
     render_zod,
 )
 from okf_parser.schema_references import apply_references
+
+type RefsMode = Literal["key", "embed"]
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -104,6 +106,7 @@ def build_schema_contracts(
     casts: Sequence[str] = (),
     spec_template: str | None = None,
     relational_schema: str | None = None,
+    refs: RefsMode = "key",
 ) -> tuple[TypeContract, ...]:
     """Compile bundle observations into deterministic language-neutral contracts.
 
@@ -120,13 +123,16 @@ def build_schema_contracts(
         declared_types_by_type=declared_by_type,
     )
     if relational_schema is None:
+        if refs == "embed":
+            message = "--refs=embed needs a relational schema to know what to embed"
+            raise SchemaExportError(message)
         return contracts
     declared = Path(relational_schema)
     # `check --relational-schema` resolves a relative path against the bundle
     # root; the same flag has to mean the same file here.
     resolved = declared if declared.is_absolute() else Path(path) / declared
     schema = load_relational_schema(resolved)
-    return apply_references(contracts, schema.foreign_keys)
+    return apply_references(contracts, schema.foreign_keys, embed=refs == "embed")
 
 
 def build_pydantic_models(
@@ -137,6 +143,7 @@ def build_pydantic_models(
     casts: Sequence[str] = (),
     spec_template: str | None = None,
     relational_schema: str | None = None,
+    refs: RefsMode = "key",
 ) -> dict[str, type[BaseModel]]:
     """Build dynamic Pydantic adapters from the shared schema contracts."""
     contracts = build_schema_contracts(
@@ -146,6 +153,7 @@ def build_pydantic_models(
         casts=casts,
         spec_template=spec_template,
         relational_schema=relational_schema,
+        refs=refs,
     )
     return build_dynamic_pydantic_models(contracts)
 
@@ -158,6 +166,7 @@ def export_pydantic_source(
     casts: Sequence[str] = (),
     spec_template: str | None = None,
     relational_schema: str | None = None,
+    refs: RefsMode = "key",
 ) -> str:
     """Generate deterministic importable Pydantic v2 source."""
     contracts = build_schema_contracts(
@@ -167,6 +176,7 @@ def export_pydantic_source(
         casts=casts,
         spec_template=spec_template,
         relational_schema=relational_schema,
+        refs=refs,
     )
     return render_pydantic_source(contracts)
 
@@ -179,6 +189,7 @@ def export_json_schema(
     casts: Sequence[str] = (),
     spec_template: str | None = None,
     relational_schema: str | None = None,
+    refs: RefsMode = "key",
 ) -> dict[str, Any]:
     """Export the canonical JSON Schema representation for each concept type."""
     contracts = build_schema_contracts(
@@ -188,15 +199,21 @@ def export_json_schema(
         casts=casts,
         spec_template=spec_template,
         relational_schema=relational_schema,
+        refs=refs,
     )
     schemas = {contract.concept_type: contract_json_schema(contract) for contract in contracts}
-    return {
+    payload: dict[str, Any] = {
         "root": str(Path(path).resolve()),
         "total_types": len(schemas),
         "inferred_types": infer_types,
         "casts": list(casts),
         "schemas": schemas,
     }
+    if refs == "embed":
+        # Every `$ref` points at `#/$defs/<type>`, so a consumer embedding one
+        # schema needs the pool those pointers resolve against.
+        payload["defs"] = schemas
+    return payload
 
 
 def export_zod_schema(  # each argument is an independent public export flag.
@@ -208,6 +225,7 @@ def export_zod_schema(  # each argument is an independent public export flag.
     zod_import: ZodImport = "zod",
     spec_template: str | None = None,
     relational_schema: str | None = None,
+    refs: RefsMode = "key",
 ) -> str:
     """Generate canonical Zod declarations, using generic Zod by default."""
     contracts = build_schema_contracts(
@@ -217,6 +235,7 @@ def export_zod_schema(  # each argument is an independent public export flag.
         casts=casts,
         spec_template=spec_template,
         relational_schema=relational_schema,
+        refs=refs,
     )
     return render_zod(contracts, zod_import=zod_import)
 
