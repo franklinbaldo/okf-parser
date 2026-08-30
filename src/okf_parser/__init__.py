@@ -4,6 +4,13 @@ from okf_parser.bundle import Bundle, validate_path
 from okf_parser.concepts import concept, resolve_relations
 from okf_parser.edit import EditError, preview_concept_edit, write_concept_edit
 from okf_parser.engine import load_bundle
+from okf_parser.git_commit import (
+    GitCommitMessage,
+    GitCommitMessageError,
+    format_git_commit_message,
+    parse_git_commit_message,
+    validate_git_commit_message,
+)
 from okf_parser.graphql_adapter import (
     GraphQLAdapterUnavailableError,
     GraphQLNameCollisionError,
@@ -20,6 +27,8 @@ __all__ = [
     "Bundle",
     "DocumentEnvelope",
     "EditError",
+    "GitCommitMessage",
+    "GitCommitMessageError",
     "GraphQLAdapterUnavailableError",
     "GraphQLNameCollisionError",
     "GraphQLReadAdapter",
@@ -32,10 +41,13 @@ __all__ = [
     "build_graphql_schema",
     "concept",
     "export_graphql_sdl",
+    "format_git_commit_message",
     "ingest_documents",
     "load_bundle",
+    "parse_git_commit_message",
     "preview_concept_edit",
     "resolve_relations",
+    "validate_git_commit_message",
     "validate_path",
     "write_concept_edit",
 ]
