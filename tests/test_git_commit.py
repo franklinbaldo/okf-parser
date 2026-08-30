@@ -1,3 +1,5 @@
+"""Tests for subject-first Git commit envelopes."""
+
 from __future__ import annotations
 
 import json
