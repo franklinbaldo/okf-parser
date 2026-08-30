@@ -1,5 +1,7 @@
 ---
 name: codebase-to-okf
+type: Skill
+title: Codebase to OKF
 description: >-
   Project a source code repository into a derived OKF bundle without adding language-specific
   parsers to okf-parser core. Use when an agent needs a compact, queryable representation of code
