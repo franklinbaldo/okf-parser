@@ -142,18 +142,10 @@ def _parameters(
 
     for index, item in enumerate(positional):
         default = (
-            _unparse(args.defaults[index - defaults_offset])
-            if index >= defaults_offset
-            else ""
+            _unparse(args.defaults[index - defaults_offset]) if index >= defaults_offset else ""
         )
-        kind = (
-            "positional_only"
-            if index < len(args.posonlyargs)
-            else "positional_or_keyword"
-        )
-        parameters.append(
-            Parameter(item.arg, kind, _unparse(item.annotation), default)
-        )
+        kind = "positional_only" if index < len(args.posonlyargs) else "positional_or_keyword"
+        parameters.append(Parameter(item.arg, kind, _unparse(item.annotation), default))
 
     if args.vararg is not None:
         parameters.append(
@@ -200,11 +192,7 @@ def _signature(
     keyword_only_started = False
 
     for index, item in enumerate(parameters):
-        if (
-            item.kind == "keyword_only"
-            and not has_vararg
-            and not keyword_only_started
-        ):
+        if item.kind == "keyword_only" and not has_vararg and not keyword_only_started:
             parts.append("*")
             keyword_only_started = True
         parts.append(item.render())
@@ -305,9 +293,7 @@ class PythonFacts(ast.NodeVisitor):
         """Record a class and then inspect nested definitions."""
         qualname = self._qualname(node.name)
         bases = tuple(_unparse(item) for item in node.bases)
-        signature = (
-            f"class {node.name}({', '.join(bases)})" if bases else f"class {node.name}"
-        )
+        signature = f"class {node.name}({', '.join(bases)})" if bases else f"class {node.name}"
         self.symbols.append(
             Symbol(
                 concept_type="CodeClass",
@@ -386,8 +372,7 @@ class PythonFacts(ast.NodeVisitor):
         prefix = "." * node.level + (node.module or "")
         separator = "" if not prefix or prefix.endswith(".") else "."
         targets = tuple(
-            f"{prefix}{separator}{alias.name}" if prefix else alias.name
-            for alias in node.names
+            f"{prefix}{separator}{alias.name}" if prefix else alias.name for alias in node.names
         )
         self.imports.append(
             ImportRecord(
@@ -474,9 +459,7 @@ def parse_modules(
         )
     if errors:
         message = "\n".join(f"- {item}" for item in errors)
-        raise ValueError(
-            f"source parsing failed; no output was written:\n{message}"
-        )
+        raise ValueError(f"source parsing failed; no output was written:\n{message}")
     return tuple(records)
 
 
@@ -578,15 +561,11 @@ def _symbol_body(
         f"`{symbol.signature}`",
     ]
     if parent_file is not None and symbol.parent_qualname is not None:
-        body.extend(
-            ["", f"Parent: [{symbol.parent_qualname}](../symbols/{parent_file})."]
-        )
+        body.extend(["", f"Parent: [{symbol.parent_qualname}](../symbols/{parent_file})."])
     if symbol.docstring:
         body.extend(["", "## Docstring", "", symbol.docstring])
     if symbol.decorators:
-        body.extend(
-            ["", "## Decorators", "", *[f"- `{item}`" for item in symbol.decorators]]
-        )
+        body.extend(["", "## Decorators", "", *[f"- `{item}`" for item in symbol.decorators]])
     if symbol.bases:
         body.extend(["", "## Bases", "", *[f"- `{item}`" for item in symbol.bases]])
     body.extend(_parameter_lines(symbol.parameters))
@@ -635,9 +614,7 @@ def emit_bundle(
                     f"{symbol.qualname}|{symbol.line_start}",
                 )
             )
-            candidates_by_name.setdefault(symbol.name, []).append(
-                (module.source_path, symbol)
-            )
+            candidates_by_name.setdefault(symbol.name, []).append((module.source_path, symbol))
             for call in symbol.calls:
                 key = (
                     module.source_path,
@@ -655,8 +632,7 @@ def emit_bundle(
             key = (module.source_path, item.line_start, item.targets)
             import_files[key] = stable_filename(
                 f"{PurePosixPath(module.source_path).stem}-import",
-                f"import|{module.source_path}|{item.line_start}|"
-                f"{'|'.join(item.targets)}",
+                f"import|{module.source_path}|{item.line_start}|{'|'.join(item.targets)}",
             )
 
     index_lines = [
@@ -681,21 +657,13 @@ def emit_bundle(
         if module.symbols:
             module_body.extend(["", "## Symbols", ""])
             for symbol in module.symbols:
-                target = symbol_files[
-                    (module.source_path, symbol.qualname, symbol.line_start)
-                ]
-                module_body.append(
-                    f"- [{symbol.qualname}](../symbols/{target}) — {symbol.kind}"
-                )
+                target = symbol_files[(module.source_path, symbol.qualname, symbol.line_start)]
+                module_body.append(f"- [{symbol.qualname}](../symbols/{target}) — {symbol.kind}")
         if module.imports:
             module_body.extend(["", "## Imports", ""])
             for item in module.imports:
-                target = import_files[
-                    (module.source_path, item.line_start, item.targets)
-                ]
-                module_body.append(
-                    f"- [{', '.join(item.targets)}](../imports/{target})"
-                )
+                target = import_files[(module.source_path, item.line_start, item.targets)]
+                module_body.append(f"- [{', '.join(item.targets)}](../imports/{target})")
 
         write_concept(
             output_root / "modules" / module_file,
@@ -711,9 +679,7 @@ def emit_bundle(
         )
 
         for symbol in module.symbols:
-            symbol_file = symbol_files[
-                (module.source_path, symbol.qualname, symbol.line_start)
-            ]
+            symbol_file = symbol_files[(module.source_path, symbol.qualname, symbol.line_start)]
             parent_file = None
             if symbol.parent_qualname and symbol.parent_line_start is not None:
                 parent_file = symbol_files.get(
@@ -778,14 +744,9 @@ def emit_bundle(
                             candidate.line_start,
                         )
                     ]
-                    label = (
-                        f"{candidate_module}::{candidate.qualname}@"
-                        f"{candidate.line_start}"
-                    )
+                    label = f"{candidate_module}::{candidate.qualname}@{candidate.line_start}"
                     candidate_labels.append(label)
-                    candidate_links.append(
-                        f"- [{label}](../symbols/{candidate_file})"
-                    )
+                    candidate_links.append(f"- [{label}](../symbols/{candidate_file})")
                 body = [
                     f"# {symbol.qualname} → {call.expression}",
                     "",
@@ -798,9 +759,7 @@ def emit_bundle(
                     "candidates below are navigation hints, not dispatch claims.",
                 ]
                 if candidate_links:
-                    body.extend(
-                        ["", "## Name-matched candidates", "", *candidate_links]
-                    )
+                    body.extend(["", "## Name-matched candidates", "", *candidate_links])
                 write_concept(
                     output_root / "calls" / call_file,
                     {
@@ -822,9 +781,7 @@ def emit_bundle(
                 )
 
         for item in module.imports:
-            import_file = import_files[
-                (module.source_path, item.line_start, item.targets)
-            ]
+            import_file = import_files[(module.source_path, item.line_start, item.targets)]
             write_concept(
                 output_root / "imports" / import_file,
                 {
@@ -855,9 +812,7 @@ def emit_bundle(
     )
     symbol_count = sum(len(module.symbols) for module in modules)
     import_count = sum(len(module.imports) for module in modules)
-    call_count = sum(
-        len(symbol.calls) for module in modules for symbol in module.symbols
-    )
+    call_count = sum(len(symbol.calls) for module in modules for symbol in module.symbols)
     return {
         "modules": len(modules),
         "symbols": symbol_count,
@@ -869,9 +824,7 @@ def emit_bundle(
 
 def build_parser() -> argparse.ArgumentParser:
     """Build the standalone recipe CLI."""
-    parser = argparse.ArgumentParser(
-        description="Project a Python codebase into an OKF bundle."
-    )
+    parser = argparse.ArgumentParser(description="Project a Python codebase into an OKF bundle.")
     parser.add_argument("source", type=Path, help="Python source tree")
     parser.add_argument("output", type=Path, help="OKF bundle destination")
     parser.add_argument(
@@ -918,9 +871,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
         return 1
 
-    warnings = sum(
-        violation.severity.value == "warning" for violation in report.violations
-    )
+    warnings = sum(violation.severity.value == "warning" for violation in report.violations)
     print(
         json.dumps(
             {

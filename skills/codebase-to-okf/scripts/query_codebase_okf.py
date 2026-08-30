@@ -106,9 +106,7 @@ def _compact(row: dict[str, Any]) -> dict[str, Any]:
 
 def build_parser() -> argparse.ArgumentParser:
     """Build a small code-domain query CLI without adding code semantics to core."""
-    parser = argparse.ArgumentParser(
-        description="Query a codebase-to-OKF derived bundle."
-    )
+    parser = argparse.ArgumentParser(description="Query a codebase-to-OKF derived bundle.")
     parser.add_argument("bundle", type=Path, help="generated OKF bundle")
     parser.add_argument("query", nargs="?", default="", help="broad text query")
     parser.add_argument("--type", help="filter by producer-defined concept type")

@@ -114,7 +114,7 @@ def main() -> str:
     assert '"signature": "def hello(name: str = \'world\') -> str"' in hello
     assert '"return_annotation": "str"' in hello
     assert '"parameters": [' in hello
-    assert '"name: str = \'world\'"' in hello
+    assert "\"name: str = 'world'\"" in hello
     assert '"decorators": [' in hello
     assert '"staticmethod"' in hello
     assert "Return the supplied name." in hello
@@ -130,9 +130,7 @@ def main() -> str:
     call_files = list((output / "calls").glob("*.md"))
     assert len(call_files) == 2
     hello_call = next(
-        path
-        for path in call_files
-        if '"callee": "hello"' in path.read_text(encoding="utf-8")
+        path for path in call_files if '"callee": "hello"' in path.read_text(encoding="utf-8")
     )
     hello_call_text = hello_call.read_text(encoding="utf-8")
     assert '"caller": "main"' in hello_call_text
