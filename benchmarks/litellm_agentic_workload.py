@@ -66,12 +66,12 @@ class Usage:
         total_tokens = getattr(usage, "total_tokens", None)
         if not isinstance(input_tokens, int) or not isinstance(output_tokens, int):
             message = "provider usage must include integer prompt/completion tokens"
-            raise RuntimeError(message)
+            raise TypeError(message)
         if total_tokens is None:
             total_tokens = input_tokens + output_tokens
         if not isinstance(total_tokens, int):
             message = "provider usage total_tokens must be an integer"
-            raise RuntimeError(message)
+            raise TypeError(message)
         return Usage(
             input_tokens=self.input_tokens + input_tokens,
             output_tokens=self.output_tokens + output_tokens,
@@ -385,7 +385,7 @@ def _run_direct(
     }
 
 
-def _run_tools(  # noqa: PLR0913
+def _run_tools(
     *,
     model: str,
     task: trace.KnowledgeTask,
