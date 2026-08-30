@@ -125,7 +125,7 @@ def test_zod_and_pydantic_emit_projection_models(tmp_path: Path) -> None:
     zod = export_zod_schema(str(root), relational_schema="okf.schema.sql")
     pydantic = export_pydantic_source(str(root), relational_schema="okf.schema.sql")
 
-    assert "export const ProcessoConsultarProjectionSchema" in zod
-    assert '"publicacoes": z.array(PublicacaoConceptSchema)' in zod
+    assert "export const ProcessoConsultarSchema" in zod
+    assert '"publicacoes": z.array(PublicacaoSchema)' in zod
     assert "class ProcessoConsultarProjection(BaseModel):" in pydantic
     assert "publicacoes: list[PublicacaoConcept]" in pydantic
