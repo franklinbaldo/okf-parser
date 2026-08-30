@@ -69,7 +69,7 @@ def _parse_metadata(block: str) -> dict[str, YamlValue]:
     try:
         parsed = parse_document_text(Path("<git-commit-metadata>"), source)
     except DocumentParseError as exc:
-        raise GitCommitMessageError("GIT_MESSAGE_YAML", str(exc), line=3) from exc
+        raise GitCommitMessageError("GIT_MESSAGE_YAML", str(exc)) from exc
     return dict(parsed.frontmatter)
 
 
@@ -208,4 +208,8 @@ def format_git_commit_message(message: GitCommitMessage) -> str:
     if metadata:
         block += f"{metadata}\n"
     block += "---"
-    return f"{message.subject}\n\n{block}" if not message.body else f"{message.subject}\n\n{block}\n\n{message.body}"
+    return (
+        f"{message.subject}\n\n{block}"
+        if not message.body
+        else f"{message.subject}\n\n{block}\n\n{message.body}"
+    )
