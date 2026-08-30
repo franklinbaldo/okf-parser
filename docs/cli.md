@@ -126,7 +126,7 @@ MCP tool: `graph`.
 ## `schema`
 
 ```bash
-uv run okf-parser schema path/to/bundle [--format json|zod|pydantic|graphql] [--infer-types] [--cast FIELD]... [--spec-template TEMPLATE] [--exclude PATTERN]... [--zod-import zod|astro]
+uv run okf-parser schema path/to/bundle [--format json|zod|pydantic|graphql] [--infer-types] [--cast FIELD]... [--spec-template TEMPLATE] [--exclude PATTERN]... [--zod-import zod|astro] [--relational-schema PATH]
 ```
 
 Exports the bundle's shared frontmatter contract as JSON Schema, Zod source,
@@ -159,6 +159,13 @@ multiline form rather than relying on a later formatter pass.
 - `--spec-template TEMPLATE` — derive each type's specification path and, when
   present, read the sibling `.schema.sql` declaration introduced by RFC 0006.
   The template must contain `{slug}`.
+- `--relational-schema` — read the bundle's `okf.schema.sql` (RFC 0007) and
+  compile every field participating in a declared `FOREIGN KEY` to a reference
+  (RFC 0018). A relative path resolves against the bundle root, same as
+  `check --relational-schema`. JSON Schema publishes the constraint under
+  `x-okf-references`, Zod describes it, and Pydantic carries it in
+  `json_schema_extra`; the field keeps the scalar type it already had. Without
+  the flag, output is unchanged. `--format graphql` ignores it for now.
 - `--zod-import` — only meaningful with `--format zod`; choose the `zod` or
   `astro:content` import style.
 
