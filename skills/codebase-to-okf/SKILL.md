@@ -86,7 +86,7 @@ its dependencies local to the recipe instead of changing the `okf-parser` packag
 # /// script
 # requires-python = ">=3.12"
 # dependencies = [
-#   "okf-parser>=0.45.4",
+#   "okf-parser>=0.45.2,<0.46",
 # ]
 # ///
 from __future__ import annotations
@@ -129,6 +129,7 @@ class Symbol:
     line_start: int
     line_end: int
     parent_qualname: str | None
+    parent_line_start: int | None
 
 
 @dataclass(frozen=True)
@@ -148,7 +149,7 @@ class ModuleRecord:
 
 class PythonFacts(ast.NodeVisitor):
     def __init__(self) -> None:
-        self.scope: list[tuple[str, str]] = []
+        self.scope: list[tuple[str, str, int]] = []
         self.symbols: list[Symbol] = []
         self.imports: list[ImportRecord] = []
 
@@ -159,6 +160,9 @@ class PythonFacts(ast.NodeVisitor):
         if not self.scope:
             return None
         return ".".join(item[1] for item in self.scope)
+
+    def _parent_line_start(self) -> int | None:
+        return self.scope[-1][2] if self.scope else None
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         qualname = self._qualname(node.name)
@@ -171,9 +175,10 @@ class PythonFacts(ast.NodeVisitor):
                 line_start=node.lineno,
                 line_end=node.end_lineno or node.lineno,
                 parent_qualname=self._parent_qualname(),
+                parent_line_start=self._parent_line_start(),
             )
         )
-        self.scope.append(("class", node.name))
+        self.scope.append(("class", node.name, node.lineno))
         self.generic_visit(node)
         self.scope.pop()
 
@@ -195,9 +200,10 @@ class PythonFacts(ast.NodeVisitor):
                 line_start=node.lineno,
                 line_end=node.end_lineno or node.lineno,
                 parent_qualname=self._parent_qualname(),
+                parent_line_start=self._parent_line_start(),
             )
         )
-        self.scope.append(("function", node.name))
+        self.scope.append(("function", node.name, node.lineno))
         self.generic_visit(node)
         self.scope.pop()
 
@@ -327,7 +333,7 @@ def prepare_output(source_root: Path, output_root: Path, force: bool) -> None:
 
 def emit_bundle(output_root: Path, modules: tuple[ModuleRecord, ...]) -> dict[str, int]:
     module_files: dict[str, str] = {}
-    symbol_files: dict[tuple[str, str], str] = {}
+    symbol_files: dict[tuple[str, str, int], str] = {}
     import_files: dict[tuple[str, int, tuple[str, ...]], str] = {}
 
     for module in modules:
@@ -336,9 +342,12 @@ def emit_bundle(output_root: Path, modules: tuple[ModuleRecord, ...]) -> dict[st
             f"module|{module.source_path}",
         )
         for symbol in module.symbols:
-            symbol_files[(module.source_path, symbol.qualname)] = stable_filename(
+            symbol_files[(module.source_path, symbol.qualname, symbol.line_start)] = stable_filename(
                 f"{PurePosixPath(module.source_path).stem}-{symbol.qualname}",
-                f"{symbol.concept_type}|{module.source_path}|{symbol.qualname}",
+                (
+                    f"{symbol.concept_type}|{module.source_path}|{symbol.qualname}|"
+                    f"{symbol.line_start}"
+                ),
             )
         for item in module.imports:
             key = (module.source_path, item.line_start, item.targets)
@@ -368,7 +377,7 @@ def emit_bundle(output_root: Path, modules: tuple[ModuleRecord, ...]) -> dict[st
         if module.symbols:
             module_body.extend(["", "## Symbols", ""])
             for symbol in module.symbols:
-                target = symbol_files[(module.source_path, symbol.qualname)]
+                target = symbol_files[(module.source_path, symbol.qualname, symbol.line_start)]
                 module_body.append(
                     f"- [{symbol.qualname}](../symbols/{target}) — {symbol.kind}"
                 )
@@ -393,14 +402,18 @@ def emit_bundle(output_root: Path, modules: tuple[ModuleRecord, ...]) -> dict[st
         )
 
         for symbol in module.symbols:
-            symbol_file = symbol_files[(module.source_path, symbol.qualname)]
+            symbol_file = symbol_files[
+                (module.source_path, symbol.qualname, symbol.line_start)
+            ]
             body = [
                 f"# {symbol.qualname}",
                 "",
                 f"Defined in [{module.source_path}](../modules/{module_file}).",
             ]
-            if symbol.parent_qualname:
-                parent_file = symbol_files.get((module.source_path, symbol.parent_qualname))
+            if symbol.parent_qualname and symbol.parent_line_start is not None:
+                parent_file = symbol_files.get(
+                    (module.source_path, symbol.parent_qualname, symbol.parent_line_start)
+                )
                 if parent_file is not None:
                     body.extend(
                         [
