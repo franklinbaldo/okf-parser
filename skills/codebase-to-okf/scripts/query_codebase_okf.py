@@ -64,6 +64,7 @@ def _matches(row: dict[str, Any], args: argparse.Namespace) -> bool:
         "caller": args.caller,
         "callee": args.callee,
         "source_path": args.source,
+        "resolved_modules": args.dependency,
     }
     for key, value in filters.items():
         if value and not _contains(row.get(key), value):
@@ -86,6 +87,10 @@ def _matches(row: dict[str, Any], args: argparse.Namespace) -> bool:
         "bases",
         "decorators",
         "calls_raw",
+        "targets",
+        "resolved_modules",
+        "unresolved_targets",
+        "resolution_method",
     )
     return any(_contains(row.get(key), args.query) for key in searchable)
 
@@ -107,7 +112,12 @@ def _compact(row: dict[str, Any]) -> dict[str, Any]:
         "caller_line_start",
         "callee",
         "expression",
+        "source_import",
+        "targets",
+        "resolved_modules",
+        "unresolved_targets",
         "resolution",
+        "resolution_method",
         "candidate_targets",
     )
     return {key: row[key] for key in keys if row.get(key) not in (None, "", [])}
@@ -123,6 +133,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--caller", help="filter call observations by caller")
     parser.add_argument("--callee", help="filter call observations by callee")
     parser.add_argument("--source", help="filter by source-relative path")
+    parser.add_argument("--dependency", help="filter source-tree import resolutions by local module")
     parser.add_argument("--limit", type=int, default=10, help="maximum results")
     parser.add_argument(
         "--full",
