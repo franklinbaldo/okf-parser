@@ -126,7 +126,7 @@ MCP tool: `graph`.
 ## `schema`
 
 ```bash
-uv run okf-parser schema path/to/bundle [--format json|zod|pydantic|graphql] [--infer-types] [--cast FIELD]... [--spec-template TEMPLATE] [--exclude PATTERN]... [--zod-import zod|astro] [--relational-schema PATH]
+uv run okf-parser schema path/to/bundle [--format json|zod|pydantic|graphql] [--infer-types] [--cast FIELD]... [--spec-template TEMPLATE] [--exclude PATTERN]... [--zod-import zod|astro] [--relational-schema PATH] [--refs key|embed]
 ```
 
 Exports the bundle's shared frontmatter contract as JSON Schema, Zod source,
@@ -166,6 +166,14 @@ multiline form rather than relying on a later formatter pass.
   `x-okf-references`, Zod describes it, and Pydantic carries it in
   `json_schema_extra`; the field keeps the scalar type it already had. Without
   the flag, output is unchanged. `--format graphql` ignores it for now.
+- `--refs` — how a declared reference is exported. `key` (default) keeps the
+  scalar and publishes the constraint as metadata. `embed` replaces the field
+  with the referenced schema **by name**: `$ref` into `defs` for JSON Schema,
+  the sibling `const` for Zod (declared in dependency order, with `z.lazy` on a
+  cycle), and the sibling model for Pydantic (with postponed annotations and
+  `model_rebuild()` when a forward reference is needed). `embed` requires
+  `--relational-schema`, and refuses a composite key: embedding replaces N
+  columns with one member, and only a projection can name it.
 - `--zod-import` — only meaningful with `--format zod`; choose the `zod` or
   `astro:content` import style.
 

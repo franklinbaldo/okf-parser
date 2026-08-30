@@ -75,6 +75,7 @@ class RefNode:
     referenced_columns: tuple[str, ...]
     position: int
     value: ContractNode
+    embedded: bool = False
 
     @property
     def reference_metadata(self) -> dict[str, object]:
@@ -380,13 +381,23 @@ def _scalar_schema(node: ScalarNode) -> dict[str, object]:
     return schemas[node.kind]
 
 
+def _reference_json_schema(node: RefNode) -> dict[str, object]:
+    """Render a reference: a `$ref` when embedded, the carried scalar otherwise."""
+    if node.embedded:
+        return {
+            "$ref": f"#/$defs/{node.concept_type}",
+            "x-okf-references": node.reference_metadata,
+        }
+    return {
+        **node_json_schema(node.value),
+        "x-okf-references": node.reference_metadata,
+    }
+
+
 def node_json_schema(node: ContractNode) -> dict[str, object]:
     """Render one canonical JSON Schema fragment from the shared contract."""
     if isinstance(node, RefNode):
-        return {
-            **node_json_schema(node.value),
-            "x-okf-references": node.reference_metadata,
-        }
+        return _reference_json_schema(node)
     if isinstance(node, ScalarNode):
         return _scalar_schema(node)
     if isinstance(node, LiteralNode):
@@ -463,11 +474,37 @@ def _scalar_zod(node: ScalarNode) -> str:
     return renderers[node.kind]
 
 
-def node_zod(node: ContractNode, indent: str = "") -> str:
-    """Render one canonical Zod expression from the shared contract."""
+def _reference_zod(
+    node: RefNode,
+    indent: str,
+    *,
+    ref_names: Mapping[str, str] | None,
+    lazy_refs: frozenset[str],
+) -> str:
+    """Render a reference: the sibling variable when embedded, the scalar otherwise."""
+    if node.embedded:
+        name = _ref_variable(node.concept_type, ref_names)
+        return f"z.lazy(() => {name})" if node.concept_type in lazy_refs else name
+    described = json.dumps(node.description, ensure_ascii=False)
+    rendered = node_zod(node.value, indent, ref_names=ref_names, lazy_refs=lazy_refs)
+    return f"{rendered}.describe({described})"
+
+
+def node_zod(
+    node: ContractNode,
+    indent: str = "",
+    *,
+    ref_names: Mapping[str, str] | None = None,
+    lazy_refs: frozenset[str] = frozenset(),
+) -> str:
+    """Render one canonical Zod expression from the shared contract.
+
+    `ref_names` maps a concept type to the variable its schema is declared
+    under; `lazy_refs` names the targets whose declaration cannot precede this
+    one, which are emitted through `z.lazy` so a cycle closes by name.
+    """
     if isinstance(node, RefNode):
-        described = json.dumps(node.description, ensure_ascii=False)
-        return f"{node_zod(node.value, indent)}.describe({described})"
+        return _reference_zod(node, indent, ref_names=ref_names, lazy_refs=lazy_refs)
     if isinstance(node, ScalarNode):
         return _scalar_zod(node)
     if isinstance(node, LiteralNode):
@@ -475,7 +512,7 @@ def node_zod(node: ContractNode, indent: str = "") -> str:
     if isinstance(node, AnyNode):
         return "z.unknown()"
     if isinstance(node, ListNode):
-        item = node_zod(node.item, indent)
+        item = node_zod(node.item, indent, ref_names=ref_names, lazy_refs=lazy_refs)
         if node.item_nullable:
             item += ".nullable()"
         return f"z.array({item})"
@@ -483,7 +520,9 @@ def node_zod(node: ContractNode, indent: str = "") -> str:
     child_indent = f"{indent}  "
     rows: list[str] = []
     for field_contract in node.fields:
-        rendered = node_zod(field_contract.value, child_indent)
+        rendered = node_zod(
+            field_contract.value, child_indent, ref_names=ref_names, lazy_refs=lazy_refs
+        )
         if field_contract.nullable:
             rendered += ".nullable()"
         if not field_contract.required:
@@ -492,6 +531,56 @@ def node_zod(node: ContractNode, indent: str = "") -> str:
             f"{child_indent}{json.dumps(field_contract.name, ensure_ascii=False)}: {rendered}"
         )
     return f"z.object({{\n{',\n'.join(rows)}\n{indent}}})"
+
+
+def _ref_variable(concept_type: str, ref_names: Mapping[str, str] | None) -> str:
+    """Return the variable a referenced concept type is declared under."""
+    if ref_names is not None and concept_type in ref_names:
+        return ref_names[concept_type]
+    return model_name(concept_type, "Schema")
+
+
+def _embedded_targets(contract: TypeContract) -> tuple[str, ...]:
+    """Return the concept types this contract embeds, in authored field order."""
+    return tuple(
+        field_contract.value.concept_type
+        for field_contract in contract.root.fields
+        if isinstance(field_contract.value, RefNode) and field_contract.value.embedded
+    )
+
+
+def _declaration_order(
+    contracts: Sequence[TypeContract],
+) -> tuple[tuple[TypeContract, ...], frozenset[str]]:
+    """Order declarations so a target precedes its user, naming the back edges.
+
+    A JavaScript `const` cannot be read before it is declared, so an embedded
+    reference needs its target declared first. A cycle makes that impossible
+    for at least one edge; those edges are returned so the renderer can close
+    them with `z.lazy`, which defers the read to call time.
+    """
+    by_type = {contract.concept_type: contract for contract in contracts}
+    ordered: list[TypeContract] = []
+    emitted: set[str] = set()
+    visiting: list[str] = []
+    lazy: set[str] = set()
+
+    def visit(concept_type: str) -> None:
+        if concept_type in emitted or concept_type not in by_type:
+            return
+        if concept_type in visiting:
+            lazy.add(concept_type)
+            return
+        visiting.append(concept_type)
+        for target in _embedded_targets(by_type[concept_type]):
+            visit(target)
+        visiting.pop()
+        emitted.add(concept_type)
+        ordered.append(by_type[concept_type])
+
+    for contract in contracts:
+        visit(contract.concept_type)
+    return tuple(ordered), frozenset(lazy)
 
 
 def render_zod(contracts: Sequence[TypeContract], *, zod_import: ZodImport = "zod") -> str:
@@ -506,9 +595,9 @@ def render_zod(contracts: Sequence[TypeContract], *, zod_import: ZodImport = "zo
         else "import { z } from 'zod';"
     )
     lines = ["// Generated by okf-parser", import_line, ""]
-    for contract in contracts:
-        lines.append(
-            f"export const {variable_names[contract.concept_type]} = {node_zod(contract.root)};"
-        )
+    ordered, lazy_refs = _declaration_order(contracts)
+    for contract in ordered:
+        rendered = node_zod(contract.root, ref_names=variable_names, lazy_refs=lazy_refs)
+        lines.append(f"export const {variable_names[contract.concept_type]} = {rendered};")
         lines.append("")
     return "\n".join(lines)
