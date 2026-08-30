@@ -1,8 +1,13 @@
+"""Tests for the commit-message hook module."""
+
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 from okf_parser.git_commit_cli import main
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def test_commit_msg_validator_accepts_plain_message_by_default(tmp_path: Path) -> None:
