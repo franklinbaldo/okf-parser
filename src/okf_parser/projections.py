@@ -1,4 +1,4 @@
-"""Parse and resolve `type: Projection` documents against the relational contract.
+"""Parse, resolve, and compile `type: Projection` documents.
 
 RFC 0018 section 5. A projection names one root concept type and the declared
 relations to traverse; every relation it lists must already exist as a
@@ -6,9 +6,6 @@ relations to traverse; every relation it lists must already exist as a
 declares and can never invent a relationship. Projections do not become concept
 types: they have no documents of their own, they are not materialized as typed
 relations, and they do not participate in ``apply``.
-
-This module is resolution only. Compiling a resolved projection into a
-``TypeContract`` and exporting it is the next step of the same RFC.
 """
 
 from __future__ import annotations
@@ -18,7 +15,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn, cast
 
 from okf_parser.relational_schema import load_relational_schema
-from okf_parser.schema_contract import SchemaExportError
+from okf_parser.schema_contract import (
+    FieldContract,
+    ListNode,
+    ObjectNode,
+    RefNode,
+    ScalarNode,
+    SchemaExportError,
+    TypeContract,
+    unique_model_names,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -255,11 +261,77 @@ def load_projections(
     return parse_projections(documents, schema.foreign_keys, concept_types=concept_types)
 
 
+def _projection_reference(member: ProjectionMember) -> RefNode:
+    """Represent one composed member as a named sibling-schema reference."""
+    return RefNode(
+        concept_type=member.concept_type,
+        columns=member.foreign_key.columns,
+        referenced_columns=member.foreign_key.referenced_columns,
+        position=0,
+        value=ScalarNode("string"),
+        embedded=True,
+    )
+
+
+def compile_projections(
+    projections: Sequence[Projection],
+    concept_contracts: Sequence[TypeContract],
+) -> tuple[TypeContract, ...]:
+    """Compile resolved projections from existing concept contracts.
+
+    The root contract is copied as-is: v1 does not permit projection field
+    exclusion. Declared members are appended as named references to sibling
+    contracts, never by copying the sibling structure. A member is always
+    present; RFC 0018's ``optional`` modifier makes its value nullable.
+    """
+    contracts_by_type = {contract.concept_type: contract for contract in concept_contracts}
+    names = unique_model_names(tuple(item.name for item in projections), "Projection")
+    compiled: list[TypeContract] = []
+    for projection in projections:
+        root_contract = contracts_by_type.get(projection.root)
+        if root_contract is None:
+            _fail(
+                f"projection {projection.name!r}: root contract {projection.root!r} "
+                "was not compiled"
+            )
+        root_names = {field.name for field in root_contract.root.fields}
+        members: list[FieldContract] = []
+        for member in projection.members:
+            if member.alias in root_names:
+                _fail(
+                    f"projection {projection.name!r}: member {member.alias!r} collides "
+                    "with a field of the root contract"
+                )
+            reference = _projection_reference(member)
+            value = (
+                ListNode(item=reference, item_nullable=False)
+                if member.collection
+                else reference
+            )
+            members.append(
+                FieldContract(
+                    name=member.alias,
+                    required=True,
+                    nullable=member.optional,
+                    value=value,
+                )
+            )
+        compiled.append(
+            TypeContract(
+                concept_type=projection.name,
+                model_name=names[projection.name],
+                root=ObjectNode((*root_contract.root.fields, *members)),
+            )
+        )
+    return tuple(compiled)
+
+
 __all__ = [
     "PROJECTION_TYPE",
     "Projection",
     "ProjectionError",
     "ProjectionMember",
+    "compile_projections",
     "load_projections",
     "parse_projections",
 ]
