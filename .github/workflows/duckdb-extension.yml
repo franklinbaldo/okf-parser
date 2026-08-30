@@ -42,5 +42,5 @@ jobs:
               "SELECT concept_id, concept_type, title FROM okf_concepts(?)",
               [str(root)],
           ).fetchall()
-          assert rows == [("node", "Node", "Example node")], rows
+          assert rows == [("node", "Documentation", "Example node")], rows
           PY
