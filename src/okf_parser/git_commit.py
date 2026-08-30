@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -12,6 +11,8 @@ from okf_parser.digests import canonical_json, normalize_newlines, parsed_digest
 from okf_parser.parser import DocumentParseError, parse_document_text
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from okf_parser.models import YamlValue
 
 _RESERVED_KEYS = frozenset(
@@ -62,7 +63,7 @@ class GitCommitMessage:
     @property
     def concept_type(self) -> str:
         """Return the effective semantic OKF type."""
-        return cast(str, self.effective_frontmatter["type"])
+        return cast("str", self.effective_frontmatter["type"])
 
 
 def _parse_metadata(block: str) -> dict[str, YamlValue]:
