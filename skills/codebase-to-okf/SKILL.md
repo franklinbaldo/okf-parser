@@ -11,6 +11,7 @@ when_to_use: >-
   modules, classes, functions, methods, imports, signatures, parameters, returns, docstrings,
   decorators, bases, fields and syntactic call observations.
 scripts:
+  - scripts/codebase_to_okf.py
   - scripts/python_codebase_to_okf.py
   - scripts/finalize_codebase_okf.py
   - scripts/query_codebase_okf.py
@@ -39,29 +40,35 @@ good parser feature for unrelated producers such as OpenAPI, SQL schemas, legisl
 
 ## Generate a Python projection
 
-The executable recipes are bundled with the skill rather than embedded in this document so an
-agent does not need to ingest implementation code merely to discover or use the capability.
+The default agent-facing recipe is one-shot: it generates the source projection, scaffolds and
+authors the producer-defined type specs through the canonical `okf-parser init` lifecycle, and only
+returns success after normative validation passes.
 
 ```bash
-uv run skills/codebase-to-okf/scripts/python_codebase_to_okf.py \
+uv run skills/codebase-to-okf/scripts/codebase_to_okf.py \
   ./src ./.derived/codebase-okf
 ```
 
 Regeneration is explicit:
 
 ```bash
-uv run skills/codebase-to-okf/scripts/python_codebase_to_okf.py \
+uv run skills/codebase-to-okf/scripts/codebase_to_okf.py \
   ./src ./.derived/codebase-okf --force
 ```
 
-Use repeated `--exclude-dir NAME` for project-specific generated or vendor directories.
+Use repeated `--exclude-dir NAME` for project-specific generated or vendor directories. A successful
+JSON result reports both source-concept counts and the generated specification count, with
+`normative_specs: true`.
 
-## Finalize producer-defined types
+## Lower-level generation and type finalization
 
-After generation, make the derived bundle self-describing with the same type-spec lifecycle used by
-`okf-parser` itself:
+The one-shot recipe intentionally composes two smaller recipes. Use them directly only when a task
+needs to inspect or repair an intermediate stage:
 
 ```bash
+uv run skills/codebase-to-okf/scripts/python_codebase_to_okf.py \
+  ./src ./.derived/codebase-okf
+
 uv run skills/codebase-to-okf/scripts/finalize_codebase_okf.py \
   ./.derived/codebase-okf
 ```
@@ -133,13 +140,12 @@ a genuinely source-neutral primitive missing from `okf-parser`.
 
 ## Agent workflow
 
-1. Run the narrowest recipe that supports the source language.
-2. Finalize the generated bundle so every producer-defined type has a canonical normative spec.
-3. Inspect the compact JSON summaries and validation result.
-4. Query the generated OKF before opening source files.
-5. Open source only when the generated facts are insufficient for the task.
-6. Treat candidate targets as candidates until a resolver establishes a stronger relation.
-7. Delete and regenerate derived knowledge whenever source or extraction policy changes.
+1. Run the narrowest one-shot recipe that supports the source language.
+2. Inspect its compact JSON summary and normative validation result.
+3. Query the generated OKF before opening source files.
+4. Open source only when the generated facts are insufficient for the task.
+5. Treat candidate targets as candidates until a resolver establishes a stronger relation.
+6. Delete and regenerate derived knowledge whenever source or extraction policy changes.
 
 ## Guardrails
 
