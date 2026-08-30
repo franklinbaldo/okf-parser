@@ -1,0 +1,84 @@
+{
+  "valid": [
+    {
+      "name": "plain",
+      "source": "Fix the thing\n\nNarrative.\n",
+      "subject": "Fix the thing",
+      "authored_metadata": {},
+      "effective_frontmatter": {"type": "Commit", "title": "Fix the thing"},
+      "body": "Narrative.\n",
+      "has_envelope": false,
+      "source_digest": "sha256:a57c5b47db88bb64e3cdeff8c503465b010f57746f210ad0e5e9aff0f888e4b6",
+      "parsed_digest": "okf-parsed-v1-jcs-sha256:c19c4c2520f68da420c1ba1cfd5871f836fbeff99df1ebdba51509fc57a7ea6e",
+      "formatted": "Fix the thing\n\nNarrative.\n"
+    },
+    {
+      "name": "structured",
+      "source": "Publish parser history\n\n--- okf\ntype: Post\npublish: true\ntags:\n  - git\n  - okf\n---\n\nHello **history**.\n",
+      "subject": "Publish parser history",
+      "authored_metadata": {"type": "Post", "publish": "true", "tags": ["git", "okf"]},
+      "effective_frontmatter": {"type": "Post", "publish": "true", "tags": ["git", "okf"], "title": "Publish parser history"},
+      "body": "Hello **history**.\n",
+      "has_envelope": true,
+      "source_digest": "sha256:7f223b8850136874d8218f55a819e5df5dab385a4c5a8e07030e336248fcd6c9",
+      "parsed_digest": "okf-parsed-v1-jcs-sha256:d27af18923c8a5e99d5925af51d527797f5c574bf9158a8c903dde1b53349e47",
+      "formatted": "Publish parser history\n\n--- okf\n\"publish\": \"true\"\n\"tags\": [\"git\",\"okf\"]\n\"type\": \"Post\"\n---\n\nHello **history**.\n"
+    },
+    {
+      "name": "subject-only",
+      "source": "Legacy subject only",
+      "subject": "Legacy subject only",
+      "authored_metadata": {},
+      "effective_frontmatter": {"type": "Commit", "title": "Legacy subject only"},
+      "body": "",
+      "has_envelope": false,
+      "source_digest": "sha256:1f2874fbac03a8c04e8f71b551320bb1006087b1eee542f87d5ea68837ab62ca",
+      "parsed_digest": "okf-parsed-v1-jcs-sha256:508d433a377922534b97a511103f7c97f44171a5b9f24290ecd0f16ecc2e05fa",
+      "formatted": "Legacy subject only"
+    },
+    {
+      "name": "conventional-subject",
+      "source": "feat(parser): preserve subjects\n\nBody.",
+      "subject": "feat(parser): preserve subjects",
+      "authored_metadata": {},
+      "effective_frontmatter": {"type": "Commit", "title": "feat(parser): preserve subjects"},
+      "body": "Body.",
+      "has_envelope": false,
+      "source_digest": "sha256:4fee7cb6063d4e4f8b07a02697f2427f83fb733b2198712935d748ffcd294ea0",
+      "parsed_digest": "okf-parsed-v1-jcs-sha256:a72a4f8baa3ca2011dbf1554013075157c35bf3a4cc476b376cfaad2d346bc1f",
+      "formatted": "feat(parser): preserve subjects\n\nBody."
+    }
+  ],
+  "invalid": [
+    {
+      "name": "empty-subject",
+      "source": "\n\nBody",
+      "code": "GIT_MESSAGE_EMPTY_SUBJECT"
+    },
+    {
+      "name": "unterminated-envelope",
+      "source": "Subject\n\n--- okf\ntype: Change\n",
+      "code": "GIT_MESSAGE_UNTERMINATED_ENVELOPE"
+    },
+    {
+      "name": "reserved-title",
+      "source": "Subject\n\n--- okf\ntitle: Another title\n---",
+      "code": "GIT_MESSAGE_RESERVED_KEY"
+    },
+    {
+      "name": "invalid-type",
+      "source": "Subject\n\n--- okf\ntype:\n  - Change\n---",
+      "code": "GIT_MESSAGE_TYPE"
+    },
+    {
+      "name": "missing-body-separator",
+      "source": "Subject\n\n--- okf\ntype: Change\n---\nBody",
+      "code": "GIT_MESSAGE_BODY_SEPARATOR"
+    },
+    {
+      "name": "duplicate-envelope",
+      "source": "Subject\n\n--- okf\ntype: Change\n---\n\nBody\n--- okf\n",
+      "code": "GIT_MESSAGE_DUPLICATE_ENVELOPE"
+    }
+  ]
+}
