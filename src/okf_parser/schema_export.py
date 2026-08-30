@@ -12,6 +12,7 @@ from okf_parser.declared_schema import (
     declared_schema_relative_path,
     parse_declared_schema,
 )
+from okf_parser.projections import PROJECTION_TYPE
 from okf_parser.pydantic_projection import (
     build_dynamic_pydantic_models,
     render_pydantic_source,
@@ -114,7 +115,14 @@ def build_schema_contracts(
     every field participating in a declared foreign key compiles to a reference
     node. Omitted, the contracts are exactly what they have always been.
     """
-    observed = documents_by_type(path, exclude)
+    observed = {
+        # A projection is a composed shape over the concept types, not one of
+        # them: RFC 0018 section 5. Compiling it here would mint a `Projection`
+        # contract whose fields are `name`, `root` and `include`.
+        concept_type: documents
+        for concept_type, documents in documents_by_type(path, exclude).items()
+        if concept_type != PROJECTION_TYPE
+    }
     declared_by_type = _declared_types_by_type(path, tuple(observed), spec_template)
     contracts = compile_contracts(
         observed,
