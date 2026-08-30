@@ -20,6 +20,7 @@ from okf_parser.schema_contract import (
     ListNode,
     LiteralNode,
     ObjectNode,
+    RefNode,
     ScalarNode,
     SchemaNameCollisionError,
     TypeContract,
@@ -175,10 +176,14 @@ def _runtime_annotation(
     path: StructuralPath,
     registry: PydanticModelNameRegistry,
 ) -> object:
-    if isinstance(node, ScalarNode):
-        declared = node.declared_type
+    carried = node
+    while isinstance(carried, RefNode):
+        # A reference is metadata about the value; the annotation is the value's.
+        carried = carried.value
+    if isinstance(carried, ScalarNode):
+        declared = carried.declared_type
         if declared is None:
-            return _python_type(node.kind)
+            return _python_type(carried.kind)
         return {
             "string": str,
             "boolean": bool,
@@ -191,21 +196,21 @@ def _runtime_annotation(
             "uuid": UUID,
             "unsupported": Any,
         }.get(declared.family, Any)
-    if isinstance(node, LiteralNode):
-        return cast("Any", Literal)[node.value]
-    if isinstance(node, AnyNode):
+    if isinstance(carried, LiteralNode):
+        return cast("Any", Literal)[carried.value]
+    if isinstance(carried, AnyNode):
         return Any
-    if isinstance(node, ListNode):
+    if isinstance(carried, ListNode):
         item: Any = _runtime_annotation(
-            node.item,
+            carried.item,
             suggested_name=f"{suggested_name}Item",
             path=(*path, "[]"),
             registry=registry,
         )
-        if node.item_nullable:
+        if carried.item_nullable:
             item = item | None
         return list[item]
-    return _dynamic_model(suggested_name, node, path=path, registry=registry)
+    return _dynamic_model(suggested_name, carried, path=path, registry=registry)
 
 
 def _dynamic_model(
@@ -279,6 +284,7 @@ class _SourceField:
     required: bool
     nullable: bool
     alias: str | None
+    references: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -390,27 +396,31 @@ def _source_annotation(
     path: StructuralPath,
     context: _SourceContext,
 ) -> _SourceAnnotation:
-    if isinstance(node, ScalarNode):
-        return _source_scalar(node, context.imports)
-    if isinstance(node, LiteralNode):
+    carried = node
+    while isinstance(carried, RefNode):
+        # A reference is metadata about the value; the annotation is the value's.
+        carried = carried.value
+    if isinstance(carried, ScalarNode):
+        return _source_scalar(carried, context.imports)
+    if isinstance(carried, LiteralNode):
         context.imports.typing_names.add("Literal")
-        return _literal_source_annotation(node.value)
-    if isinstance(node, AnyNode):
+        return _literal_source_annotation(carried.value)
+    if isinstance(carried, AnyNode):
         context.imports.typing_names.add("Any")
         return _SourceAnnotation("Any")
-    if isinstance(node, ListNode):
+    if isinstance(carried, ListNode):
         item = _source_annotation(
-            node.item,
+            carried.item,
             suggested_name=f"{suggested_name}Item",
             path=(*path, "[]"),
             context=context,
         )
-        if node.item_nullable:
+        if carried.item_nullable:
             item = _nullable_source_annotation(item)
         return _list_source_annotation(item)
     emitted_name = _collect_source_model(
         suggested_name,
-        node,
+        carried,
         path=path,
         context=context,
     )
@@ -439,8 +449,12 @@ def _collect_source_model(
         )
         if field_contract.nullable:
             annotation = _nullable_source_annotation(annotation)
-        if mapped.alias is not None or (
-            not field_contract.required and not field_contract.nullable
+        value = field_contract.value
+        references = value.reference_metadata if isinstance(value, RefNode) else None
+        if (
+            mapped.alias is not None
+            or references is not None
+            or (not field_contract.required and not field_contract.nullable)
         ):
             context.imports.field = True
         source_fields.append(
@@ -450,6 +464,7 @@ def _collect_source_model(
                 field_contract.required,
                 field_contract.nullable,
                 mapped.alias,
+                references,
             )
         )
     context.models.append(_SourceModel(emitted_name, tuple(source_fields)))
@@ -501,21 +516,28 @@ def _render_string_keyword(name: str, value: str) -> list[str]:
     ]
 
 
-def _render_field(field_contract: _SourceField) -> list[str]:
-    annotation = field_contract.annotation
-    if field_contract.alias is not None:
-        alias = json.dumps(field_contract.alias, ensure_ascii=False)
-        default = "" if field_contract.required else "default=None, "
-        compact = f"    {field_contract.name}: {annotation.compact} = Field({default}alias={alias})"
-        if annotation.lines is None and len(compact) <= _MAX_SOURCE_LINE:
-            return [compact]
-        lines = _render_annotation_assignment(field_contract, " = Field(")
-        if not field_contract.required:
-            lines.append("        default=None,")
-        lines.extend(_render_string_keyword("alias", field_contract.alias))
-        lines.append("    )")
-        return lines
+def _extra_payload(references: dict[str, object]) -> str:
+    return json.dumps({"x-okf-references": references}, ensure_ascii=False)
 
+
+def _render_extra_keyword(references: dict[str, object]) -> list[str]:
+    """Render `json_schema_extra`, breaking the payload when the line is too long."""
+    compact = f"        json_schema_extra={_extra_payload(references)},"
+    if len(compact) <= _MAX_SOURCE_LINE:
+        return [compact]
+    lines = ["        json_schema_extra={", '            "x-okf-references": {']
+    lines.extend(
+        f"                {json.dumps(key, ensure_ascii=False)}: "
+        f"{json.dumps(value, ensure_ascii=False)},"
+        for key, value in references.items()
+    )
+    lines.extend(["            },", "        },"])
+    return lines
+
+
+def _render_implicit_field(field_contract: _SourceField) -> list[str]:
+    """Render a field that needs no `Field(...)` keyword beyond its default."""
+    annotation = field_contract.annotation
     if field_contract.required:
         return _render_annotation_assignment(field_contract, "")
     if field_contract.nullable:
@@ -525,13 +547,48 @@ def _render_field(field_contract: _SourceField) -> list[str]:
             if annotation.lines is None and len(compact) <= _MAX_SOURCE_LINE
             else _render_annotation_assignment(field_contract, " = None")
         )
-
     compact = f"    {field_contract.name}: {annotation.compact} = Field(default=None)"
     if annotation.lines is None and len(compact) <= _MAX_SOURCE_LINE:
         return [compact]
     lines = _render_annotation_assignment(field_contract, " = Field(")
     lines.extend(["        default=None,", "    )"])
     return lines
+
+
+def _render_keyword_field(field_contract: _SourceField) -> list[str]:
+    """Render a field whose alias or reference metadata requires `Field(...)`."""
+    annotation = field_contract.annotation
+    references = field_contract.references
+    needs_default = not field_contract.required
+    keywords: list[str] = []
+    if needs_default:
+        keywords.append("default=None")
+    if field_contract.alias is not None:
+        keywords.append(f"alias={json.dumps(field_contract.alias, ensure_ascii=False)}")
+    if references is not None:
+        keywords.append(f"json_schema_extra={_extra_payload(references)}")
+
+    compact = f"    {field_contract.name}: {annotation.compact} = Field({', '.join(keywords)})"
+    if annotation.lines is None and len(compact) <= _MAX_SOURCE_LINE:
+        return [compact]
+
+    lines = _render_annotation_assignment(field_contract, " = Field(")
+    if needs_default:
+        lines.append("        default=None,")
+    if field_contract.alias is not None:
+        lines.extend(_render_string_keyword("alias", field_contract.alias))
+    if references is not None:
+        lines.extend(_render_extra_keyword(references))
+    lines.append("    )")
+    return lines
+
+
+def _render_field(field_contract: _SourceField) -> list[str]:
+    """Render one model field, using `Field(...)` only when a keyword needs it."""
+    explicit = field_contract.alias is not None or field_contract.references is not None
+    if explicit:
+        return _render_keyword_field(field_contract)
+    return _render_implicit_field(field_contract)
 
 
 def render_pydantic_source(contracts: tuple[TypeContract, ...]) -> str:

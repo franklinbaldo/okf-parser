@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from okf_parser.duckdb_types import DuckDBLogicalType
 
 type ZodImport = Literal["zod", "astro"]
-type ContractNode = ScalarNode | LiteralNode | ObjectNode | ListNode | AnyNode
+type ContractNode = ScalarNode | LiteralNode | ObjectNode | ListNode | AnyNode | RefNode
 
 _CAST_KINDS = frozenset({"string", "boolean", "integer", "number", "date", "datetime"})
 
@@ -59,6 +59,38 @@ class ListNode:
     item: ContractNode
     item_nullable: bool
     declared_type: DuckDBLogicalType | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RefNode:
+    """A field whose value identifies a document of another concept type.
+
+    The node wraps, rather than replaces, the scalar the field carries: under
+    ``--refs=key`` a reference is a type-level fact about the value, not a
+    promise that the consumer holds the referenced document.
+    """
+
+    concept_type: str
+    columns: tuple[str, ...]
+    referenced_columns: tuple[str, ...]
+    position: int
+    value: ContractNode
+
+    @property
+    def reference_metadata(self) -> dict[str, object]:
+        """Return the deterministic payload every format publishes."""
+        return {
+            "type": self.concept_type,
+            "columns": list(self.columns),
+            "referencedColumns": list(self.referenced_columns),
+            "position": self.position,
+        }
+
+    @property
+    def description(self) -> str:
+        """Return the one-line description formats without metadata can carry."""
+        targets = ", ".join(self.referenced_columns)
+        return f"references {self.concept_type}({targets})"
 
 
 @dataclass(frozen=True, slots=True)
@@ -350,6 +382,11 @@ def _scalar_schema(node: ScalarNode) -> dict[str, object]:
 
 def node_json_schema(node: ContractNode) -> dict[str, object]:
     """Render one canonical JSON Schema fragment from the shared contract."""
+    if isinstance(node, RefNode):
+        return {
+            **node_json_schema(node.value),
+            "x-okf-references": node.reference_metadata,
+        }
     if isinstance(node, ScalarNode):
         return _scalar_schema(node)
     if isinstance(node, LiteralNode):
@@ -365,6 +402,11 @@ def node_json_schema(node: ContractNode) -> dict[str, object]:
             schema["x-okf-duckdb-type"] = node.declared_type.sql
         return schema
 
+    return _object_json_schema(node)
+
+
+def _object_json_schema(node: ObjectNode) -> dict[str, object]:
+    """Render one object node, keeping field order and required-ness authored."""
     properties: dict[str, object] = {}
     required: list[str] = []
     for field_contract in node.fields:
@@ -423,6 +465,9 @@ def _scalar_zod(node: ScalarNode) -> str:
 
 def node_zod(node: ContractNode, indent: str = "") -> str:
     """Render one canonical Zod expression from the shared contract."""
+    if isinstance(node, RefNode):
+        described = json.dumps(node.description, ensure_ascii=False)
+        return f"{node_zod(node.value, indent)}.describe({described})"
     if isinstance(node, ScalarNode):
         return _scalar_zod(node)
     if isinstance(node, LiteralNode):
