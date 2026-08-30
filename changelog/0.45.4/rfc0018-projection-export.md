@@ -1,0 +1,1 @@
+- Export resolved RFC 0018 `Projection` contracts through JSON Schema, Zod, and Pydantic, preserving the root contract and composing declared relations by sibling-schema reference.
