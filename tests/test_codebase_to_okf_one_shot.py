@@ -81,14 +81,14 @@ def test_one_shot_recipe_returns_only_after_normative_fixed_point(tmp_path: Path
     assert payload["concepts"] == 7
     assert payload["spec_count"] == 7
     assert payload["total_concepts"] == 14
-    assert set(payload["created_specs"]) == {
-        f"docs/types/{name}" for name in EXPECTED_SPECS
-    }
+    expected_paths = {f"docs/types/{name}" for name in EXPECTED_SPECS}
+    assert set(payload["created_specs"]) == expected_paths
 
     report = validate_path(output, require_spec=SPEC_TEMPLATE, normative_spec=True)
     assert report.is_conformant
     assert report.concept_count == 14
-    assert {path.name for path in (output / "docs" / "types").glob("*.md")} == EXPECTED_SPECS
+    actual_specs = {path.name for path in (output / "docs" / "types").glob("*.md")}
+    assert actual_specs == EXPECTED_SPECS
 
     before = _snapshot(output)
     repeated = _run(source, output, "--force")
