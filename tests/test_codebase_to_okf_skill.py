@@ -47,7 +47,7 @@ def test_embedded_recipe_declares_pep723_metadata() -> None:
     recipe = _recipe_source()
     assert recipe.startswith("# /// script\n")
     assert '# requires-python = ">=3.12"' in recipe
-    assert '"okf-parser>=0.45.4"' in recipe
+    assert '"okf-parser>=0.45.2,<0.46"' in recipe
     compile(recipe, str(SKILL_PATH), "exec")
 
 
@@ -64,6 +64,14 @@ class Greeter:
 
 def main() -> str:
     return Greeter().hello(\"world\")
+
+
+def replaceable() -> int:
+    return 1
+
+
+def replaceable() -> int:
+    return 2
 """,
         encoding="utf-8",
     )
@@ -77,7 +85,8 @@ def main() -> str:
 
     report = validate_path(output)
     assert report.is_conformant
-    assert report.concept_count == 5
+    assert report.concept_count == 7
+    assert len(list((output / "symbols").glob("*.md"))) == 5
     first_snapshot = _snapshot(output)
 
     second = _run_recipe(script, source, output, "--force")
