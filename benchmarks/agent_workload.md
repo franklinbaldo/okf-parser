@@ -1,5 +1,5 @@
 ---
-type: BenchmarkProtocol
+type: Documentation
 title: Agent workload and token-cost benchmark
 description: Equivalent knowledge tasks measured by agent-consumed context, correctness, and tool diagnostics
 ---
@@ -183,7 +183,7 @@ uv run --script benchmarks/litellm_agentic_workload.py \
   --documents 1000 \
   --rounds 5 \
   --model openrouter/openai/gpt-5 \
-  --output results/agentic-live.json
+  --output results/agentic-live-1k.json
 ```
 
 ## Existing competitor workload
