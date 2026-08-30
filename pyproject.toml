@@ -26,9 +26,6 @@ dependencies = [
 [project.optional-dependencies]
 graphql = ["graphql-core>=3.2,<4"]
 
-[project.scripts]
-okf-commit-msg = "okf_parser.git_commit_cli:main"
-
 [dependency-groups]
 dev = [
   "graphql-core>=3.2,<4",
