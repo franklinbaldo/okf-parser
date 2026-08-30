@@ -180,8 +180,10 @@ def _render_resolution(
         "",
         f"Resolution status: `{status}` via `{RESOLUTION_METHOD}`.",
         "",
-        "This claim only says that import text maps uniquely to projected modules in this source tree. ",
-        "It does not prove Python runtime import selection, import hooks, monkey-patching, or symbol dispatch.",
+        "This claim only says that import text maps uniquely to projected "
+        "modules in this source tree.",
+        "It does not prove Python runtime import selection, import hooks, "
+        "monkey-patching, or symbol dispatch.",
         "",
         "## Projected module matches",
         "",
@@ -276,11 +278,14 @@ def _author_spec(root: Path) -> list[str]:
             "---\n"
             "type: Spec\n"
             "title: CodeImportResolution\n"
-            "description: A conservative source-tree mapping from a syntax-level import to projected modules\n"
+            "description: A conservative source-tree mapping from a syntax-level import "
+            "to projected modules\n"
             "---\n\n"
             "# CodeImportResolution\n\n"
-            "A `CodeImportResolution` is a derived claim about an existing `CodeImport` observation. "
-            "It records only module identities that can be mapped uniquely inside the projected source tree.\n\n"
+            "A `CodeImportResolution` is a derived claim about an existing "
+            "`CodeImport` observation. "
+            "It records only module identities that can be mapped uniquely inside "
+            "the projected source tree.\n\n"
             "## Frontmatter\n\n"
             "- `type` — always `CodeImportResolution`.\n"
             "- `source_import` — path of the immutable syntax-level `CodeImport` observation.\n"
@@ -298,14 +303,18 @@ def _author_spec(root: Path) -> list[str]:
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the source-tree import resolver CLI."""
     parser = argparse.ArgumentParser(
-        description="Resolve only uniquely matched local imports in a generated codebase OKF bundle."
+        description=(
+            "Resolve only uniquely matched local imports in a generated codebase OKF bundle."
+        )
     )
     parser.add_argument("bundle", type=Path, help="normatively finalized codebase OKF bundle")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Resolve local module matches while preserving syntax observations."""
     args = build_parser().parse_args(argv)
     root = args.bundle.resolve()
     try:
