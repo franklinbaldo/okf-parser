@@ -16,9 +16,19 @@ jobs:
           version: "0.11.21"
           python-version: "3.12"
       - run: uv sync --frozen --all-groups
-      - name: Print exact Ruff formatter diff
+      - name: Format and emit exact sources
+        shell: bash
         run: |
-          uv run ruff format --diff \
-            skills/codebase-to-okf/scripts/python_codebase_to_okf.py \
-            skills/codebase-to-okf/scripts/query_codebase_okf.py \
+          set -euo pipefail
+          files=(
+            skills/codebase-to-okf/scripts/python_codebase_to_okf.py
+            skills/codebase-to-okf/scripts/query_codebase_okf.py
             tests/test_codebase_to_okf_skill.py
+          )
+          uv run ruff format "${files[@]}"
+          for file in "${files[@]}"; do
+            echo "FORMATTED_FILE_BEGIN:$file"
+            base64 -w0 "$file"
+            echo
+            echo "FORMATTED_FILE_END:$file"
+          done
