@@ -209,6 +209,18 @@ def test_load_projections_reads_the_bundle(tmp_path: Path) -> None:
     assert projections[0].members[0].collection is True
 
 
+def test_load_projections_restores_authored_optional_boolean(tmp_path: Path) -> None:
+    root = _bundle(tmp_path)
+    _write(
+        root / "projection.md",
+        "---\ntype: Projection\nname: ProcessoConsultar\nroot: Processo\n"
+        "include:\n  - relation: Publicacao.processo\n    as: publicacoes\n"
+        "    optional: true\n---\n",
+    )
+    projections = load_projections(str(root), relational_schema="okf.schema.sql")
+    assert projections[0].members[0].optional is True
+
+
 def test_load_projections_needs_a_relational_schema(tmp_path: Path) -> None:
     root = _bundle(tmp_path)
     with pytest.raises(ProjectionError, match="relational schema"):
@@ -221,8 +233,9 @@ def test_a_bundle_with_no_projection_documents_yields_none(tmp_path: Path) -> No
     assert load_projections(str(tmp_path), relational_schema="okf.schema.sql") == ()
 
 
-def test_projection_documents_do_not_become_concept_types(tmp_path: Path) -> None:
+def test_projection_documents_export_by_authored_name_not_marker_type(tmp_path: Path) -> None:
     root = _bundle(tmp_path)
     contracts = build_schema_contracts(str(root), relational_schema="okf.schema.sql")
-    assert "Projection" not in {contract.concept_type for contract in contracts}
-    assert {contract.concept_type for contract in contracts} == {"Processo", "Publicacao"}
+    contract_types = {contract.concept_type for contract in contracts}
+    assert "Projection" not in contract_types
+    assert contract_types == {"Processo", "Publicacao", "ProcessoConsultar"}
