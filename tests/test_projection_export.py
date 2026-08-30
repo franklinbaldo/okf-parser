@@ -108,15 +108,16 @@ def test_json_schema_exports_projection_refs_and_defs_in_key_mode(tmp_path: Path
     assert "anyOf" in publicacao["properties"]["eventos"]
 
 
-def test_projection_with_composite_relation_exports_by_authored_alias(tmp_path: Path) -> None:
+def test_composite_relation_keeps_authored_alias_and_foreign_key_identity(tmp_path: Path) -> None:
     root = _bundle(tmp_path)
-    exported = export_json_schema(str(root), relational_schema="okf.schema.sql")
+    contracts = build_schema_contracts(str(root), relational_schema="okf.schema.sql")
+    [projection] = [item for item in contracts if item.concept_type == "PublicacaoConsultar"]
+    [eventos] = [field for field in projection.root.fields if field.name == "eventos"]
 
-    eventos = exported["schemas"]["PublicacaoConsultar"]["properties"]["eventos"]
-    rendered = str(eventos)
-    assert "EventoProcessual" in rendered
-    assert "publicacao_fonte" in rendered
-    assert "publicacao_source_id" in rendered
+    assert isinstance(eventos.value, ListNode)
+    assert isinstance(eventos.value.item, RefNode)
+    assert eventos.value.item.columns == ("publicacao_fonte", "publicacao_source_id")
+    assert eventos.value.item.referenced_columns == ("fonte", "source_id")
 
 
 def test_zod_and_pydantic_emit_projection_models(tmp_path: Path) -> None:
@@ -124,7 +125,7 @@ def test_zod_and_pydantic_emit_projection_models(tmp_path: Path) -> None:
     zod = export_zod_schema(str(root), relational_schema="okf.schema.sql")
     pydantic = export_pydantic_source(str(root), relational_schema="okf.schema.sql")
 
-    assert "export const ProcessoConsultarSchema" in zod
-    assert '"publicacoes": z.array(PublicacaoSchema)' in zod
+    assert "export const ProcessoConsultarProjectionSchema" in zod
+    assert '"publicacoes": z.array(PublicacaoConceptSchema)' in zod
     assert "class ProcessoConsultarProjection(BaseModel):" in pydantic
     assert "publicacoes: list[PublicacaoConcept]" in pydantic
