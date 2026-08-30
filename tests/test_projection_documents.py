@@ -7,11 +7,12 @@ from typing import TYPE_CHECKING
 import pytest
 
 from okf_parser.projections import (
+    Projection,
     ProjectionError,
     load_projections,
     parse_projections,
 )
-from okf_parser.relational_schema import parse_relational_schema
+from okf_parser.relational_schema import ForeignKeyConstraint, parse_relational_schema
 from okf_parser.schema_export import build_schema_contracts
 
 if TYPE_CHECKING:
@@ -40,16 +41,12 @@ CREATE TABLE "EventoProcessual" (
 CONCEPT_TYPES = ("EventoProcessual", "Processo", "Publicacao")
 
 
-def _foreign_keys() -> tuple[object, ...]:
+def _foreign_keys() -> tuple[ForeignKeyConstraint, ...]:
     return parse_relational_schema(SCHEMA_SQL).foreign_keys
 
 
-def _parse(document: dict[str, object]) -> tuple[object, ...]:
-    return parse_projections(
-        [document],
-        parse_relational_schema(SCHEMA_SQL).foreign_keys,
-        concept_types=CONCEPT_TYPES,
-    )
+def _parse(document: dict[str, object]) -> tuple[Projection, ...]:
+    return parse_projections([document], _foreign_keys(), concept_types=CONCEPT_TYPES)
 
 
 def _document(**overrides: object) -> dict[str, object]:

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NoReturn, cast
 
 from okf_parser.relational_schema import load_relational_schema
 from okf_parser.schema_contract import SchemaExportError
@@ -35,7 +35,7 @@ class ProjectionError(SchemaExportError):
     """Report a projection document the relational contract cannot support."""
 
 
-def _fail(message: str) -> None:
+def _fail(message: str) -> NoReturn:
     raise ProjectionError(message)
 
 
@@ -78,7 +78,7 @@ def _member_mappings(document: Mapping[str, object], name: str) -> tuple[Mapping
     for entry in include:
         if not isinstance(entry, dict):
             _fail(f"projection {name!r}: include member must be a mapping, got {entry!r}")
-        members.append(entry)
+        members.append(cast("Mapping[str, object]", entry))
     return tuple(members)
 
 
