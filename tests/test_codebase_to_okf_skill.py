@@ -149,7 +149,7 @@ def test_recipes_are_bundled_pep723_code_not_skill_context() -> None:
     assert "# /// script" not in skill
     for path, source in ((SCRIPT_PATH, recipe), (QUERY_SCRIPT_PATH, query_recipe)):
         assert source.startswith('# /// script\n# requires-python = ">=3.12"\n')
-        assert '"okf-parser>=0.45.2,<0.46"' in source
+        assert '"okf-parser>=0.45.4,<0.46"' in source
         compile(source, str(path), "exec")
 
 

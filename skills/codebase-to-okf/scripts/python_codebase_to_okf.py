@@ -1,7 +1,7 @@
 # /// script
 # requires-python = ">=3.12"
 # dependencies = [
-#   "okf-parser>=0.45.2,<0.46",
+#   "okf-parser>=0.45.4,<0.46",
 # ]
 # ///
 # ruff: noqa: T201
