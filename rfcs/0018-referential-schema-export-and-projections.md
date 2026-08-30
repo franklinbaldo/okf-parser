@@ -107,24 +107,31 @@ members come composed and which stay keys, so a per-field CLI selector
 would be a second place to say the same thing — the thing this RFC exists
 to prevent.
 
-Per-run embedding alone, however, is all-or-nothing, and a domain graph is
-usually cyclic: in the motivating bundle `Pessoa -> Processo -> Publicacao
--> Processo` closes a loop, so a global embed renders nearly every node
-through `z.lazy` and every Pydantic model through `model_rebuild()`.
-Correct, unreadable.
+Embedding never re-inlines the target's fields — section 2 already says so.
+An embedded reference emits the *name* of the sibling schema, so a bundle
+whose graph is cyclic stays finite: the cycle is closed by name, through
+`z.lazy` in Zod, `$ref` in JSON Schema, and a forward reference in
+Pydantic.
 
-The missing control is therefore depth, not per-field granularity:
+Depth, then, does not belong here. A flat export emits exactly one schema
+per concept type, and in a flat export every type is a root: `Processo`
+embedding `Publicacao` and `Publicacao` embedding `Processo` are the same
+two schemas seen from either side. Bounding "hops" would require emitting
+two variants of the same type — one composed and one keyed — which is a
+second shape for one contract, and the kind of divergence this RFC exists
+to prevent.
 
-- `--depth=N` bounds how many reference hops `--refs=embed` follows.
-  Beyond the bound, a reference degrades to its `--refs=key` form rather
-  than being dropped, so the shape stays honest about what it omitted.
-- `--depth=1`, the default when `--refs=embed` is given, embeds direct
-  children only. It answers the real request ("a `Processo` with its
-  publications") and makes cycles unreachable by construction instead of
-  survivable through `lazy`.
-- `--depth=0` is `--refs=key`. An unbounded depth must be asked for
-  explicitly (`--depth=max`), and only then do the cycle-rendering rules
-  in section 2 apply.
+Depth is a **projection** control, and section 5 is where it lives: a
+projection has exactly one root, so "how far from the root do members come
+composed" is a question it can actually answer. A projection member beyond
+its bound degrades to the reference's key form rather than being dropped,
+so the shape stays honest about what it omitted.
+
+For the flat export the mode is therefore binary:
+
+- `--refs=key` (default): scalar plus `x-okf-references`.
+- `--refs=embed`: every declared reference emits its sibling schema by
+  name, with the cycle rules of section 2.
 
 ### 3.1. Composite foreign keys
 
@@ -240,8 +247,8 @@ Stacked, each step independently reviewable and releasable:
 1. this RFC;
 2. `RefNode` + `--relational-schema` + `--refs=key` metadata across the
    three formats;
-3. `--refs=embed` with `--depth`, the composite-key error, and the
-   cycle-rendering corpus that `--depth=max` needs;
+3. `--refs=embed` for the flat export: sibling-name references, the cycle
+   corpus, and the composite-key error;
 4. `Projection` documents: parsing, resolution against the relational
    contract, and normative errors;
 5. projection export across the three formats;
@@ -254,11 +261,12 @@ Stacked, each step independently reviewable and releasable:
    Excluding is how a projection stays small, but it also lets a projection
    disagree with the type it projects. v1 says no; the composed shape is the
    root type plus declared members.
-2. Is `--depth=max` worth shipping in v1 at all? It is the only mode that
-   needs cycle rendering, and a projection can always state the shape it
-   wants explicitly.
+2. What is a projection's default depth — every declared member composed,
+   or one hop with the rest keyed? Section 5 declares members explicitly,
+   so the default only decides what a member without a bound means.
 
 Two questions from the first draft are now answered in sections 3 and 3.1:
-`--refs=embed` is per run, with `--depth` rather than per-field selection,
-and composite keys are supported by `--refs=key` and by projections, but
-rejected with a named error under standalone `--refs=embed`.
+`--refs=embed` is a per-run binary mode rather than a per-field selector,
+with depth belonging to projections; and composite keys are supported by
+`--refs=key` and by projections, but rejected with a named error under
+standalone `--refs=embed`.
