@@ -56,7 +56,7 @@ jobs:
               "SELECT concept_id, concept_type, title FROM okf_concepts(?)",
               [str(root)],
           ).fetchall()
-          assert concepts == [("node", "Node", "Example node")], concepts
+          assert concepts == [("node", "Documentation", "Example node")], concepts
 
           links = con.execute(
               "SELECT source_id, raw_target, target_id, exists FROM okf_links(?)",
