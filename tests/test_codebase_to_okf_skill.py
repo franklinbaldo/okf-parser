@@ -8,17 +8,9 @@ from pathlib import Path
 
 from okf_parser import validate_path
 
-SKILL_PATH = Path(__file__).parents[1] / "skills" / "codebase-to-okf" / "SKILL.md"
-RECIPE_MARKER = "<!-- recipe:python-codebase-to-okf -->"
-PYTHON_FENCE = "```python\n"
-
-
-def _recipe_source() -> str:
-    skill = SKILL_PATH.read_text(encoding="utf-8")
-    marker = skill.index(RECIPE_MARKER)
-    start = skill.index(PYTHON_FENCE, marker) + len(PYTHON_FENCE)
-    end = skill.index("\n```", start)
-    return skill[start:end] + "\n"
+SKILL_ROOT = Path(__file__).parents[1] / "skills" / "codebase-to-okf"
+SKILL_PATH = SKILL_ROOT / "SKILL.md"
+SCRIPT_PATH = SKILL_ROOT / "scripts" / "python_codebase_to_okf.py"
 
 
 def _snapshot(root: Path) -> dict[str, bytes]:
@@ -30,13 +22,12 @@ def _snapshot(root: Path) -> dict[str, bytes]:
 
 
 def _run_recipe(
-    script: Path,
     source: Path,
     output: Path,
     *extra: str,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(  # noqa: S603
-        [sys.executable, str(script), str(source), str(output), *extra],
+        [sys.executable, str(SCRIPT_PATH), str(source), str(output), *extra],
         check=False,
         capture_output=True,
         text=True,
@@ -44,54 +35,96 @@ def _run_recipe(
 
 
 def test_skill_is_itself_a_typed_okf_concept() -> None:
-    report = validate_path(SKILL_PATH.parent)
+    report = validate_path(SKILL_ROOT)
     assert report.is_conformant
     assert report.concept_count == 1
 
 
-def test_embedded_recipe_declares_pep723_metadata() -> None:
-    recipe = _recipe_source()
-    assert recipe.startswith("# /// script\n")
-    assert '# requires-python = ">=3.12"' in recipe
+def test_recipe_is_bundled_pep723_code_not_skill_context() -> None:
+    skill = SKILL_PATH.read_text(encoding="utf-8")
+    recipe = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert "scripts/python_codebase_to_okf.py" in skill
+    assert "# /// script" not in skill
+    assert recipe.startswith('# /// script\n# requires-python = ">=3.12"\n')
     assert '"okf-parser>=0.45.2,<0.46"' in recipe
-    compile(recipe, str(SKILL_PATH), "exec")
+    compile(recipe, str(SCRIPT_PATH), "exec")
 
 
-def test_embedded_recipe_generates_deterministic_conformant_bundle(tmp_path: Path) -> None:
+def test_recipe_generates_rich_deterministic_conformant_bundle(tmp_path: Path) -> None:
     source = tmp_path / "source"
     source.mkdir()
     (source / "app.py").write_text(
-        """import json
+        '''"""Example module."""
 
-class Greeter:
-    def hello(self, name: str) -> str:
+import json
+
+class Greeter(object):
+    """Provide greeting helpers."""
+
+    prefix: str = "hello"
+
+    @staticmethod
+    def hello(name: str = "world") -> str:
+        """Return the supplied name."""
         return name
 
 
 def main() -> str:
-    return Greeter().hello(\"world\")
+    return Greeter().hello("world")
 
 
 def main() -> str:
-    return \"second definition\"
-""",
+    return "second definition"
+''',
         encoding="utf-8",
     )
 
-    script = tmp_path / "codebase_to_okf.py"
-    script.write_text(_recipe_source(), encoding="utf-8")
     output = tmp_path / "bundle"
-
-    first = _run_recipe(script, source, output)
+    first = _run_recipe(source, output)
     assert first.returncode == 0, first.stderr
 
     report = validate_path(output)
     assert report.is_conformant
-    assert report.concept_count == 6
-    symbol_files = list((output / "symbols").glob("app-main-*.md"))
-    assert len(symbol_files) == 2
-    first_snapshot = _snapshot(output)
+    assert report.concept_count == 8
 
-    second = _run_recipe(script, source, output, "--force")
+    main_files = list((output / "symbols").glob("app-main-*.md"))
+    assert len(main_files) == 2
+
+    hello_files = list((output / "symbols").glob("app-greeter-hello-*.md"))
+    assert len(hello_files) == 1
+    hello = hello_files[0].read_text(encoding="utf-8")
+    assert '"signature": "def hello(name: str = \'world\') -> str"' in hello
+    assert '"return_annotation": "str"' in hello
+    assert '"parameters": [' in hello
+    assert '"name: str = \'world\'"' in hello
+    assert '"decorators": [' in hello
+    assert '"staticmethod"' in hello
+    assert "Return the supplied name." in hello
+
+    class_files = list((output / "symbols").glob("app-greeter-*.md"))
+    greeter = next(path for path in class_files if path != hello_files[0])
+    greeter_text = greeter.read_text(encoding="utf-8")
+    assert '"bases": [' in greeter_text
+    assert '"object"' in greeter_text
+    assert '"fields": [' in greeter_text
+    assert '"prefix"' in greeter_text
+
+    call_files = list((output / "calls").glob("*.md"))
+    assert len(call_files) == 2
+    hello_call = next(
+        path
+        for path in call_files
+        if '"callee": "hello"' in path.read_text(encoding="utf-8")
+    )
+    hello_call_text = hello_call.read_text(encoding="utf-8")
+    assert '"caller": "main"' in hello_call_text
+    assert '"expression": "Greeter().hello"' in hello_call_text
+    assert '"resolution": "syntactic-unresolved"' in hello_call_text
+    assert "app.py::Greeter.hello@" in hello_call_text
+    assert "navigation hints, not dispatch claims" in hello_call_text
+
+    first_snapshot = _snapshot(output)
+    second = _run_recipe(source, output, "--force")
     assert second.returncode == 0, second.stderr
     assert _snapshot(output) == first_snapshot
