@@ -37,6 +37,13 @@ export type {
   ReservedRecord,
   Severity,
 } from "./core.js";
+export {
+  GitCommitMessageError,
+  formatGitCommitMessage,
+  parseGitCommitMessage,
+  validateGitCommitMessage,
+} from "./git-commit.js";
+export type { GitCommitMessage } from "./git-commit.js";
 export { loadBundle } from "./engine.js";
 export type { EngineLoadOptions } from "./engine.js";
 export { ingestDocuments } from "./ingestion.js";
