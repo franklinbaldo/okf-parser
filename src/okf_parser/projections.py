@@ -74,7 +74,9 @@ def _text(document: Mapping[str, object], key: str, missing: str) -> str:
     return text
 
 
-def _member_mappings(document: Mapping[str, object], name: str) -> tuple[Mapping[str, object], ...]:
+def _member_mappings(
+    document: Mapping[str, object], name: str
+) -> tuple[Mapping[str, object], ...]:
     include = document.get("include", [])
     if include is None:
         return ()
@@ -83,7 +85,9 @@ def _member_mappings(document: Mapping[str, object], name: str) -> tuple[Mapping
     members: list[Mapping[str, object]] = []
     for entry in include:
         if not isinstance(entry, dict):
-            _fail(f"projection {name!r}: include member must be a mapping, got {entry!r}")
+            _fail(
+                f"projection {name!r}: include member must be a mapping, got {entry!r}"
+            )
         members.append(cast("Mapping[str, object]", entry))
     return tuple(members)
 
@@ -106,7 +110,9 @@ def _resolve_foreign_key(
     name: str,
     foreign_keys: Sequence[ForeignKeyConstraint],
 ) -> ForeignKeyConstraint:
-    matches = [item for item in foreign_keys if item.table == from_type and column in item.columns]
+    matches = [
+        item for item in foreign_keys if item.table == from_type and column in item.columns
+    ]
     if not matches:
         message = (
             f"projection {name!r}: the relational contract does not declare a foreign "
@@ -126,7 +132,9 @@ def _resolve_foreign_key(
 def _optional_flag(entry: Mapping[str, object], relation: str, name: str) -> bool:
     value = entry.get("optional", False)
     if not isinstance(value, bool):
-        message = f"projection {name!r}: {relation!r} optional must be a boolean, got {value!r}"
+        message = (
+            f"projection {name!r}: {relation!r} optional must be a boolean, got {value!r}"
+        )
         _fail(message)
     return value
 
@@ -145,7 +153,11 @@ def _member(
         )
         _fail(message)
     relation = _text(entry, "relation", f"projection {name!r}: member has no relation")
-    alias = _text(entry, "as", f"projection {name!r}: member {relation!r} has no 'as' name")
+    alias = _text(
+        entry,
+        "as",
+        f"projection {name!r}: member {relation!r} has no 'as' name",
+    )
     from_type, column = _split_relation(relation, name)
     foreign_key = _resolve_foreign_key(from_type, column, relation, name, foreign_keys)
     # RFC 0007 makes N:1 the primitive, so a key *pointing at* the root is the
@@ -175,7 +187,8 @@ def _members(
     foreign_keys: Sequence[ForeignKeyConstraint],
 ) -> tuple[ProjectionMember, ...]:
     members = tuple(
-        _member(entry, name, root, foreign_keys) for entry in _member_mappings(document, name)
+        _member(entry, name, root, foreign_keys)
+        for entry in _member_mappings(document, name)
     )
     seen: set[str] = set()
     for member in members:
@@ -201,7 +214,11 @@ def _projection(
     if root not in concept_types:
         message = f"projection {name!r}: root {root!r} is an unknown concept type"
         _fail(message)
-    return Projection(name=name, root=root, members=_members(document, name, root, foreign_keys))
+    return Projection(
+        name=name,
+        root=root,
+        members=_members(document, name, root, foreign_keys),
+    )
 
 
 def parse_projections(
@@ -284,7 +301,9 @@ def compile_projections(
     contracts, never by copying the sibling structure. A member is always
     present; RFC 0018's ``optional`` modifier makes its value nullable.
     """
-    contracts_by_type = {contract.concept_type: contract for contract in concept_contracts}
+    contracts_by_type = {
+        contract.concept_type: contract for contract in concept_contracts
+    }
     names = unique_model_names(tuple(item.name for item in projections), "Projection")
     compiled: list[TypeContract] = []
     for projection in projections:
