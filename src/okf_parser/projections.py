@@ -111,7 +111,9 @@ def _resolve_foreign_key(
     foreign_keys: Sequence[ForeignKeyConstraint],
 ) -> ForeignKeyConstraint:
     matches = [
-        item for item in foreign_keys if item.table == from_type and column in item.columns
+        item
+        for item in foreign_keys
+        if item.table == from_type and column in item.columns
     ]
     if not matches:
         message = (
