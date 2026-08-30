@@ -1,0 +1,38 @@
+name: Diagnostic Recipe Lint
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  audit:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.head_ref }}
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+      - run: uv sync --frozen --all-groups
+      - name: Remove blanket noqa, format, audit, and push
+        shell: bash
+        run: |
+          set -euo pipefail
+          files=(
+            skills/codebase-to-okf/scripts/python_codebase_to_okf.py
+            skills/codebase-to-okf/scripts/query_codebase_okf.py
+          )
+          sed -i '/^# ruff: noqa$/d' "${files[@]}"
+          uv run ruff format tests/test_codebase_to_okf_skill.py "${files[@]}"
+          uv run ruff check "${files[@]}" tests/test_codebase_to_okf_skill.py || true
+          git rm .github/workflows/diagnostic-remove-noqa.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add tests/test_codebase_to_okf_skill.py "${files[@]}"
+          git commit -m "style(skill): audit recipe lint explicitly"
+          git push origin "HEAD:${{ github.head_ref }}"
