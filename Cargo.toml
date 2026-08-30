@@ -1,6 +1,5 @@
 [workspace]
 members = ["okf-engine", "rust-core"]
-exclude = ["duckdb-extension"]
 resolver = "3"
 
 [profile.release]
