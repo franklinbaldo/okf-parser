@@ -4,6 +4,7 @@
 #   "okf-parser>=0.45.2,<0.46",
 # ]
 # ///
+# ruff: noqa: T201
 """Query a codebase-to-OKF projection through okf-parser's generic Bundle API."""
 
 from __future__ import annotations
@@ -17,11 +18,20 @@ from typing import Any
 from okf_parser import load_bundle
 
 
+class QueryError(ValueError):
+    """Expected user-facing query failure."""
+
+
+def fail(message: str) -> None:
+    """Raise an expected query failure with a prebuilt message."""
+    raise QueryError(message)
+
+
 def _rows(bundle_path: Path) -> list[dict[str, Any]]:
     """Load concept rows and expose producer frontmatter as query fields."""
     bundle = load_bundle(bundle_path)
     if not bundle.is_conformant:
-        raise ValueError("bundle is not conformant")
+        fail("bundle is not conformant")
 
     result: list[dict[str, Any]] = []
     for row in bundle.concepts.execute().to_dict(orient="records"):

@@ -4,6 +4,7 @@
 #   "okf-parser>=0.45.2,<0.46",
 # ]
 # ///
+# ruff: noqa: T201
 """Project Python source into a deterministic, disposable OKF bundle."""
 
 from __future__ import annotations
@@ -220,9 +221,11 @@ def _class_fields(node: ast.ClassDef) -> tuple[Field, ...]:
             )
         elif isinstance(item, ast.Assign):
             value = _unparse(item.value)
-            for target in item.targets:
-                if isinstance(target, ast.Name):
-                    fields.append(Field(target.id, "", value, item.lineno))
+            fields.extend(
+                Field(target.id, "", value, item.lineno)
+                for target in item.targets
+                if isinstance(target, ast.Name)
+            )
     return tuple(fields)
 
 
@@ -230,6 +233,7 @@ class CallCollector(ast.NodeVisitor):
     """Collect calls without attributing nested definitions to their parent."""
 
     def __init__(self) -> None:
+        """Initialize an empty call observation accumulator."""
         self.calls: list[CallObservation] = []
 
     def visit_Call(self, node: ast.Call) -> None:
@@ -275,6 +279,7 @@ class PythonFacts(ast.NodeVisitor):
     """Extract syntax-grounded code facts while preserving lexical provenance."""
 
     def __init__(self) -> None:
+        """Initialize lexical scope and extracted fact accumulators."""
         self.scope: list[tuple[str, str, int]] = []
         self.symbols: list[Symbol] = []
         self.imports: list[ImportRecord] = []
@@ -382,6 +387,15 @@ class PythonFacts(ast.NodeVisitor):
         )
 
 
+class RecipeError(ValueError):
+    """Expected user-facing recipe failure."""
+
+
+def fail(message: str) -> None:
+    """Raise an expected recipe failure with a prebuilt message."""
+    raise RecipeError(message)
+
+
 def module_name(path: PurePosixPath) -> str:
     """Convert a source-relative path into a dotted Python module name."""
     parts = list(path.with_suffix("").parts)
@@ -458,7 +472,7 @@ def parse_modules(
         )
     if errors:
         message = "\n".join(f"- {item}" for item in errors)
-        raise ValueError(f"source parsing failed; no output was written:\n{message}")
+        fail(f"source parsing failed; no output was written:\n{message}")
     return tuple(records)
 
 
@@ -490,16 +504,16 @@ def prepare_output(
     filesystem_root = Path(output_resolved.anchor)
 
     if output_resolved == filesystem_root:
-        raise ValueError("refusing to use a filesystem root as output")
+        fail("refusing to use a filesystem root as output")
     if output_resolved == source_resolved or is_under(source_resolved, output_resolved):
-        raise ValueError("output must not be the source root or one of its ancestors")
+        fail("output must not be the source root or one of its ancestors")
 
     if output_root.exists():
         if not output_root.is_dir():
-            raise ValueError(f"output exists and is not a directory: {output_root}")
+            fail(f"output exists and is not a directory: {output_root}")
         if any(output_root.iterdir()):
             if not force:
-                raise ValueError("output is not empty; pass --force to replace it")
+                fail("output is not empty; pass --force to replace it")
             shutil.rmtree(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
 
@@ -515,11 +529,10 @@ def _parameter_lines(parameters: tuple[Parameter, ...]) -> list[str]:
         "| Name | Kind | Type | Default |",
         "| --- | --- | --- | --- |",
     ]
-    for item in parameters:
-        lines.append(
-            f"| `{item.name}` | `{item.kind}` | `{item.annotation or '—'}` | "
-            f"`{item.default or '—'}` |"
-        )
+    lines.extend(
+        f"| `{item.name}` | `{item.kind}` | `{item.annotation or '—'}` | `{item.default or '—'}` |"
+        for item in parameters
+    )
     return lines
 
 
@@ -534,11 +547,10 @@ def _field_lines(fields: tuple[Field, ...]) -> list[str]:
         "| Name | Type | Default | Line |",
         "| --- | --- | --- | ---: |",
     ]
-    for item in fields:
-        lines.append(
-            f"| `{item.name}` | `{item.annotation or '—'}` | "
-            f"`{item.default or '—'}` | {item.line} |"
-        )
+    lines.extend(
+        f"| `{item.name}` | `{item.annotation or '—'}` | `{item.default or '—'}` | {item.line} |"
+        for item in fields
+    )
     return lines
 
 
@@ -553,7 +565,7 @@ def _symbol_body(
         f"# {symbol.qualname}",
         "",
         f"Defined in [{module_path}](../modules/{module_file}) at lines "
-        f"{symbol.line_start}–{symbol.line_end}.",
+        f"{symbol.line_start}-{symbol.line_end}.",
         "",
         "## Signature",
         "",
@@ -583,13 +595,13 @@ def _symbol_body(
         )
         body.extend(
             f"- `{item.expression}` (callee `{item.callee}`, lines "
-            f"{item.line_start}–{item.line_end})"
+            f"{item.line_start}-{item.line_end})"
             for item in symbol.calls
         )
     return "\n".join(body)
 
 
-def emit_bundle(
+def emit_bundle(  # noqa: C901, PLR0912, PLR0915
     output_root: Path,
     modules: tuple[ModuleRecord, ...],
 ) -> dict[str, int]:
@@ -750,7 +762,7 @@ def emit_bundle(
                     f"# {symbol.qualname} → {call.expression}",
                     "",
                     f"Observed in [{symbol.qualname}](../symbols/{symbol_file}) at lines "
-                    f"{call.line_start}–{call.line_end}.",
+                    f"{call.line_start}-{call.line_end}.",
                     "",
                     "Resolution status: `syntactic-unresolved`.",
                     "",
@@ -848,11 +860,11 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if not source_root.is_dir():
-            raise ValueError(f"source is not a directory: {source_root}")
+            fail(f"source is not a directory: {source_root}")
         ignored_dirs = frozenset({*DEFAULT_IGNORED_DIRS, *args.exclude_dir})
         paths = discover_python_files(source_root, output_root, ignored_dirs)
         if not paths:
-            raise ValueError("no Python source files found")
+            fail("no Python source files found")
         modules = parse_modules(source_root, paths)
         prepare_output(source_root, output_root, force=args.force)
         counts = emit_bundle(output_root, modules)
