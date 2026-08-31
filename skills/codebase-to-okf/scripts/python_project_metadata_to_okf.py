@@ -88,7 +88,9 @@ def _dependency_records(project: dict[str, object]) -> tuple[DependencyRecord, .
     """Collect PEP 621 runtime and optional dependency declarations in stable order."""
     records: list[DependencyRecord] = []
     dependencies = project.get("dependencies", [])
-    if not isinstance(dependencies, list) or not all(isinstance(item, str) for item in dependencies):
+    if not isinstance(dependencies, list) or not all(
+        isinstance(item, str) for item in dependencies
+    ):
         _fail("[project].dependencies must be an array of PEP 508 strings")
     records.extend(_parse_requirement("runtime", item) for item in dependencies)
 
@@ -98,7 +100,9 @@ def _dependency_records(project: dict[str, object]) -> tuple[DependencyRecord, .
     for group in sorted(optional):
         values = optional[group]
         if not isinstance(values, list) or not all(isinstance(item, str) for item in values):
-            _fail(f"[project].optional-dependencies.{group} must be an array of PEP 508 strings")
+            _fail(
+                f"[project].optional-dependencies.{group} must be an array of PEP 508 strings"
+            )
         records.extend(_parse_requirement(f"optional:{group}", item) for item in values)
     return tuple(records)
 
@@ -167,7 +171,11 @@ def _render_project(
         if isinstance(value, str) and value:
             fields[key.replace("-", "_")] = value
     dynamic = project.get("dynamic")
-    if isinstance(dynamic, list) and all(isinstance(item, str) for item in dynamic) and dynamic:
+    if (
+        isinstance(dynamic, list)
+        and all(isinstance(item, str) for item in dynamic)
+        and dynamic
+    ):
         fields["dynamic_fields"] = dynamic
     groups = list(dict.fromkeys(record.group for record in dependencies))
     if groups:
