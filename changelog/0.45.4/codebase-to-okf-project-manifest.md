@@ -1,4 +1,7 @@
-# Codebase project manifest projection
+---
+type: Release Note
+title: project PEP 621 dependencies into OKF
+---
 
 The `codebase-to-okf` skill now includes standard Python project metadata in the one-shot projection when a PEP 621 `[project]` table is present in `pyproject.toml`.
 
