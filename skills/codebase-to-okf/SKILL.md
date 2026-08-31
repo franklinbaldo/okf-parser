@@ -9,16 +9,18 @@ description: >-
 when_to_use: >-
   Use when source code should become disposable OKF knowledge. The bundled Python recipe extracts
   modules, classes, functions, methods, imports, signatures, parameters, returns, docstrings,
-  decorators, bases, fields and syntactic call observations.
+  decorators, bases, fields, syntactic call observations, and standard project dependency metadata.
 scripts:
   - scripts/codebase_to_okf.py
   - scripts/python_codebase_to_okf.py
+  - scripts/python_project_metadata_to_okf.py
   - scripts/finalize_codebase_okf.py
   - scripts/resolve_codebase_okf.py
   - scripts/query_codebase_okf.py
 compatibility: >-
-  Standalone execution requires uv and Python 3.12+. The PEP 723 recipes install okf-parser for
-  themselves and require no credentials after dependencies are available.
+  Standalone execution requires uv and Python 3.12+. The PEP 723 recipes install okf-parser and any
+  source-specific parser dependencies for themselves and require no credentials after dependencies
+  are available.
 ---
 
 # Project a codebase into OKF
@@ -29,22 +31,24 @@ knowledge**.
 Keep this boundary:
 
 ```text
-source code
+source code + authored project metadata
   → source-specific recipes in this skill
   → derived OKF concepts and observations
   → optional source-specific resolution claims
   → okf-parser generic validation / graph / relations / schema / search
 ```
 
-Do not add Python AST, Tree-sitter grammars, LSP clients, compiler APIs, or producer-specific code
-types to `okf-parser` merely to enrich this recipe. Promote a primitive only if it would still be a
-good parser feature for unrelated producers such as OpenAPI, SQL schemas, legislation, or API data.
+Do not add Python AST, Tree-sitter grammars, LSP clients, compiler APIs, package-manifest semantics,
+or producer-specific code types to `okf-parser` merely to enrich this recipe. Promote a primitive
+only if it would still be a good parser feature for unrelated producers such as OpenAPI, SQL
+schemas, legislation, or API data.
 
 ## Generate a Python projection
 
-The default agent-facing recipe is one-shot: it generates the source projection, scaffolds and
-authors the producer-defined type specs through the canonical `okf-parser init` lifecycle, and only
-returns success after normative validation passes.
+The default agent-facing recipe is one-shot: it generates the source projection, adds standard
+PEP 621 project metadata when a `[project]` table exists in `pyproject.toml`, scaffolds and authors
+the producer-defined type specs through the canonical `okf-parser init` lifecycle, and only returns
+success after normative validation passes.
 
 ```bash
 uv run skills/codebase-to-okf/scripts/codebase_to_okf.py \
@@ -59,8 +63,37 @@ uv run skills/codebase-to-okf/scripts/codebase_to_okf.py \
 ```
 
 Use repeated `--exclude-dir NAME` for project-specific generated or vendor directories. A successful
-JSON result reports both source-concept counts and the generated specification count, with
-`normative_specs: true`.
+JSON result reports source concepts, manifest concepts, project/dependency counts, generated
+specification count, and `normative_specs: true`.
+
+## Project manifest evidence
+
+When the source root contains standard PEP 621 metadata, the one-shot recipe emits one `CodeProject`
+plus one `CodeDependency` for each runtime or optional dependency declaration. The original PEP 508
+requirement string is preserved together with parsed navigation fields such as distribution name,
+extras, version specifier, marker, and direct URL when present.
+
+The authority is deliberately narrow:
+
+```text
+CodeDependency = declared in authored project metadata
+              ≠ installed in an environment
+              ≠ imported by source
+              ≠ reachable at runtime
+              ≠ actually used
+```
+
+This separation lets later analysis compare declared dependencies with `CodeImport` observations
+without silently equating the two. Project metadata remains source-specific skill logic rather than
+an `okf-parser` core concern.
+
+The lower-level manifest projector can be run directly against an already generated, non-normative
+bundle when an intermediate workflow needs it:
+
+```bash
+uv run skills/codebase-to-okf/scripts/python_project_metadata_to_okf.py \
+  ./src ./.derived/codebase-okf
+```
 
 ## Resolve local imports conservatively
 
@@ -83,11 +116,14 @@ what this resolver asserts.
 
 ## Lower-level generation and type finalization
 
-The one-shot recipe intentionally composes two smaller recipes. Use them directly only when a task
-needs to inspect or repair an intermediate stage:
+The one-shot recipe intentionally composes smaller recipes. Use them directly only when a task needs
+to inspect or repair an intermediate stage:
 
 ```bash
 uv run skills/codebase-to-okf/scripts/python_codebase_to_okf.py \
+  ./src ./.derived/codebase-okf
+
+uv run skills/codebase-to-okf/scripts/python_project_metadata_to_okf.py \
   ./src ./.derived/codebase-okf
 
 uv run skills/codebase-to-okf/scripts/finalize_codebase_okf.py \
@@ -124,6 +160,10 @@ uv run skills/codebase-to-okf/scripts/query_codebase_okf.py \
 uv run skills/codebase-to-okf/scripts/query_codebase_okf.py \
   ./.derived/codebase-okf --dependency pkg.utils
 
+# Which manifest declaration names a package?
+uv run skills/codebase-to-okf/scripts/query_codebase_okf.py \
+  ./.derived/codebase-okf --package httpx
+
 # Other useful filters
 uv run skills/codebase-to-okf/scripts/query_codebase_okf.py \
   ./.derived/codebase-okf --type CodeClass --source services/
@@ -142,7 +182,9 @@ The Python reference frontend uses the standard-library AST and emits producer-d
 - `CodeFunction` — functions outside an immediate class scope;
 - `CodeMethod` — methods, including signature, parameters, return annotation and docstring;
 - `CodeImport` — immutable syntax-level import observations;
-- `CodeCall` — syntactic call observations with caller, callee text, expression and source location.
+- `CodeCall` — syntactic call observations with caller, callee text, expression and source location;
+- `CodeProject` — authored PEP 621 project metadata when present;
+- `CodeDependency` — authored runtime and optional PEP 508 dependency declarations.
 
 Optional enrichment recipes may add claim types such as `CodeImportResolution`; they do not erase or
 upgrade the authority of the underlying observations.
@@ -170,11 +212,13 @@ a genuinely source-neutral primitive missing from `okf-parser`.
 
 1. Run the narrowest one-shot recipe that supports the source language.
 2. Inspect its compact JSON summary and normative validation result.
-3. Run an optional resolver only when the task benefits from stronger derived relations.
-4. Query the generated OKF before opening source files.
-5. Open source only when the generated facts are insufficient for the task.
-6. Keep syntax observations, source-tree resolution and runtime claims epistemically distinct.
-7. Delete and regenerate derived knowledge whenever source or extraction policy changes.
+3. Use manifest declarations as declaration evidence, never as proof of imports or runtime use.
+4. Run an optional resolver only when the task benefits from stronger derived relations.
+5. Query the generated OKF before opening source files.
+6. Open source only when the generated facts are insufficient for the task.
+7. Keep manifest declarations, syntax observations, source-tree resolution and runtime claims
+   epistemically distinct.
+8. Delete and regenerate derived knowledge whenever source or extraction policy changes.
 
 ## Guardrails
 
@@ -182,6 +226,7 @@ a genuinely source-neutral primitive missing from `okf-parser`.
 - Do not execute an untrusted recipe merely because it has PEP 723 metadata.
 - Do not put absolute paths, timestamps, credentials, or machine-specific state in canonical output.
 - Do not use `--force` with a destination you have not verified.
+- Do not infer installed or used dependencies merely from `pyproject.toml` declarations.
 - Do not turn unresolved names or dynamic Python behavior into hard graph edges without evidence.
 - Keep language-specific dependencies in recipe PEP 723 metadata, not in `okf-parser` runtime.
 
@@ -191,4 +236,4 @@ A codebase projection is complete when extraction succeeds atomically, output is
 unchanged input, every concept retains source-relative provenance, structural Markdown links
 resolve, every producer-defined type in use has a canonical normative specification,
 `okf-parser` reports the bundle conformant, and semantic claims do not exceed the evidence available
-to the chosen frontend or resolver.
+to the chosen frontend, manifest parser, or resolver.
