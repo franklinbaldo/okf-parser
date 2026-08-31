@@ -18,8 +18,9 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from okf_parser import validate_path
 from packaging.requirements import InvalidRequirement, Requirement
+
+from okf_parser import validate_path
 
 PROJECT_TYPE = "CodeProject"
 DEPENDENCY_TYPE = "CodeDependency"
