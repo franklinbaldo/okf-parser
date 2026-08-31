@@ -22,6 +22,15 @@ PROJECT_METADATA = SCRIPT_DIR / "python_project_metadata_to_okf.py"
 FINALIZER = SCRIPT_DIR / "finalize_codebase_okf.py"
 
 
+class StepFailure(RuntimeError):
+    """Expected failure from one lower-level recipe in the one-shot pipeline."""
+
+    def __init__(self, exit_code: int) -> None:
+        """Remember the lower-level exit classification without duplicating diagnostics."""
+        super().__init__()
+        self.exit_code = exit_code
+
+
 def _run(script: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
     """Run one trusted sibling recipe with the current PEP 723 environment."""
     return subprocess.run(  # noqa: S603
@@ -57,6 +66,17 @@ def _relay_failure(result: subprocess.CompletedProcess[str], step: str) -> int:
     return result.returncode or 2
 
 
+def _require_step(script: Path, args: list[str], step: str) -> dict[str, object]:
+    """Run one pipeline step and raise after relaying any user-facing failure."""
+    result = _run(script, args)
+    if result.returncode != 0:
+        raise StepFailure(_relay_failure(result, step))
+    payload = _payload(result, step)
+    if payload is None:
+        raise StepFailure(2)
+    return payload
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the one-shot codebase projection CLI."""
     parser = argparse.ArgumentParser(
@@ -87,26 +107,16 @@ def main(argv: list[str] | None = None) -> int:
     for name in args.exclude_dir:
         generation_args.extend(["--exclude-dir", name])
 
-    generated = _run(GENERATOR, generation_args)
-    if generated.returncode != 0:
-        return _relay_failure(generated, "generation")
-    generation = _payload(generated, "generation")
-    if generation is None:
-        return 2
-
-    projected_metadata = _run(PROJECT_METADATA, [str(args.source), str(args.output)])
-    if projected_metadata.returncode != 0:
-        return _relay_failure(projected_metadata, "project metadata projection")
-    metadata = _payload(projected_metadata, "project metadata projection")
-    if metadata is None:
-        return 2
-
-    finalized = _run(FINALIZER, [str(args.output)])
-    if finalized.returncode != 0:
-        return _relay_failure(finalized, "type finalization")
-    finalization = _payload(finalized, "type finalization")
-    if finalization is None:
-        return 2
+    try:
+        generation = _require_step(GENERATOR, generation_args, "generation")
+        metadata = _require_step(
+            PROJECT_METADATA,
+            [str(args.source), str(args.output)],
+            "project metadata projection",
+        )
+        finalization = _require_step(FINALIZER, [str(args.output)], "type finalization")
+    except StepFailure as exc:
+        return exc.exit_code
 
     source_concepts = int(generation.get("concepts", 0))
     manifest_concepts = int(metadata.get("concepts", 0))
