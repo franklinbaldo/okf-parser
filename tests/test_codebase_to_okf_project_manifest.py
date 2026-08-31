@@ -95,11 +95,15 @@ def test_one_shot_projects_manifest_without_overclaiming_usage(tmp_path: Path) -
 
     dependency_files = list((output / "dependencies").glob("*.md"))
     assert len(dependency_files) == 3
-    httpx = next(path for path in dependency_files if '"dependency_name": "httpx"' in path.read_text())
+    httpx = next(
+        path
+        for path in dependency_files
+        if '"dependency_name": "httpx"' in path.read_text(encoding="utf-8")
+    )
     httpx_text = httpx.read_text(encoding="utf-8")
     assert '"group": "runtime"' in httpx_text
     assert '"specifier": ">=0.28"' in httpx_text
-    assert '"marker": "python_version >= \'3.12\'"' in httpx_text
+    assert '"marker": "python_version >= \\"3.12\\""' in httpx_text
     assert '"resolution": "manifest-declared"' in httpx_text
     assert "does not prove installation" in httpx_text
 
