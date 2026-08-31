@@ -52,6 +52,12 @@ preserves compact facts useful for navigation without asserting runtime type res
 - `decorators` — optional syntax-level decorator expressions.
 - `bases` — optional syntax-level base expressions; these are not resolved types.
 - `fields` — optional names of direct class-body assignments.
+- `parent_qualname`, `parent_line_start`, `parent_symbol` — optional immediate lexical parent
+  identity and generated concept path; the line component disambiguates same-name redefinitions.
+- `child_qualnames`, `child_symbols` — optional immediate lexical children in source order.
+
+Lexical containment is syntax evidence. It does not assert inheritance ownership, descriptor
+binding, runtime reachability, or dispatch.
 """,
     ),
     "CodeFunction": (
@@ -71,6 +77,11 @@ parent is not a class. Nested functions remain functions and retain lexical prov
 - `decorators` — optional syntax-level decorators.
 - `calls_raw` — optional call expressions observed directly in the function body; these are not
   resolved dispatch edges.
+- `parent_qualname`, `parent_line_start`, `parent_symbol` — optional immediate lexical parent
+  identity and generated concept path; the line component disambiguates same-name redefinitions.
+- `child_qualnames`, `child_symbols` — optional immediate lexical children in source order.
+
+Containment is immediate and lexical only; it is not a runtime ownership or reachability claim.
 """,
     ),
     "CodeMethod": (
@@ -90,6 +101,11 @@ The classification is lexical and does not attempt descriptor or runtime dispatc
 - `decorators` — optional syntax-level decorators such as `staticmethod`.
 - `calls_raw` — optional call expressions observed directly in the method body; these are not
   resolved dispatch edges.
+- `parent_qualname`, `parent_line_start`, `parent_symbol` — optional immediate lexical parent
+  identity and generated concept path; the line component disambiguates same-name redefinitions.
+- `child_qualnames`, `child_symbols` — optional immediate lexical children in source order.
+
+Containment is immediate and lexical only; it does not strengthen method dispatch semantics.
 """,
     ),
     "CodeImport": (

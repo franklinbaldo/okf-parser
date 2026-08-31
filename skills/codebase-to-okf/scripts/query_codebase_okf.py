@@ -70,6 +70,8 @@ def _matches(row: dict[str, Any], args: argparse.Namespace) -> bool:
     for key, value in filters.items():
         if value and not _contains(row.get(key), value):
             return False
+    if args.parent and str(row.get("parent_qualname") or "").casefold() != args.parent.casefold():
+        return False
 
     if not args.query:
         return True
@@ -78,6 +80,8 @@ def _matches(row: dict[str, Any], args: argparse.Namespace) -> bool:
         "title",
         "name",
         "qualname",
+        "parent_qualname",
+        "child_qualnames",
         "signature",
         "caller",
         "callee",
@@ -111,6 +115,11 @@ def _compact(row: dict[str, Any]) -> dict[str, Any]:
         "title",
         "name",
         "qualname",
+        "parent_qualname",
+        "parent_line_start",
+        "parent_symbol",
+        "child_qualnames",
+        "child_symbols",
         "source_path",
         "line_start",
         "line_end",
@@ -149,6 +158,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("query", nargs="?", default="", help="broad text query")
     parser.add_argument("--type", help="filter by producer-defined concept type")
     parser.add_argument("--name", help="filter by symbol or project name")
+    parser.add_argument(
+        "--parent",
+        help="filter symbols by exact immediate lexical parent qualified name",
+    )
     parser.add_argument("--caller", help="filter call observations by caller")
     parser.add_argument("--callee", help="filter call observations by callee")
     parser.add_argument("--source", help="filter by source-relative path")

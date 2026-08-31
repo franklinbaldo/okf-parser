@@ -559,6 +559,7 @@ def _symbol_body(
     module_path: str,
     module_file: str,
     parent_file: str | None,
+    children: tuple[tuple[Symbol, str], ...],
 ) -> str:
     """Render rich symbol context without duplicating the full source body."""
     body = [
@@ -573,6 +574,12 @@ def _symbol_body(
     ]
     if parent_file is not None and symbol.parent_qualname is not None:
         body.extend(["", f"Parent: [{symbol.parent_qualname}](../symbols/{parent_file})."])
+    if children:
+        body.extend(["", "## Lexical children", ""])
+        body.extend(
+            f"- [{child.qualname}](../symbols/{child_file}) — {child.kind}"
+            for child, child_file in children
+        )
     if symbol.docstring:
         body.extend(["", "## Docstring", "", symbol.docstring])
     if symbol.decorators:
@@ -646,6 +653,14 @@ def emit_bundle(  # noqa: C901, PLR0912, PLR0915
                 f"import|{module.source_path}|{item.line_start}|{'|'.join(item.targets)}",
             )
 
+    children_by_parent: dict[tuple[str, str, int], list[Symbol]] = {}
+    for module in modules:
+        for symbol in module.symbols:
+            if symbol.parent_qualname is None or symbol.parent_line_start is None:
+                continue
+            key = (module.source_path, symbol.parent_qualname, symbol.parent_line_start)
+            children_by_parent.setdefault(key, []).append(symbol)
+
     index_lines = [
         "# Codebase OKF projection",
         "",
@@ -700,6 +715,15 @@ def emit_bundle(  # noqa: C901, PLR0912, PLR0915
                         symbol.parent_line_start,
                     )
                 )
+            child_symbols = tuple(
+                (
+                    child,
+                    symbol_files[(module.source_path, child.qualname, child.line_start)],
+                )
+                for child in children_by_parent.get(
+                    (module.source_path, symbol.qualname, symbol.line_start), []
+                )
+            )
             fields: dict[str, str | list[str]] = {
                 "type": symbol.concept_type,
                 "title": symbol.qualname,
@@ -712,6 +736,19 @@ def emit_bundle(  # noqa: C901, PLR0912, PLR0915
                 "signature": symbol.signature,
                 "generated_by": "codebase-to-okf",
             }
+            if (
+                parent_file is not None
+                and symbol.parent_qualname is not None
+                and symbol.parent_line_start is not None
+            ):
+                fields["parent_qualname"] = symbol.parent_qualname
+                fields["parent_line_start"] = str(symbol.parent_line_start)
+                fields["parent_symbol"] = f"symbols/{parent_file}"
+            if child_symbols:
+                fields["child_qualnames"] = [child.qualname for child, _ in child_symbols]
+                fields["child_symbols"] = [
+                    f"symbols/{child_file}" for _, child_file in child_symbols
+                ]
             if symbol.decorators:
                 fields["decorators"] = list(symbol.decorators)
             if symbol.bases:
@@ -732,6 +769,7 @@ def emit_bundle(  # noqa: C901, PLR0912, PLR0915
                     module.source_path,
                     module_file,
                     parent_file,
+                    child_symbols,
                 ),
             )
 
