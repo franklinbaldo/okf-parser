@@ -7,3 +7,4 @@ The `codebase-to-okf` skill now includes standard Python project metadata in the
 - dependency concepts use `manifest-declared` explicitly and do not claim installation, imports, reachability, or runtime use.
 - the query recipe adds `--package` for compact dependency lookup.
 - the normative finalizer documents both new producer-defined types through canonical `docs/types/{slug}.md` specs.
+- projects without a PEP 621 `[project]` table keep the source-only projection path unchanged.
