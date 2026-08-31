@@ -65,6 +65,7 @@ def _matches(row: dict[str, Any], args: argparse.Namespace) -> bool:
         "callee": args.callee,
         "source_path": args.source,
         "resolved_modules": args.dependency,
+        "dependency_name": args.package,
     }
     for key, value in filters.items():
         if value and not _contains(row.get(key), value):
@@ -91,6 +92,13 @@ def _matches(row: dict[str, Any], args: argparse.Namespace) -> bool:
         "resolved_modules",
         "unresolved_targets",
         "resolution_method",
+        "manifest_path",
+        "dependency_groups",
+        "dependency_name",
+        "group",
+        "declaration",
+        "specifier",
+        "marker",
     )
     return any(_contains(row.get(key), args.query) for key in searchable)
 
@@ -116,6 +124,17 @@ def _compact(row: dict[str, Any]) -> dict[str, Any]:
         "targets",
         "resolved_modules",
         "unresolved_targets",
+        "manifest_path",
+        "project",
+        "project_concept",
+        "dependency_groups",
+        "dependency_name",
+        "group",
+        "declaration",
+        "extras",
+        "specifier",
+        "marker",
+        "url",
         "resolution",
         "resolution_method",
         "candidate_targets",
@@ -129,7 +148,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("bundle", type=Path, help="generated OKF bundle")
     parser.add_argument("query", nargs="?", default="", help="broad text query")
     parser.add_argument("--type", help="filter by producer-defined concept type")
-    parser.add_argument("--name", help="filter by symbol name")
+    parser.add_argument("--name", help="filter by symbol or project name")
     parser.add_argument("--caller", help="filter call observations by caller")
     parser.add_argument("--callee", help="filter call observations by callee")
     parser.add_argument("--source", help="filter by source-relative path")
@@ -137,6 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--dependency",
         help="filter source-tree import resolutions by local module",
     )
+    parser.add_argument("--package", help="filter manifest declarations by dependency name")
     parser.add_argument("--limit", type=int, default=10, help="maximum results")
     parser.add_argument(
         "--full",
