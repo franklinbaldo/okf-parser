@@ -67,7 +67,9 @@ def test_projection_exposes_bidirectional_immediate_lexical_containment(tmp_path
     class_row = greeter[0]
     assert class_row["type"] == "CodeClass"
     assert class_row["child_qualnames"] == ["Greeter.hello"]
-    assert len(class_row["child_symbols"]) == 1
+    child_symbols = class_row["child_symbols"]
+    assert isinstance(child_symbols, list)
+    assert len(child_symbols) == 1
 
     methods = _query(output, "--parent", "Greeter")
     assert len(methods) == 1
