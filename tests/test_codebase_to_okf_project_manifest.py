@@ -105,7 +105,8 @@ def test_one_shot_projects_manifest_without_overclaiming_usage(tmp_path: Path) -
     assert '"specifier": ">=0.28"' in httpx_text
     assert '"marker": "python_version >= \\"3.12\\""' in httpx_text
     assert '"resolution": "manifest-declared"' in httpx_text
-    assert "does not prove installation" in httpx_text
+    normalized_httpx = " ".join(httpx_text.split())
+    assert "does not prove installation, import, reachability, or runtime use." in normalized_httpx
 
     package_query = _run(QUERY_SCRIPT, output, "--package", "httpx")
     assert package_query.returncode == 0, package_query.stderr
