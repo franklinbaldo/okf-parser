@@ -95,6 +95,23 @@ uv run skills/codebase-to-okf/scripts/python_project_metadata_to_okf.py \
   ./src ./.derived/codebase-okf
 ```
 
+## Navigate lexical containment
+
+Symbol concepts preserve immediate lexical containment in both directions. A child records its
+`parent_qualname`, parent definition line, and generated `parent_symbol` path; a parent records
+`child_qualnames` and `child_symbols` in source order. Same-name redefinitions remain distinct
+because relation identity includes the definition line and generated path.
+
+Query a class's immediate methods/nested definitions without reopening source:
+
+```bash
+uv run skills/codebase-to-okf/scripts/query_codebase_okf.py \
+  ./.derived/codebase-okf --parent Greeter
+```
+
+`--parent` is an exact immediate-parent filter. These relations describe lexical nesting only; they
+do not claim inheritance ownership, runtime reachability, descriptor binding, or call dispatch.
+
 ## Resolve local imports conservatively
 
 Resolution is a separate enrichment step because syntax observations and inferred relations have
