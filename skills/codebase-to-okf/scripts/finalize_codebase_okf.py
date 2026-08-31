@@ -128,6 +128,49 @@ evidence about syntax, not a resolved runtime dispatch edge.
   claims.
 """,
     ),
+    "CodeProject": (
+        "A Python project declaration observed in standard pyproject metadata",
+        """A `CodeProject` represents the authored PEP 621 `[project]` table from
+`pyproject.toml`. It records manifest evidence rather than the state of an installed environment.
+
+## Frontmatter
+
+- `type` — always `CodeProject`.
+- `title`, `name` — the declared project name, or a deterministic fallback when absent.
+- `ecosystem` — `python` for this recipe.
+- `manifest_path` — currently `pyproject.toml`.
+- `version`, `description`, `requires_python` — optional authored PEP 621 fields.
+- `dynamic_fields` — optional fields declared dynamic by the project metadata.
+- `dependency_groups` — optional groups that contain authored dependency declarations.
+- `generated_by` — producer identity, currently `codebase-to-okf`.
+
+A `CodeProject` does not claim that a wheel was built, a package was installed, or an environment
+matches the manifest.
+""",
+    ),
+    "CodeDependency": (
+        "A PEP 508 dependency declaration preserved from Python project metadata",
+        """A `CodeDependency` represents one authored requirement string from PEP 621 runtime or
+optional dependencies. It preserves the original declaration and parsed navigation fields without
+claiming installation or use.
+
+## Frontmatter
+
+- `type` — always `CodeDependency`.
+- `title` — dependency name and declaration group.
+- `ecosystem` — `python` for this recipe.
+- `manifest_path` — currently `pyproject.toml`.
+- `project`, `project_concept` — declaring project identity and generated project concept path.
+- `group` — `runtime` or `optional:<name>`.
+- `declaration` — the authored PEP 508 requirement string.
+- `dependency_name` — parsed distribution name.
+- `extras`, `specifier`, `marker`, `url` — optional parsed PEP 508 components.
+- `resolution` — `manifest-declared`; this is a declaration status, not package resolution.
+- `generated_by` — producer identity, currently `codebase-to-okf`.
+
+Manifest declaration does not prove installation, source import, reachability, or runtime use.
+""",
+    ),
     "Spec": (
         "A document that describes one producer-defined concept type",
         """A `Spec` document records the intended meaning and frontmatter contract of one concept
