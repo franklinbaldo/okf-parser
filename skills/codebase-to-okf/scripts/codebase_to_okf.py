@@ -22,7 +22,7 @@ PROJECT_METADATA = SCRIPT_DIR / "python_project_metadata_to_okf.py"
 FINALIZER = SCRIPT_DIR / "finalize_codebase_okf.py"
 
 
-class StepFailure(RuntimeError):
+class StepError(RuntimeError):
     """Expected failure from one lower-level recipe in the one-shot pipeline."""
 
     def __init__(self, exit_code: int) -> None:
@@ -70,10 +70,10 @@ def _require_step(script: Path, args: list[str], step: str) -> dict[str, object]
     """Run one pipeline step and raise after relaying any user-facing failure."""
     result = _run(script, args)
     if result.returncode != 0:
-        raise StepFailure(_relay_failure(result, step))
+        raise StepError(_relay_failure(result, step))
     payload = _payload(result, step)
     if payload is None:
-        raise StepFailure(2)
+        raise StepError(2)
     return payload
 
 
@@ -115,7 +115,7 @@ def main(argv: list[str] | None = None) -> int:
             "project metadata projection",
         )
         finalization = _require_step(FINALIZER, [str(args.output)], "type finalization")
-    except StepFailure as exc:
+    except StepError as exc:
         return exc.exit_code
 
     source_concepts = int(generation.get("concepts", 0))
