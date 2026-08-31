@@ -2,6 +2,7 @@
 # requires-python = ">=3.12"
 # dependencies = [
 #   "okf-parser>=0.45.4,<0.46",
+#   "packaging>=26,<27",
 # ]
 # ///
 # ruff: noqa: T201
