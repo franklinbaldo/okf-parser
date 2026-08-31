@@ -17,6 +17,7 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 GENERATOR = SCRIPT_DIR / "python_codebase_to_okf.py"
+PROJECT_METADATA = SCRIPT_DIR / "python_project_metadata_to_okf.py"
 FINALIZER = SCRIPT_DIR / "finalize_codebase_okf.py"
 
 
@@ -60,7 +61,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Generate a Python OKF projection and finalize its normative type specs."
     )
-    parser.add_argument("source", type=Path, help="Python source tree")
+    parser.add_argument("source", type=Path, help="Python project/source tree")
     parser.add_argument("output", type=Path, help="OKF bundle destination")
     parser.add_argument(
         "--force",
@@ -77,7 +78,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run generation and normative finalization as one agent-facing transaction."""
+    """Run source, manifest, and normative finalization as one agent-facing transaction."""
     args = build_parser().parse_args(argv)
     generation_args = [str(args.source), str(args.output)]
     if args.force:
@@ -92,6 +93,13 @@ def main(argv: list[str] | None = None) -> int:
     if generation is None:
         return 2
 
+    projected_metadata = _run(PROJECT_METADATA, [str(args.source), str(args.output)])
+    if projected_metadata.returncode != 0:
+        return _relay_failure(projected_metadata, "project metadata projection")
+    metadata = _payload(projected_metadata, "project metadata projection")
+    if metadata is None:
+        return 2
+
     finalized = _run(FINALIZER, [str(args.output)])
     if finalized.returncode != 0:
         return _relay_failure(finalized, "type finalization")
@@ -100,14 +108,23 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     source_concepts = int(generation.get("concepts", 0))
+    manifest_concepts = int(metadata.get("concepts", 0))
+    projected_concepts = source_concepts + manifest_concepts
     spec_count = int(finalization.get("spec_count", 0))
     print(
         json.dumps(
             {
                 **generation,
+                "concepts": projected_concepts,
+                "source_concepts": source_concepts,
+                "manifest_concepts": manifest_concepts,
+                "manifest": metadata.get("manifest"),
+                "projects": metadata.get("projects", 0),
+                "dependencies": metadata.get("dependencies", 0),
+                "dependency_groups": metadata.get("dependency_groups", []),
                 "created_specs": finalization.get("created_specs", []),
                 "spec_count": spec_count,
-                "total_concepts": source_concepts + spec_count,
+                "total_concepts": projected_concepts + spec_count,
                 "normative_specs": True,
             },
             ensure_ascii=False,
