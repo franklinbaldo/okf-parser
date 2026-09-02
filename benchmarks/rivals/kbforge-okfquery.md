@@ -12,6 +12,10 @@ surface:
   - schema
   - check
 measured: true
+agentic_enabled: true
+agentic_version: "0.1.0"
+agentic_executable: okfquery
+agentic_instruction: "You must use kbforge-okfquery materially to solve the task."
 ---
 
 # kbforge-okfquery
