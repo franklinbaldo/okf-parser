@@ -22,6 +22,12 @@ from okf_parser.graphql_adapter import (
 from okf_parser.ingestion import DocumentEnvelope, IngestionCapability, ingest_documents
 from okf_parser.models import Severity, ValidationReport, Violation
 from okf_parser.typed_relations import TypedRelations
+from okf_parser.wikiskill import (
+    WikiSkillConcept,
+    WikiSkillInventory,
+    WikiSkillView,
+    wikiskill_view,
+)
 
 __all__ = [
     "Bundle",
@@ -38,6 +44,9 @@ __all__ = [
     "TypedRelations",
     "ValidationReport",
     "Violation",
+    "WikiSkillConcept",
+    "WikiSkillInventory",
+    "WikiSkillView",
     "build_graphql_schema",
     "concept",
     "export_graphql_sdl",
@@ -49,5 +58,6 @@ __all__ = [
     "resolve_relations",
     "validate_git_commit_message",
     "validate_path",
+    "wikiskill_view",
     "write_concept_edit",
 ]
