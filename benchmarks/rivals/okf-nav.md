@@ -25,5 +25,10 @@ measured: true
 # okf-nav
 
 Reads bundles from an `OKF_BUNDLES_DIR` environment variable rather than from a
-path argument, and reported no bundles found when the capability matrix passed
-one positionally. Its search combines full-text with TF-IDF.
+path argument. The first published matrix passed the bundle positionally, so the
+tool reported finding none and was recorded as answering nothing -- a defect in
+the harness presented as a finding about the tool.
+
+Shown a directory of bundles through that variable, `status` reports the
+fixture's nine concepts and their exact type distribution. Its search combines
+full-text with TF-IDF.
