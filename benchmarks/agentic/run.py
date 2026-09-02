@@ -38,21 +38,46 @@ def build_summary(bundle: Path, destination: Path) -> None:
             groups[str(data["tool_id"])].append(data)
 
     order = [run_round.BASELINE_ID, "okf-parser"]
-    ordered_tools = sorted(groups, key=lambda item: (order.index(item) if item in order else 99, item))
+    ordered_tools = sorted(
+        groups,
+        key=lambda item: (order.index(item) if item in order else 99, item),
+    )
     lines = [
         "# Agentic capability benchmark",
         "",
-        "First round: one fixed Cline harness; baseline first; then one OKF tool at a time; each tool completes every selected task before the next tool starts.",
+        (
+            "First round: one fixed Cline harness; baseline first; then one OKF tool at a "
+            "time; each tool completes every selected task before the next tool starts."
+        ),
         "",
-        "| tool | passes | trials | pass rate | median successful seconds | median successful tokens | median successful cost USD |",
+        (
+            "| tool | passes | trials | pass rate | median successful seconds | "
+            "median successful tokens | median successful cost USD |"
+        ),
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for tool in ordered_tools:
         rows = groups[tool]
-        passed = [row for row in rows if _bool(row.get("graded")) and row.get("status") == "success"]
-        seconds = [float(value) for row in passed if (value := _number(row.get("wall_seconds"), float)) is not None]
-        tokens = [int(value) for row in passed if (value := _number(row.get("total_tokens"), int)) is not None]
-        costs = [float(value) for row in passed if (value := _number(row.get("cost_usd"), float)) is not None]
+        passed = [
+            row
+            for row in rows
+            if _bool(row.get("graded")) and row.get("status") == "success"
+        ]
+        seconds = [
+            float(value)
+            for row in passed
+            if (value := _number(row.get("wall_seconds"), float)) is not None
+        ]
+        tokens = [
+            int(value)
+            for row in passed
+            if (value := _number(row.get("total_tokens"), int)) is not None
+        ]
+        costs = [
+            float(value)
+            for row in passed
+            if (value := _number(row.get("cost_usd"), float)) is not None
+        ]
         seconds_text = f"{median(seconds):.2f}" if seconds else "—"
         tokens_text = str(int(median(tokens))) if tokens else "—"
         cost_text = f"{median(costs):.4f}" if costs else "—"
@@ -64,9 +89,16 @@ def build_summary(bundle: Path, destination: Path) -> None:
     lines.extend(
         [
             "",
-            "Token fields are reported only when Cline/OpenRouter exposes authoritative usage. Missing usage remains missing; it is never replaced with zero or estimated locally.",
+            (
+                "Token fields are reported only when Cline/OpenRouter exposes authoritative "
+                "usage. Missing usage remains missing; it is never replaced with zero or "
+                "estimated locally."
+            ),
             "",
-            "The canonical per-trial evidence is the `BenchmarkRun` OKF bundle. Raw transcripts, tool invocation logs and produced answers are referenced artifacts.",
+            (
+                "The canonical per-trial evidence is the `BenchmarkRun` OKF bundle. Raw "
+                "transcripts, tool invocation logs and produced answers are referenced artifacts."
+            ),
         ]
     )
     destination.write_text("\n".join(lines) + "\n", encoding="utf-8")
