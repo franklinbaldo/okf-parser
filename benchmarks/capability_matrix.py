@@ -326,13 +326,25 @@ RIVALS: Final = (
     Rival(
         "okf-schema",
         "okf-schema",
-        ("backlinks", "index", "init", "kb"),
+        ("backlinks", "index", "init", "install-skills", "kb"),
         {},
     ),
     Rival(
         "okf-nav",
         "okf-nav",
-        ("search", "show", "status", "topics", "health", "audit", "export", "index"),
+        (
+            "search",
+            "show",
+            "status",
+            "topics",
+            "health",
+            "audit",
+            "export",
+            "index",
+            "update",
+            "stale",
+            "context",
+        ),
         {"concept_count": Attempt(("status",))},
     ),
     Rival(
