@@ -7,4 +7,4 @@ title: give the PyPI project page metadata and a clean description
 - Rewrite repository-relative links in the derived description to absolute URLs. `docs/architecture.md` resolved on GitHub and pointed nowhere on PyPI.
 - Declare `MIT` and ship a root `LICENSE`. The three npm packages already declared MIT and shipped the file, while the Python distribution carried no licence at all.
 - Declare `authors`, `keywords`, `classifiers` and `project.urls`. The project page previously offered no link back to the repository, its issues or its releases.
-- Verify the derived description in CI, so it cannot drift from `README.md`, and exclude it from the repository's own OKF validation because it is a packaging artifact rather than authored knowledge.
+- Verify the derived description in CI, so it cannot drift from `README.md`, and add the repository's first `.okfignore` to keep it out of the repository's own OKF validation. The repository is validated twice, by the Python CLI and by the TypeScript one, and `.okfignore` is read by both; per-command `--exclude` flags would have to be repeated at every call site and silently miss any that was forgotten.

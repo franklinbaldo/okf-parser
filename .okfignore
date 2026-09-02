@@ -1,0 +1,4 @@
+# README.pypi.md is derived from README.md by scripts/pypi_readme.py for the
+# PyPI long description. It carries no frontmatter by design, because stripping
+# it is the whole point, so it is a packaging artifact rather than a concept.
+/README.pypi.md

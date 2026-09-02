@@ -178,11 +178,8 @@ jobs:
       - name: Verify the derived PyPI description is current
         run: uv run --script scripts/pypi_readme.py --check
 
-      # README.pypi.md is a packaging artifact derived from README.md, not
-      # authored knowledge, so it carries no frontmatter and is excluded here.
       - name: Validate this repository with okf-parser
-        run: |
-          uv run okf-parser check .             --require-spec "docs/types/{slug}.md" --normative-spec             --exclude README.pypi.md
+        run: uv run okf-parser check . --require-spec "docs/types/{slug}.md" --normative-spec
 
       - name: Build distributions
         run: uv build
@@ -224,7 +221,7 @@ jobs:
         run: node benchmarks/typescript-parser.mjs --sizes=10 --rounds=1 > "$RUNNER_TEMP/typescript-benchmark.json"
 
       - name: Dogfood the TypeScript CLI
-        run: node typescript/dist/cli.js check . --exclude README.pypi.md > "$RUNNER_TEMP/okf-check.json"
+        run: node typescript/dist/cli.js check . > "$RUNNER_TEMP/okf-check.json"
 
       - name: Exercise the TypeScript formatter
         shell: bash
