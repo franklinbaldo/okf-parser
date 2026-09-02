@@ -20,6 +20,10 @@ surface:
   - context
 homepage: https://github.com/lennney/okf-nav
 measured: true
+agentic_enabled: true
+agentic_version: "0.1.0"
+agentic_executable: okf-nav
+agentic_instruction: "You must use okf-nav materially to solve the task. Configure OKF_BUNDLES_DIR or any other documented discovery requirement correctly before judging capability."
 ---
 
 # okf-nav
