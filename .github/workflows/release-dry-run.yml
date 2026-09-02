@@ -348,7 +348,7 @@ jobs:
         run: |
           set -euo pipefail
           expected_version=$(node -p "require('./typescript/package.json').version")
-          native="release/native-npm/okf-parser-native-linux-x64-${expected_version}.tgz"
+          native="release/native-npm/franklinbaldo-okf-parser-native-linux-x64-${expected_version}.tgz"
           test -f "$native"
           native_listing="$(tar -tzf "$native")"
           grep -qx 'package/bin/okf-core' <<<"$native_listing"
@@ -419,20 +419,20 @@ jobs:
         run: |
           set -euo pipefail
           expected_version=$(node -p "require('./typescript/package.json').version")
-          parser_tarball="$GITHUB_WORKSPACE/release/npm/okf-parser-$expected_version.tgz"
-          native_tarball="$GITHUB_WORKSPACE/release/native-npm/okf-parser-native-linux-x64-$expected_version.tgz"
+          parser_tarball="$GITHUB_WORKSPACE/release/npm/franklinbaldo-okf-parser-$expected_version.tgz"
+          native_tarball="$GITHUB_WORKSPACE/release/native-npm/franklinbaldo-okf-parser-native-linux-x64-$expected_version.tgz"
           consumer="$RUNNER_TEMP/npm-consumer"
           mkdir "$consumer"
           cd "$consumer"
           npm init -y >/dev/null
           npm install --ignore-scripts "$native_tarball" "$parser_tarball" >/dev/null
-          EXPECTED_VERSION="$expected_version" node --input-type=module -e 'import("okf-parser").then(({ capabilityManifest }) => { if (capabilityManifest.protocol_version !== process.env.EXPECTED_VERSION) process.exit(1) })'
+          EXPECTED_VERSION="$expected_version" node --input-type=module -e 'import("@franklinbaldo/okf-parser").then(({ capabilityManifest }) => { if (capabilityManifest.protocol_version !== process.env.EXPECTED_VERSION) process.exit(1) })'
           mkdir knowledge
           printf '%s\n' '---' 'type: Node' '---' '# Node' > knowledge/node.md
           node --input-type=module - <<'JS'
-          import { loadBundle, resolveRustCore } from "okf-parser";
+          import { loadBundle, resolveRustCore } from "@franklinbaldo/okf-parser";
           const executable = resolveRustCore({ environment: { PATH: "" } });
-          if (executable === undefined || !executable.includes("okf-parser-native-linux-x64")) {
+          if (executable === undefined || !executable.includes("@franklinbaldo/okf-parser-native-linux-x64")) {
             throw new Error(`npm native companion was not selected: ${String(executable)}`);
           }
           const bundle = await loadBundle("knowledge");
@@ -455,7 +455,7 @@ jobs:
         run: |
           set -euo pipefail
           expected_version=$(node -p "require('./typescript/package.json').version")
-          parser_tarball="$GITHUB_WORKSPACE/release/npm/okf-parser-$expected_version.tgz"
+          parser_tarball="$GITHUB_WORKSPACE/release/npm/franklinbaldo-okf-parser-$expected_version.tgz"
           consumer="$RUNNER_TEMP/npm-portable-consumer"
           mkdir "$consumer"
           cd "$consumer"
@@ -464,7 +464,7 @@ jobs:
           mkdir knowledge
           printf '%s\n' '---' 'type: Node' '---' '# Node' > knowledge/node.md
           node --input-type=module - <<'JS'
-          import { loadBundle, resolveRustCore } from "okf-parser";
+          import { loadBundle, resolveRustCore } from "@franklinbaldo/okf-parser";
           if (resolveRustCore({ environment: { PATH: "" } }) !== undefined) throw new Error("portable install unexpectedly found Rust");
           const bundle = await loadBundle("knowledge", { engine: "native" });
           if (bundle.markdownCount !== 1) throw new Error("portable fallback failed");
@@ -475,8 +475,8 @@ jobs:
         run: |
           set -euo pipefail
           expected_version=$(node -p "require('./typescript/package.json').version")
-          parser_tarball="$GITHUB_WORKSPACE/release/npm/okf-parser-$expected_version.tgz"
-          adapter_tarball="$GITHUB_WORKSPACE/release/npm/okf-parser-duckdb-$expected_version.tgz"
+          parser_tarball="$GITHUB_WORKSPACE/release/npm/franklinbaldo-okf-parser-$expected_version.tgz"
+          adapter_tarball="$GITHUB_WORKSPACE/release/npm/franklinbaldo-okf-parser-duckdb-$expected_version.tgz"
           consumer="$RUNNER_TEMP/duckdb-consumer"
           mkdir "$consumer"
           cd "$consumer"
@@ -486,7 +486,7 @@ jobs:
           mkdir knowledge
           printf '%s\n' '---' 'type: Node' '---' '# Node' > knowledge/node.md
           ./node_modules/.bin/okf-parser-ts-duckdb knowledge --database bundle.duckdb > report.json
-          node --input-type=module -e 'import("okf-parser-duckdb").then(async ({ exportDuckDb }) => { const result = await exportDuckDb("knowledge", { database: "second.duckdb" }); if (result.concept_count !== 1) process.exit(1) })'
+          node --input-type=module -e 'import("@franklinbaldo/okf-parser-duckdb").then(async ({ exportDuckDb }) => { const result = await exportDuckDb("knowledge", { database: "second.duckdb" }); if (result.concept_count !== 1) process.exit(1) })'
 
       - name: Re-verify exact artifact bytes
         run: uv run --script scripts/release_contract.py verify-local --manifest release/manifest.json

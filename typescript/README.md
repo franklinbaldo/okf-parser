@@ -11,12 +11,12 @@ the same observable contract as the Python package while using an idiomatic
 immutable TypeScript core.
 
 ```bash
-npm install okf-parser
+npm install @franklinbaldo/okf-parser
 npx okf-parser-ts check ./knowledge
 ```
 
 ```ts
-import { checkBundle, exportZod, parseDocumentContent } from "okf-parser";
+import { checkBundle, exportZod, parseDocumentContent } from "@franklinbaldo/okf-parser";
 
 const parsed = parseDocumentContent(`---\ntype: Reference\ncount: 0012\n---\n`);
 const report = await checkBundle("./knowledge");
@@ -49,15 +49,15 @@ to errors. The slug derivation is shared with the Python package through
 Formatting is read-only unless `--write` is explicit:
 
 ```bash
-npx --package okf-parser okf-parser-ts format ./knowledge
-npx --package okf-parser okf-parser-ts format ./knowledge --write
+npx --package @franklinbaldo/okf-parser okf-parser-ts format ./knowledge
+npx --package @franklinbaldo/okf-parser okf-parser-ts format ./knowledge --write
 ```
 
 The library exposes both the pure one-document formatter and the filesystem
 operation:
 
 ```ts
-import { formatMarkdown, formatPath } from "okf-parser";
+import { formatMarkdown, formatPath } from "@franklinbaldo/okf-parser";
 
 const canonical = formatMarkdown("# Heading\n\n-   item\n");
 const report = await formatPath("./knowledge", { write: true });
@@ -74,7 +74,7 @@ formatted before the first write.
 The package includes a read-only stdio MCP server:
 
 ```bash
-npx --package okf-parser okf-parser-ts-mcp
+npx --package @franklinbaldo/okf-parser okf-parser-ts-mcp
 ```
 
 A typical host configuration is:
@@ -109,11 +109,11 @@ DuckDB support is published separately so native database bindings are never
 installed for parser-only consumers:
 
 ```bash
-npm install okf-parser okf-parser-duckdb
+npm install @franklinbaldo/okf-parser okf-parser-duckdb
 ```
 
 ```ts
-import { exportDuckDb } from "okf-parser-duckdb";
+import { exportDuckDb } from "@franklinbaldo/okf-parser-duckdb";
 
 await exportDuckDb("./knowledge", { database: "knowledge.duckdb" });
 ```

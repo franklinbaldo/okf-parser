@@ -23,7 +23,7 @@ function binaryName(): string {
 
 function nativePackageName(): string | undefined {
   if (process.platform === "linux" && process.arch === "x64") {
-    return "okf-parser-native-linux-x64";
+    return "@franklinbaldo/okf-parser-native-linux-x64";
   }
   return undefined;
 }

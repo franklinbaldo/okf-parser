@@ -15,7 +15,7 @@ bundle = load_bundle(root)
 ```
 
 ```ts
-import { loadBundle } from "okf-parser";
+import { loadBundle } from "@franklinbaldo/okf-parser";
 
 const bundle = await loadBundle(root);
 ```
@@ -42,7 +42,7 @@ A source installation builds that same executable as part of building the `okf-p
 
 ## npm packaging
 
-`okf-parser` declares platform packages as optional dependencies. The first supported target is `okf-parser-native-linux-x64`, which contains the release-matched executable under `bin/okf-core`. The TypeScript resolver discovers that package directly from `node_modules` before consulting environment overrides.
+`@franklinbaldo/okf-parser` declares platform packages as optional dependencies. The first supported target is `@franklinbaldo/okf-parser-native-linux-x64`, which contains the release-matched executable under `bin/okf-core`. The TypeScript resolver discovers that package directly from `node_modules` before consulting environment overrides.
 
 Installing with `--omit=optional`, or running on a platform for which no native companion is published, keeps the same `loadBundle()` API and uses the portable TypeScript implementation.
 

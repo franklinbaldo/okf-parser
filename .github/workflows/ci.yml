@@ -247,7 +247,7 @@ jobs:
           cd "$RUNNER_TEMP/consumer"
           npm init -y >/dev/null
           npm install --ignore-scripts "$RUNNER_TEMP/$tarball" >/dev/null
-          EXPECTED_VERSION="$expected_version" node --input-type=module -e "import('okf-parser').then(({ capabilityManifest }) => { if (capabilityManifest.protocol_version !== process.env.EXPECTED_VERSION || capabilityManifest.capabilities.format !== 'stable') process.exit(1) })"
+          EXPECTED_VERSION="$expected_version" node --input-type=module -e "import('@franklinbaldo/okf-parser').then(({ capabilityManifest }) => { if (capabilityManifest.protocol_version !== process.env.EXPECTED_VERSION || capabilityManifest.capabilities.format !== 'stable') process.exit(1) })"
           ./node_modules/.bin/okf-parser-ts --help >/dev/null
           mkdir format-fixture
           printf '# Heading\n\n-   item\n' > format-fixture/concept.md
@@ -311,4 +311,4 @@ jobs:
           mkdir knowledge
           printf '%s\n' '---' 'type: Node' '---' '# Node' > knowledge/node.md
           ./node_modules/.bin/okf-parser-ts-duckdb knowledge --database bundle.duckdb > report.json
-          node --input-type=module -e "import('okf-parser-duckdb').then(async ({ exportDuckDb }) => { const result = await exportDuckDb('knowledge', { database: 'second.duckdb' }); if (result.concept_count !== 1) process.exit(1) })"
+          node --input-type=module -e "import('@franklinbaldo/okf-parser-duckdb').then(async ({ exportDuckDb }) => { const result = await exportDuckDb('knowledge', { database: 'second.duckdb' }); if (result.concept_count !== 1) process.exit(1) })"

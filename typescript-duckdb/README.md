@@ -4,19 +4,19 @@ title: okf-parser DuckDB adapter
 description: Optional native DuckDB materialization for the TypeScript parser
 ---
 
-# okf-parser-duckdb
+# @franklinbaldo/okf-parser-duckdb
 
-Optional DuckDB materialization adapter for the TypeScript `okf-parser` package.
+Optional DuckDB materialization adapter for the TypeScript `@franklinbaldo/okf-parser` package.
 It uses the official promise-native `@duckdb/node-api` client and remains a
 separate package so native database bindings never burden parser-only users.
 
 ```bash
-npm install okf-parser okf-parser-duckdb
+npm install @franklinbaldo/okf-parser @franklinbaldo/okf-parser-duckdb
 ```
 
 ```ts
 import { DuckDBConnection } from "@duckdb/node-api";
-import { attachOkf } from "okf-parser-duckdb";
+import { attachOkf } from "@franklinbaldo/okf-parser-duckdb";
 
 const connection = await DuckDBConnection.create();
 const report = await attachOkf(connection, "./knowledge");
@@ -25,7 +25,7 @@ const report = await attachOkf(connection, "./knowledge");
 To create or update a persistent database file:
 
 ```ts
-import { exportDuckDb } from "okf-parser-duckdb";
+import { exportDuckDb } from "@franklinbaldo/okf-parser-duckdb";
 
 const report = await exportDuckDb("./knowledge", {
   database: "knowledge.duckdb",
@@ -36,7 +36,7 @@ const report = await exportDuckDb("./knowledge", {
 Or use the CLI:
 
 ```bash
-npx --package okf-parser-duckdb okf-parser-ts-duckdb ./knowledge \
+npx --package @franklinbaldo/okf-parser-duckdb okf-parser-ts-duckdb ./knowledge \
   --database knowledge.duckdb
 ```
 

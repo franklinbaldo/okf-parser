@@ -9,9 +9,11 @@ description: Build, verify and publish synchronized Python and TypeScript releas
 The repository publishes one synchronized protocol version across one Python project and three npm packages:
 
 - Python `okf-parser` on PyPI;
-- TypeScript `okf-parser` on npm;
-- TypeScript `okf-parser-duckdb` on npm;
-- platform npm companion `okf-parser-native-linux-x64` on npm.
+- TypeScript `@franklinbaldo/okf-parser` on npm;
+- TypeScript `@franklinbaldo/okf-parser-duckdb` on npm;
+- platform npm companion `@franklinbaldo/okf-parser-native-linux-x64` on npm.
+
+The npm packages are scoped and the PyPI distribution is not. npm refuses the unscoped name `okf-parser`, whose similarity filter considers it too close to the existing `oxc-parser`, and that refusal only happens on upload. The scope is therefore a constraint npm imposes, not a naming preference.
 
 There is no `okf-parser-native` PyPI project. The Rust engine is an implementation detail of the `okf-parser` Python distribution and is embedded directly in its single `okf-parser` executable.
 
@@ -27,10 +29,10 @@ release/
 │   ├── okf_parser-X.Y.Z-<platform>.whl
 │   └── okf_parser-X.Y.Z.tar.gz
 ├── npm/
-│   ├── okf-parser-X.Y.Z.tgz
-│   └── okf-parser-duckdb-X.Y.Z.tgz
+│   ├── franklinbaldo-okf-parser-X.Y.Z.tgz
+│   └── franklinbaldo-okf-parser-duckdb-X.Y.Z.tgz
 ├── native-npm/
-│   └── okf-parser-native-linux-x64-X.Y.Z.tgz
+│   └── franklinbaldo-okf-parser-native-linux-x64-X.Y.Z.tgz
 ├── manifest.json
 ├── registry-state.json
 └── SHA256SUMS
@@ -52,7 +54,7 @@ Before building, `scripts/release_contract.py verify-source` requires all of the
 - the Rust crate version;
 - versions in the npm manifests;
 - `PROTOCOL_VERSION` in `typescript/src/version.ts`;
-- the `okf-parser` peer range in the DuckDB adapter;
+- the `@franklinbaldo/okf-parser` peer range in the DuckDB adapter;
 - at least one release-note fragment in `changelog/X.Y.Z/`;
 - an optional stable tag, exactly `vX.Y.Z`.
 

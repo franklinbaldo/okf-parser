@@ -14,7 +14,7 @@ import {
   exportBundleJsonSchema,
   loadBundle,
   specRelativePath,
-} from "okf-parser";
+} from "@franklinbaldo/okf-parser";
 
 export class DeclaredSchemaError extends Error {
   constructor(message: string) {

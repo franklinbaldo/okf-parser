@@ -300,7 +300,7 @@ jobs:
           version=$(uv run --script scripts/project_version.py)
           wheel_count=$(find release/python -maxdepth 1 -type f -name "okf_parser-${version}-*.whl" | wc -l)
           sdist_count=$(find release/python -maxdepth 1 -type f -name "okf_parser-${version}.tar.gz" | wc -l)
-          npm_native="release/native-npm/okf-parser-native-linux-x64-${version}.tgz"
+          npm_native="release/native-npm/franklinbaldo-okf-parser-native-linux-x64-${version}.tgz"
           test "$wheel_count" -eq 5
           test "$sdist_count" -eq 1
           test -f "$npm_native"

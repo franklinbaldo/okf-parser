@@ -3,7 +3,7 @@ import {
   type Bundle,
   type LoadOptions,
   loadBundle,
-} from "okf-parser";
+} from "@franklinbaldo/okf-parser";
 
 import { loadDeclaredSchemas } from "./declared.js";
 import {

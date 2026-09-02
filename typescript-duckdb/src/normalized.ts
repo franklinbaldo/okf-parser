@@ -10,7 +10,7 @@ import {
   type Diagnostic,
   type LoadOptions,
   loadBundle,
-} from "okf-parser";
+} from "@franklinbaldo/okf-parser";
 
 const IDENTIFIER_RE = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 const TABLE_NAMES = ["concepts", "links", "reserved", "diagnostics"] as const;

@@ -357,15 +357,22 @@ def inspect_registry_state(
     if timeout <= 0:
         _fail("registry timeout must be positive")
     version, artifacts = _artifact_index(manifest)
+
+    # The published name is read from the manifest rather than repeated here, so
+    # a rename in the source contract cannot leave the preflight probing a name
+    # that is no longer the one being published.
+    def _npm_package(kind: str) -> str:
+        return _string(artifacts[kind], "package", "manifest artifact")
+
     entries = [
         _pypi_state(version, artifacts, fetch, timeout),
-        _npm_state("okf-parser", artifacts["npm-parser"], fetch, timeout),
-        _npm_state("okf-parser-duckdb", artifacts["npm-duckdb"], fetch, timeout),
+        _npm_state(_npm_package("npm-parser"), artifacts["npm-parser"], fetch, timeout),
+        _npm_state(_npm_package("npm-duckdb"), artifacts["npm-duckdb"], fetch, timeout),
     ]
     if "npm-native" in artifacts:
         entries.append(
             _npm_state(
-                "okf-parser-native-linux-x64",
+                _npm_package("npm-native"),
                 artifacts["npm-native"],
                 fetch,
                 timeout,

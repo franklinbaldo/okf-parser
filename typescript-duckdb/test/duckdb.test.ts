@@ -5,8 +5,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { DuckDBConnection, DuckDBInstance } from "@duckdb/node-api";
 import { afterEach, expect, test } from "vitest";
-import { loadBundle } from "okf-parser";
-import type { DeclaredLogicalType } from "okf-parser";
+import { loadBundle } from "@franklinbaldo/okf-parser";
+import type { DeclaredLogicalType } from "@franklinbaldo/okf-parser";
 
 import {
   BundleExportError,

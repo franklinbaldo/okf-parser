@@ -45,23 +45,23 @@ def _write_source(root: Path, *, protocol_version: str = VERSION) -> None:
     (root / "typescript" / "package.json").write_text(
         json.dumps(
             {
-                "name": "okf-parser",
+                "name": "@franklinbaldo/okf-parser",
                 "version": VERSION,
-                "optionalDependencies": {"okf-parser-native-linux-x64": VERSION},
+                "optionalDependencies": {"@franklinbaldo/okf-parser-native-linux-x64": VERSION},
             }
         ),
         encoding="utf-8",
     )
     (root / "native-npm-linux-x64" / "package.json").write_text(
-        json.dumps({"name": "okf-parser-native-linux-x64", "version": VERSION}),
+        json.dumps({"name": "@franklinbaldo/okf-parser-native-linux-x64", "version": VERSION}),
         encoding="utf-8",
     )
     (root / "typescript-duckdb" / "package.json").write_text(
         json.dumps(
             {
-                "name": "okf-parser-duckdb",
+                "name": "@franklinbaldo/okf-parser-duckdb",
                 "version": VERSION,
-                "peerDependencies": {"okf-parser": f"^{VERSION}"},
+                "peerDependencies": {"@franklinbaldo/okf-parser": f"^{VERSION}"},
             }
         ),
         encoding="utf-8",
@@ -155,18 +155,25 @@ def _write_artifacts(release: Path, extra: dict[str, tuple[str, ...]] | None = N
         for member in SDIST_MEMBERS + additions.get("python-sdist", ()):
             _tar_member(archive, f"{root}/{member}", b"content\n")
     with tarfile.open(
-        native_dir / f"okf-parser-native-linux-x64-{VERSION}.tgz", mode="w:gz"
+        native_dir / f"franklinbaldo-okf-parser-native-linux-x64-{VERSION}.tgz", mode="w:gz"
     ) as archive:
         _tar_member(
             archive,
             "package/package.json",
-            json.dumps({"name": "okf-parser-native-linux-x64", "version": VERSION}).encode(),
+            json.dumps(
+                {"name": "@franklinbaldo/okf-parser-native-linux-x64", "version": VERSION}
+            ).encode(),
         )
         for member in NPM_NATIVE_MEMBERS + additions.get("npm-native", ()):
             _tar_member(archive, f"package/{member}", b"content\n")
-    kinds = {"okf-parser": "npm-parser", "okf-parser-duckdb": "npm-duckdb"}
-    for package, kind in kinds.items():
-        with tarfile.open(npm_dir / f"{package}-{VERSION}.tgz", mode="w:gz") as archive:
+    # `npm pack` flattens a scope into the leading file-name segment, so the
+    # published name and the tarball name differ for every scoped package.
+    kinds = {
+        "@franklinbaldo/okf-parser": ("npm-parser", "franklinbaldo-okf-parser"),
+        "@franklinbaldo/okf-parser-duckdb": ("npm-duckdb", "franklinbaldo-okf-parser-duckdb"),
+    }
+    for package, (kind, stem) in kinds.items():
+        with tarfile.open(npm_dir / f"{stem}-{VERSION}.tgz", mode="w:gz") as archive:
             _tar_member(
                 archive,
                 "package/package.json",
@@ -201,7 +208,7 @@ def test_verify_source_rejects_stale_native_optional_dependency(tmp_path: Path) 
     _write_source(tmp_path)
     parser_path = tmp_path / "typescript" / "package.json"
     parser = json.loads(parser_path.read_text(encoding="utf-8"))
-    parser["optionalDependencies"]["okf-parser-native-linux-x64"] = "1.2.2"
+    parser["optionalDependencies"]["@franklinbaldo/okf-parser-native-linux-x64"] = "1.2.2"
     parser_path.write_text(json.dumps(parser), encoding="utf-8")
     with pytest.raises(ContractError, match="native optional dependency"):
         verify_source(tmp_path)
@@ -320,7 +327,7 @@ def test_verify_contents_rejects_members_outside_package_root(tmp_path: Path) ->
     _write_source(tmp_path)
     release = tmp_path / "release"
     _write_artifacts(release)
-    tarball = release / "npm" / f"okf-parser-{VERSION}.tgz"
+    tarball = release / "npm" / f"franklinbaldo-okf-parser-{VERSION}.tgz"
     with tarfile.open(tarball, mode="r:gz") as archive:
         members = [(member.name, _tar_bytes(archive, member)) for member in archive.getmembers()]
     with tarfile.open(tarball, mode="w:gz") as archive:
