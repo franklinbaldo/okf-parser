@@ -4,18 +4,20 @@
     {
       "id": "cline",
       "package": "cline",
-      "install": "npm install -g cline",
+      "version": "3.0.60",
+      "install": "npm install -g cline@3.0.60",
       "provider": "openrouter",
       "supports_json": true,
-      "notes": "Uses isolated --data-dir/--config per trial and Cline CLI headless mode."
+      "notes": "Uses isolated --data-dir per trial and Cline CLI headless JSON mode."
     },
     {
       "id": "kilo",
       "package": "@kilocode/cli",
-      "install": "npm install -g @kilocode/cli",
+      "version": "7.5.9",
+      "install": "npm install -g @kilocode/cli@7.5.9",
       "provider": "openrouter",
       "supports_json": false,
-      "notes": "Uses kilo run --auto with an isolated kilo.json per trial."
+      "notes": "Uses kilo run --auto with an isolated workspace kilo.json per trial."
     }
   ]
 }
