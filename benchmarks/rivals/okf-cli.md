@@ -10,11 +10,14 @@ surface:
   - list
   - read
   - validate
-measured: false
+version_measured: "0.6.1"
+measured: true
 ---
 
 # okf-cli
 
-Not measured. It installs the `okf` command and so does [[okf-retrieve]];
-installing both into one environment leaves only whichever was installed last.
-Measuring the two side by side needs separate environments.
+It installs the `okf` command, and so do [[okf-retrieve]] and
+[[okf-generator]]. The first published matrix installed them into one
+environment and could therefore only ever measure whichever landed last; this
+one gives every rival an environment of its own, which is what made this tool
+measurable at all.
