@@ -8,7 +8,7 @@ on:
         required: true
         default: all
       tools:
-        description: "Tool ids, comma-separated, or all (includes baseline-none)"
+        description: "Tool ids, comma-separated, or all (baseline-none runs first)"
         required: true
         default: all
       repetitions:
@@ -28,44 +28,9 @@ permissions:
   contents: read
 
 jobs:
-  plan:
+  round:
     runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.plan.outputs.matrix }}
-      tools: ${{ steps.plan.outputs.tools }}
-      repetitions: ${{ steps.plan.outputs.repetitions }}
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - id: plan
-        name: Validate selections and build task matrix
-        shell: bash
-        env:
-          TASKS: ${{ inputs.tasks }}
-          TOOLS: ${{ inputs.tools }}
-          REPETITIONS: ${{ inputs.repetitions }}
-        run: |
-          set -euo pipefail
-          common=(--tasks "$TASKS" --tools "$TOOLS" --harnesses cline --repetitions "$REPETITIONS")
-          matrix=$(python benchmarks/agentic/build_matrix.py "${common[@]}" --mode matrix)
-          tools=$(python benchmarks/agentic/build_matrix.py "${common[@]}" --mode tools)
-          repetitions=$(python benchmarks/agentic/build_matrix.py "${common[@]}" --mode repetitions)
-          printf 'matrix=%s\n' "$matrix" >> "$GITHUB_OUTPUT"
-          printf 'tools=%s\n' "$tools" >> "$GITHUB_OUTPUT"
-          printf 'repetitions=%s\n' "$repetitions" >> "$GITHUB_OUTPUT"
-          echo "$matrix" | python -m json.tool
-          echo "$tools" | python -m json.tool
-
-  trial:
-    needs: plan
-    runs-on: ubuntu-latest
-    timeout-minutes: 180
-    strategy:
-      fail-fast: false
-      max-parallel: 8
-      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    name: ${{ matrix.task }} / Cline
+    timeout-minutes: 360
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -81,69 +46,93 @@ jobs:
       - name: Record harness version
         run: cline --version
 
-      - name: Run isolated tool trials
+      - name: Run the round serially by rival
         shell: bash
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          TASK: ${{ matrix.task }}
+          TASK_SELECTION: ${{ inputs.tasks }}
+          TOOL_SELECTION: ${{ inputs.tools }}
           MODEL: ${{ inputs.model }}
           TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
-          TOOLS_JSON: ${{ needs.plan.outputs.tools }}
-          REPETITIONS: ${{ needs.plan.outputs.repetitions }}
+          REPETITIONS: ${{ inputs.repetitions }}
         run: |
           set -euo pipefail
           if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
             echo "::error::Repository secret OPENROUTER_API_KEY is not configured."
             exit 2
           fi
-          mkdir -p trial-results
-          mapfile -t tools < <(python -c 'import json,os; print("\n".join(json.loads(os.environ["TOOLS_JSON"])))')
+
+          python - <<'PY' > selections.json
+          import json, os
+          from pathlib import Path
+
+          root = Path('benchmarks/agentic')
+          tasks = [x['id'] for x in json.loads((root/'tasks.json').read_text())['tasks']]
+          tools = [x['id'] for x in json.loads((root/'tools.json').read_text())['tools']]
+
+          def pick(raw, available):
+              if raw == 'all':
+                  return available
+              wanted = [x.strip() for x in raw.split(',') if x.strip()]
+              unknown = sorted(set(wanted) - set(available))
+              if unknown:
+                  raise SystemExit(f'unknown ids: {unknown}')
+              return wanted
+
+          chosen_tasks = pick(os.environ['TASK_SELECTION'], tasks)
+          chosen_tools = pick(os.environ['TOOL_SELECTION'], tools)
+          if 'baseline-none' in chosen_tools:
+              chosen_tools = ['baseline-none', *[x for x in chosen_tools if x != 'baseline-none']]
+          repetitions = int(os.environ['REPETITIONS'])
+          if repetitions < 1 or repetitions > 10:
+              raise SystemExit('repetitions must be between 1 and 10')
+          print(json.dumps({'tasks': chosen_tasks, 'tools': chosen_tools, 'repetitions': repetitions}))
+          PY
+
+          mkdir -p trial-results published
+          mapfile -t tools < <(python -c 'import json; print("\n".join(json.load(open("selections.json"))["tools"]))')
+          mapfile -t tasks < <(python -c 'import json; print("\n".join(json.load(open("selections.json"))["tasks"]))')
+
           for tool in "${tools[@]}"; do
-            for repetition in $(seq 1 "$REPETITIONS"); do
-              out="trial-results/${TASK}__${tool}__cline__${repetition}.jsonl"
-              python benchmarks/agentic/run_trial.py \
-                --task "$TASK" \
-                --tool "$tool" \
-                --harness cline \
-                --model "$MODEL" \
-                --repetition "$repetition" \
-                --timeout "$TIMEOUT_SECONDS" \
-                --output "$out"
+            echo "::group::Rival $tool"
+            mkdir -p "trial-results/$tool"
+            for task in "${tasks[@]}"; do
+              for repetition in $(seq 1 "$REPETITIONS"); do
+                out="trial-results/$tool/${task}__${tool}__cline__${repetition}.jsonl"
+                python benchmarks/agentic/run_trial.py \
+                  --task "$task" \
+                  --tool "$tool" \
+                  --harness cline \
+                  --model "$MODEL" \
+                  --repetition "$repetition" \
+                  --timeout "$TIMEOUT_SECONDS" \
+                  --output "$out"
+              done
             done
+            python benchmarks/agentic/aggregate.py "trial-results/$tool" \
+              --jsonl "published/${tool}.jsonl" \
+              --markdown "published/${tool}.md"
+            echo "::endgroup::"
           done
 
-      - name: Upload raw trial evidence
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: agentic-${{ matrix.task }}-cline
-          path: trial-results/
-          if-no-files-found: error
-          retention-days: 30
-
-  aggregate:
-    if: always()
-    needs: [plan, trial]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Download all trial evidence
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: agentic-*
-          path: downloaded-results
-
-      - name: Aggregate JSONL and Markdown report
-        run: |
-          python benchmarks/agentic/aggregate.py downloaded-results \
+          python benchmarks/agentic/aggregate.py trial-results \
             --jsonl published/agentic-runs.jsonl \
             --markdown published/agentic-summary.md
 
+      - name: Upload raw trial evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: agentic-raw-${{ github.run_id }}
+          path: trial-results/
+          if-no-files-found: warn
+          retention-days: 30
+
       - name: Upload aggregated round
+        if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: agentic-round-${{ github.run_id }}
           path: published/
-          if-no-files-found: error
+          if-no-files-found: warn
           retention-days: 90
