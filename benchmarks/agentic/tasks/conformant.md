@@ -1,13 +1,15 @@
 ---
 type: BenchmarkTask
 title: Conformance
-description: Determine whether the fixture bundle is conformant
+description: Determine whether a large heterogeneous fixture bundle is conformant
 task_id: conformant
-prompt: Determine whether the OKF bundle in ./bundle is conformant. Write the answer to answer.txt as exactly true or false.
-answer_kind: bool
-expected_bool: true
+prompt: Determine whether the OKF bundle in ./bundle is conformant. Write only true or false to answer.txt.
+answer_kind: scalar
+fixture_kind: large-mixed-bundle
+fixture_size: 1200
+grader: conformant
 ---
 
 # Conformance
 
-Determine whether the fixture bundle is conformant.
+The fixture contains more than one thousand concepts across several types and directories.
