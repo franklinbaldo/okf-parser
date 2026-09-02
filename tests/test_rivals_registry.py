@@ -11,9 +11,11 @@ bundle.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -41,7 +43,7 @@ def _flag(value: object) -> bool:
 
 
 @pytest.fixture(scope="module")
-def registered() -> dict[str, dict]:
+def registered() -> dict[str, dict[str, Any]]:
     """Read every Rival concept through the parser this repository ships."""
     bundle = load_bundle(RIVALS_BUNDLE)
     frame = bundle.concepts.execute()
@@ -49,22 +51,36 @@ def registered() -> dict[str, dict]:
 
 
 @pytest.fixture(scope="module")
-def benchmark_rivals() -> dict[str, object]:
-    """Import the capability matrix without running it."""
-    sys.path.insert(0, str(REPOSITORY / "benchmarks"))
+def benchmark_rivals() -> dict[str, Any]:
+    """Load the capability matrix by path, without running it.
+
+    The benchmark is a PEP 723 script rather than a package module, so it is
+    loaded from its file instead of imported. That also keeps `sys.path`
+    unmodified, which a plain import here would require.
+    """
+    location = REPOSITORY / "benchmarks" / "capability_matrix.py"
+    spec = importlib.util.spec_from_file_location("capability_matrix", location)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    # `@dataclass` resolves its module through `sys.modules` while the class
+    # body executes, so the module has to be registered before, not after.
+    sys.modules[spec.name] = module
     try:
-        from capability_matrix import RIVALS  # noqa: PLC0415
+        spec.loader.exec_module(module)
     finally:
-        sys.path.pop(0)
-    return {rival.name: rival for rival in RIVALS}
+        sys.modules.pop(spec.name, None)
+    return {rival.name: rival for rival in module.RIVALS}
 
 
-def test_every_document_in_the_bundle_is_a_rival(registered: dict[str, dict]) -> None:
+def test_every_document_in_the_bundle_is_a_rival(registered: dict[str, dict[str, Any]]) -> None:
     assert registered, "no Rival concepts were registered"
     assert {entry["type"] for entry in registered.values()} == {"Rival"}
 
 
-def test_every_rival_declares_the_fields_the_type_specifies(registered: dict[str, dict]) -> None:
+def test_every_rival_declares_the_fields_the_type_specifies(
+    registered: dict[str, dict[str, Any]],
+) -> None:
     for name, entry in registered.items():
         missing = [field for field in REQUIRED_FIELDS if field not in entry]
         assert not missing, f"{name} is missing {missing}"
@@ -73,8 +89,8 @@ def test_every_rival_declares_the_fields_the_type_specifies(registered: dict[str
 
 
 def test_measured_rivals_are_exactly_the_ones_the_benchmark_interrogates(
-    registered: dict[str, dict],
-    benchmark_rivals: dict[str, object],
+    registered: dict[str, dict[str, Any]],
+    benchmark_rivals: dict[str, Any],
 ) -> None:
     """A rival marked measured must be run, and a rival run must be marked."""
     claimed = {entry["title"] for entry in registered.values() if _flag(entry["measured"])}
@@ -86,8 +102,8 @@ def test_measured_rivals_are_exactly_the_ones_the_benchmark_interrogates(
 
 
 def test_recorded_surfaces_match_the_ones_the_benchmark_reports(
-    registered: dict[str, dict],
-    benchmark_rivals: dict[str, object],
+    registered: dict[str, dict[str, Any]],
+    benchmark_rivals: dict[str, Any],
 ) -> None:
     """The surface is the evidence behind an unsupported verdict, so it must agree."""
     by_title = {entry["title"]: entry for entry in registered.values()}
@@ -99,7 +115,9 @@ def test_recorded_surfaces_match_the_ones_the_benchmark_reports(
         )
 
 
-def test_unmeasured_rivals_are_recorded_rather_than_omitted(registered: dict[str, dict]) -> None:
+def test_unmeasured_rivals_are_recorded_rather_than_omitted(
+    registered: dict[str, dict[str, Any]],
+) -> None:
     """The backlog is the point: an unmeasured rival must still be queryable."""
     unmeasured = [entry["title"] for entry in registered.values() if not _flag(entry["measured"])]
     assert unmeasured, (
