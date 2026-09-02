@@ -282,16 +282,19 @@ def _verify_npm_manifest(path: Path, package: str, version: str) -> dict[str, ob
 
 def _verify_npm_contract(root: Path, version: str) -> None:
     parser_path = root / "typescript" / "package.json"
-    parser = _verify_npm_manifest(parser_path, "okf-parser", version)
+    parser = _verify_npm_manifest(parser_path, "@franklinbaldo/okf-parser", version)
     optional = _mapping(parser.get("optionalDependencies"), "optionalDependencies")
-    if _string(optional, "okf-parser-native-linux-x64", "optionalDependencies") != version:
+    if (
+        _string(optional, "@franklinbaldo/okf-parser-native-linux-x64", "optionalDependencies")
+        != version
+    ):
         _fail(f"native optional dependency must be {version}")
     native_path = root / "native-npm-linux-x64" / "package.json"
-    _verify_npm_manifest(native_path, "okf-parser-native-linux-x64", version)
+    _verify_npm_manifest(native_path, "@franklinbaldo/okf-parser-native-linux-x64", version)
     adapter_path = root / "typescript-duckdb" / "package.json"
-    adapter = _verify_npm_manifest(adapter_path, "okf-parser-duckdb", version)
+    adapter = _verify_npm_manifest(adapter_path, "@franklinbaldo/okf-parser-duckdb", version)
     peers = _mapping(adapter.get("peerDependencies"), "peerDependencies")
-    if _string(peers, "okf-parser", "peerDependencies") != f"^{version}":
+    if _string(peers, "@franklinbaldo/okf-parser", "peerDependencies") != f"^{version}":
         _fail(f"adapter peer dependency must be ^{version}")
 
 
@@ -399,21 +402,21 @@ def _expected(version: str) -> tuple[ExpectedArtifact, ...]:
         ),
         ExpectedArtifact(
             "npm-parser",
-            "okf-parser",
+            "@franklinbaldo/okf-parser",
             "npm",
-            filename=f"okf-parser-{version}.tgz",
+            filename=f"franklinbaldo-okf-parser-{version}.tgz",
         ),
         ExpectedArtifact(
             "npm-duckdb",
-            "okf-parser-duckdb",
+            "@franklinbaldo/okf-parser-duckdb",
             "npm",
-            filename=f"okf-parser-duckdb-{version}.tgz",
+            filename=f"franklinbaldo-okf-parser-duckdb-{version}.tgz",
         ),
         ExpectedArtifact(
             "npm-native",
-            "okf-parser-native-linux-x64",
+            "@franklinbaldo/okf-parser-native-linux-x64",
             "native-npm",
-            filename=f"okf-parser-native-linux-x64-{version}.tgz",
+            filename=f"franklinbaldo-okf-parser-native-linux-x64-{version}.tgz",
         ),
     )
 

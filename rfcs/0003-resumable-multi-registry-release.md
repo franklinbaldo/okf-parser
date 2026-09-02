@@ -13,8 +13,8 @@ Add one tag-driven GitHub Actions release pipeline for the three synchronized
 artifacts produced by this repository:
 
 - the Python `okf-parser` distribution on PyPI;
-- the TypeScript `okf-parser` package on npm;
-- the optional `okf-parser-duckdb` package on npm.
+- the TypeScript `@franklinbaldo/okf-parser` package on npm;
+- the optional `@franklinbaldo/okf-parser-duckdb` package on npm.
 
 The workflow builds all artifacts once from one tagged commit, verifies them as
 installed consumer artifacts, records checksums and provenance, and then
@@ -40,7 +40,7 @@ is still manual and therefore weaker than the code path it distributes.
 Three facts make a naive `npm publish && twine upload` workflow unsafe:
 
 1. the artifacts live in two independent registries;
-2. `okf-parser-duckdb` has a peer dependency on the main npm package and must
+2. `@franklinbaldo/okf-parser-duckdb` has a peer dependency on the main npm package and must
    not become visible first;
 3. a network or registry failure can occur after one immutable upload succeeds.
 
@@ -214,7 +214,7 @@ release/
 │   └── okf_parser-X.Y.Z.tar.gz
 ├── npm/
 │   ├── okf-parser-X.Y.Z.tgz
-│   └── okf-parser-duckdb-X.Y.Z.tgz
+│   └── franklinbaldo-okf-parser-duckdb-X.Y.Z.tgz
 └── manifest.json
 ```
 
@@ -296,8 +296,8 @@ automatic recovery action.
 The safe dependency order is:
 
 1. Python `okf-parser` to PyPI;
-2. npm `okf-parser`;
-3. npm `okf-parser-duckdb`.
+2. npm `@franklinbaldo/okf-parser`;
+3. npm `@franklinbaldo/okf-parser-duckdb`.
 
 PyPI and the main npm package do not depend on one another and may technically be
 published in parallel. This RFC chooses a linear sequence because it produces a
@@ -366,10 +366,31 @@ workflow:
 4. publish version `X.Y.Z` interactively from a maintainer workstation using
    npm account MFA;
 5. configure `release.yml` as the trusted publisher for the new package;
-6. repeat for `okf-parser-duckdb` only after `okf-parser` exists;
+6. repeat for `@franklinbaldo/okf-parser-duckdb` only after `@franklinbaldo/okf-parser` exists;
 7. remove any temporary automation credential if one was created;
 8. re-run the tag workflow, which verifies the existing digest and completes
    the other registries/finalization idempotently.
+
+## Amendment: the npm names are scoped
+
+This section originally assumed unscoped npm names matching the PyPI
+distribution. That assumption did not survive contact with the registry.
+
+npm refused `okf-parser` with `403 Package name too similar to existing package
+oxc-parser`. The refusal is produced by npm's similarity filter at upload time,
+so the availability check in step 3 above -- which only proves that nobody has
+registered the exact name -- can never predict it. All three packages are
+therefore published under the `@franklinbaldo` scope, while the PyPI
+distribution stays unscoped as `okf-parser`.
+
+Scoping does not remove the bootstrap requirement: npm still refuses to
+configure a trusted publisher for a package that does not exist, whether or not
+it is scoped. It does remove the risk of a second similarity refusal, because
+scoped names are not subject to that filter.
+
+Two further details in this RFC are stale: the publication workflow is
+`publish.yml`, not `release.yml`, and there are three npm packages rather than
+two, since the platform companion did not exist when this RFC was written.
 
 The first public release version is chosen only after package-name availability
 is confirmed. If either name has been claimed, package renaming requires a

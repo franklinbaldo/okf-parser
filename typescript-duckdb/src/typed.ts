@@ -7,7 +7,7 @@ import type {
   Bundle,
   DeclaredLogicalType,
   FrontmatterValue,
-} from "okf-parser";
+} from "@franklinbaldo/okf-parser";
 
 import type { DeclaredCatalogSchema } from "./declared.js";
 import { quotedIdentifier, validateSchemaName } from "./normalized.js";
