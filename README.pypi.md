@@ -1,9 +1,3 @@
----
-type: Project
-title: okf-parser
-description: Relational inspection and validation for Open Knowledge Format bundles
----
-
 # okf-parser
 
 Relational inspection and validation for
@@ -30,7 +24,7 @@ layer:
 - produce stable human-readable and JSON reports for CI and agents.
 
 The architectural boundary between strict authored OKF and source adapters is documented in
-[`docs/architecture.md`](docs/architecture.md).
+[`docs/architecture.md`](https://github.com/franklinbaldo/okf-parser/blob/main/docs/architecture.md).
 
 The parser and validation model are inspired by
 [`franklinbaldo/sisprev`](https://github.com/franklinbaldo/sisprev): parse

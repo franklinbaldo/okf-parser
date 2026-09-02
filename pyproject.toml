@@ -1,9 +1,35 @@
 [project]
 name = "okf-parser"
-version = "0.45.5"
+version = "0.45.6"
 description = "Relational inspection and validation for Open Knowledge Format bundles"
-readme = "README.md"
+# Derived from README.md by scripts/pypi_readme.py. README.md is an OKF concept
+# and must open with frontmatter, which PyPI would otherwise render as a heading
+# above the real title.
+readme = "README.pypi.md"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Franklin Baldo", email = "franklinbaldo@gmail.com" }]
+keywords = [
+  "okf",
+  "open-knowledge-format",
+  "knowledge-graph",
+  "markdown",
+  "duckdb",
+  "ibis",
+  "validation",
+  "mcp",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Rust",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+  "Topic :: Text Processing :: Markup :: Markdown",
+]
 dependencies = [
   "cyclopts>=4.22,<5",
   "duckdb>=1.4,<2",
@@ -22,6 +48,13 @@ dependencies = [
   "pyyaml>=6,<7",
   "ruamel.yaml>=0.18,<0.20",
 ]
+
+[project.urls]
+Homepage = "https://github.com/franklinbaldo/okf-parser"
+Repository = "https://github.com/franklinbaldo/okf-parser"
+Issues = "https://github.com/franklinbaldo/okf-parser/issues"
+Changelog = "https://github.com/franklinbaldo/okf-parser/releases"
+Documentation = "https://github.com/franklinbaldo/okf-parser/blob/main/docs/architecture.md"
 
 [project.optional-dependencies]
 graphql = ["graphql-core>=3.2,<4"]

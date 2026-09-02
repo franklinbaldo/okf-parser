@@ -175,8 +175,14 @@ jobs:
       - name: Run tests with coverage
         run: uv run pytest --cov --cov-report=term-missing --cov-fail-under=85
 
+      - name: Verify the derived PyPI description is current
+        run: uv run --script scripts/pypi_readme.py --check
+
+      # README.pypi.md is a packaging artifact derived from README.md, not
+      # authored knowledge, so it carries no frontmatter and is excluded here.
       - name: Validate this repository with okf-parser
-        run: uv run okf-parser check . --require-spec "docs/types/{slug}.md" --normative-spec
+        run: |
+          uv run okf-parser check .             --require-spec "docs/types/{slug}.md" --normative-spec             --exclude README.pypi.md
 
       - name: Build distributions
         run: uv build
