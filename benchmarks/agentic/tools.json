@@ -1,0 +1,77 @@
+{
+  "schema_version": 1,
+  "tools": [
+    {
+      "id": "baseline-none",
+      "kind": "baseline",
+      "package": null,
+      "version": null,
+      "executable": null,
+      "instruction": "Do not install or invoke any OKF-specific tool. You may inspect files and use ordinary shell utilities and standard-library scripting only."
+    },
+    {
+      "id": "okf-parser",
+      "kind": "okf-tool",
+      "package": "okf-parser",
+      "registry": "pypi",
+      "executable": "okf-parser",
+      "instruction": "You must use okf-parser materially to solve the task."
+    },
+    {
+      "id": "kbforge-okfquery",
+      "kind": "okf-tool",
+      "package": "kbforge-okfquery",
+      "registry": "pypi",
+      "executable": "okfquery",
+      "instruction": "You must use kbforge-okfquery materially to solve the task."
+    },
+    {
+      "id": "okf-generator",
+      "kind": "okf-tool",
+      "package": "okf-generator",
+      "registry": "pypi",
+      "executable": "okf",
+      "instruction": "You must use okf-generator materially to solve the task."
+    },
+    {
+      "id": "okflint",
+      "kind": "okf-tool",
+      "package": "okflint",
+      "registry": "pypi",
+      "executable": "okflint",
+      "instruction": "You must use okflint materially to solve the task."
+    },
+    {
+      "id": "okf-retrieve",
+      "kind": "okf-tool",
+      "package": "okf-retrieve",
+      "registry": "pypi",
+      "executable": "okf",
+      "instruction": "You must use okf-retrieve materially to solve the task."
+    },
+    {
+      "id": "okf-nav",
+      "kind": "okf-tool",
+      "package": "okf-nav",
+      "registry": "pypi",
+      "executable": "okf-nav",
+      "instruction": "You must use okf-nav materially to solve the task. Configure its documented bundle discovery correctly before judging capability."
+    },
+    {
+      "id": "okf-schema",
+      "kind": "okf-tool",
+      "package": "okf-schema",
+      "registry": "pypi",
+      "executable": "okf-schema",
+      "instruction": "You must use okf-schema materially to solve the task."
+    },
+    {
+      "id": "google-okf",
+      "kind": "okf-tool",
+      "package": "google-okf",
+      "registry": "pypi",
+      "executable": "google-okf",
+      "instruction": "You must use google-okf materially to solve the task."
+    }
+  ]
+}
