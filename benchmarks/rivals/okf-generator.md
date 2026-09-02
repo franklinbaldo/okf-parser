@@ -27,6 +27,10 @@ surface:
   - agent
   - plugin
 measured: false
+agentic_enabled: true
+agentic_version: "0.1.53"
+agentic_executable: okf
+agentic_instruction: "You must use okf-generator materially to solve the task."
 ---
 
 # okf-generator
@@ -37,6 +41,5 @@ visualization and an MCP server. It is particularly relevant to the agentic
 benchmark because it explicitly targets coding-agent workflows.
 
 Version `0.1.53` is pinned for the first agentic benchmark round. It remains
-`measured: false` here because that field currently means the direct scripted
-capability matrix from #219; agentic measurements are recorded separately as
-JSONL evidence rather than conflating the two modes.
+`measured: false` because that field belongs to the direct scripted capability
+matrix; agentic participation is expressed independently by `agentic_enabled`.
