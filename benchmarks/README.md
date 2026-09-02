@@ -52,9 +52,10 @@ them would measure the wrong thing: a linter reads a document and checks a rule,
 while okf-parser compiles a bundle into relational tables and a link graph.
 
 `capability_matrix.py` compares on the axis that separates the tools instead. It
-puts the same eight questions about one fixture to `okf-parser`, `okflint`,
-`okf-cli` and `google-okf`, and records whether each answered correctly,
-disagreed, or exposes no subcommand that could answer:
+puts the same eight questions about one fixture to `okf-parser` and to six
+published ecosystem tools -- `kbforge-okfquery`, `okflint`, `okf-retrieve`,
+`okf-nav`, `okf-schema` and `google-okf` -- and records whether each answered
+correctly, disagreed, or exposes no subcommand that could answer:
 
 ```bash
 uv run --script benchmarks/capability_matrix.py
