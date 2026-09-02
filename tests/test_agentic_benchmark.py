@@ -54,7 +54,11 @@ def test_first_round_tasks_are_large_and_include_conversion() -> None:
 
 
 def test_agentic_rivals_are_declarative_and_pinned() -> None:
-    enabled = [item for item in _concepts(RIVALS, "Rival") if _flag(item.get("agentic_enabled"))]
+    enabled = [
+        item
+        for item in _concepts(RIVALS, "Rival")
+        if _flag(item.get("agentic_enabled"))
+    ]
     names = {item["title"] for item in enabled}
     assert {"okf-parser", "okf-generator", "kbforge-okfquery"} <= names
     assert len(enabled) >= 7
