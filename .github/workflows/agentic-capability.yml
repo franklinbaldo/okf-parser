@@ -11,12 +11,8 @@ on:
         description: "Tool ids, comma-separated, or all (includes baseline-none)"
         required: true
         default: all
-      harnesses:
-        description: "Harness ids, comma-separated, or all"
-        required: true
-        default: all
       repetitions:
-        description: "Independent repetitions per task/tool/harness (1-10)"
+        description: "Independent repetitions per task/tool (1-10)"
         required: true
         default: "1"
       model:
@@ -43,16 +39,15 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - id: plan
-        name: Validate selections and build bounded matrix
+        name: Validate selections and build task matrix
         shell: bash
         env:
           TASKS: ${{ inputs.tasks }}
           TOOLS: ${{ inputs.tools }}
-          HARNESSES: ${{ inputs.harnesses }}
           REPETITIONS: ${{ inputs.repetitions }}
         run: |
           set -euo pipefail
-          common=(--tasks "$TASKS" --tools "$TOOLS" --harnesses "$HARNESSES" --repetitions "$REPETITIONS")
+          common=(--tasks "$TASKS" --tools "$TOOLS" --harnesses cline --repetitions "$REPETITIONS")
           matrix=$(python benchmarks/agentic/build_matrix.py "${common[@]}" --mode matrix)
           tools=$(python benchmarks/agentic/build_matrix.py "${common[@]}" --mode tools)
           repetitions=$(python benchmarks/agentic/build_matrix.py "${common[@]}" --mode repetitions)
@@ -70,7 +65,7 @@ jobs:
       fail-fast: false
       max-parallel: 8
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    name: ${{ matrix.task }} / ${{ matrix.harness }}
+    name: ${{ matrix.task }} / Cline
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -80,42 +75,36 @@ jobs:
         with:
           node-version: 22
 
-      - name: Install selected harness
-        shell: bash
-        env:
-          HARNESS: ${{ matrix.harness }}
-        run: bash benchmarks/agentic/install_harness.sh "$HARNESS"
+      - name: Install pinned Cline harness
+        run: npm install -g cline@3.0.60
 
-      - name: Resolve OpenRouter credential for Ori
-        if: startsWith(matrix.harness, 'ori-')
-        shell: bash
-        env:
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        run: |
-          set -euo pipefail
-          ori auth >/dev/null
+      - name: Record harness version
+        run: cline --version
 
       - name: Run isolated tool trials
         shell: bash
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TASK: ${{ matrix.task }}
-          HARNESS: ${{ matrix.harness }}
           MODEL: ${{ inputs.model }}
           TIMEOUT_SECONDS: ${{ inputs.timeout_seconds }}
           TOOLS_JSON: ${{ needs.plan.outputs.tools }}
           REPETITIONS: ${{ needs.plan.outputs.repetitions }}
         run: |
           set -euo pipefail
+          if [[ -z "${OPENROUTER_API_KEY:-}" ]]; then
+            echo "::error::Repository secret OPENROUTER_API_KEY is not configured."
+            exit 2
+          fi
           mkdir -p trial-results
           mapfile -t tools < <(python -c 'import json,os; print("\n".join(json.loads(os.environ["TOOLS_JSON"])))')
           for tool in "${tools[@]}"; do
             for repetition in $(seq 1 "$REPETITIONS"); do
-              out="trial-results/${TASK}__${tool}__${HARNESS}__${repetition}.jsonl"
+              out="trial-results/${TASK}__${tool}__cline__${repetition}.jsonl"
               python benchmarks/agentic/run_trial.py \
                 --task "$TASK" \
                 --tool "$tool" \
-                --harness "$HARNESS" \
+                --harness cline \
                 --model "$MODEL" \
                 --repetition "$repetition" \
                 --timeout "$TIMEOUT_SECONDS" \
@@ -126,7 +115,7 @@ jobs:
       - name: Upload raw trial evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: agentic-${{ matrix.task }}-${{ matrix.harness }}
+          name: agentic-${{ matrix.task }}-cline
           path: trial-results/
           if-no-files-found: error
           retention-days: 30
