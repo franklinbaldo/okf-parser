@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
+import networkx as nx
+
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
@@ -76,7 +78,6 @@ class WikiSkillView:
 
     def __init__(self, bundle: Bundle) -> None:
         """Bind WikiSkill ergonomics to one already-loaded OKF bundle."""
-        self._bundle = bundle
         rows = bundle.concepts.execute().to_dict(orient="records")
         self._concepts = {
             str(row["concept_id"]): WikiSkillConcept(
@@ -94,7 +95,11 @@ class WikiSkillView:
         self._graph = bundle.to_networkx()
 
     def _ids_of_type(self, accepted: frozenset[str]) -> set[str]:
-        return {concept_id for concept_id, type_name in self._types.items() if type_name in accepted}
+        return {
+            concept_id
+            for concept_id, type_name in self._types.items()
+            if type_name in accepted
+        }
 
     def _concepts_for_ids(self, concept_ids: Iterable[str]) -> tuple[WikiSkillConcept, ...]:
         return tuple(
@@ -107,7 +112,9 @@ class WikiSkillView:
     def orphan_wiki_entries(self) -> tuple[WikiSkillConcept, ...]:
         """Return wiki entries with no resolved incoming concept link."""
         wiki_ids = self._ids_of_type(_WIKI_TYPES)
-        orphan_ids = {concept_id for concept_id in wiki_ids if self._graph.in_degree(concept_id) == 0}
+        orphan_ids = {
+            concept_id for concept_id in wiki_ids if self._graph.in_degree(concept_id) == 0
+        }
         return self._concepts_for_ids(orphan_ids)
 
     def unevaluated_proposals(self) -> tuple[WikiSkillConcept, ...]:
@@ -128,7 +135,7 @@ class WikiSkillView:
     def lineage(self, concept: str) -> tuple[WikiSkillConcept, ...]:
         """Return all resolved ancestors and descendants for a concept id or path."""
         concept_id = self._resolve_concept_id(concept)
-        related = set(self._graph.ancestors(concept_id)) | set(self._graph.descendants(concept_id))
+        related = nx.ancestors(self._graph, concept_id) | nx.descendants(self._graph, concept_id)
         related.add(concept_id)
         return self._concepts_for_ids(related)
 
