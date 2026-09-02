@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "harnesses": [
+    {
+      "id": "cline",
+      "package": "cline",
+      "install": "npm install -g cline",
+      "provider": "openrouter",
+      "supports_json": true,
+      "notes": "Uses isolated --data-dir/--config per trial and Cline CLI headless mode."
+    },
+    {
+      "id": "kilo",
+      "package": "@kilocode/cli",
+      "install": "npm install -g @kilocode/cli",
+      "provider": "openrouter",
+      "supports_json": false,
+      "notes": "Uses kilo run --auto with an isolated kilo.json per trial."
+    }
+  ]
+}
