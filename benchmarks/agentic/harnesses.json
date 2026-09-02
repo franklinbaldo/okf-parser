@@ -1,9 +1,14 @@
 {
   "schema_version": 1,
   "harnesses": [
-    {"id":"cline","harness":"cline","launcher":"direct","package":"cline","version":"3.0.60","provider":"openrouter"},
-    {"id":"kilo","harness":"kilo","launcher":"direct","package":"@kilocode/cli","version":"7.5.9","provider":"openrouter"},
-    {"id":"ori-claude","harness":"claude-code","launcher":"ori","package":"@anthropic-ai/claude-code","version":"2.1.257","provider":"openrouter","ori_command":"claude"},
-    {"id":"ori-codex","harness":"codex","launcher":"ori","package":"@openai/codex","version":"0.152.0","provider":"openrouter","ori_command":"codex"}
+    {
+      "id": "cline",
+      "harness": "cline",
+      "launcher": "direct",
+      "package": "cline",
+      "version": "3.0.60",
+      "provider": "openrouter",
+      "notes": "First benchmark round intentionally fixes one harness so the experimental variable is the OKF tool, not the agent shell. Additional harnesses belong in later rounds."
+    }
   ]
 }
