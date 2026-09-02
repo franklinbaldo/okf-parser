@@ -13,6 +13,10 @@ surface:
   - serve-mcp
 homepage: https://github.com/scionoftech/okf-retrieve
 measured: true
+agentic_enabled: true
+agentic_version: "0.1.1"
+agentic_executable: okf
+agentic_instruction: "You must use okf-retrieve materially to solve the task."
 ---
 
 # okf-retrieve

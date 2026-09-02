@@ -5,7 +5,11 @@ CREATE TABLE "Rival" (
     version_measured VARCHAR,
     surface VARCHAR[],
     homepage VARCHAR,
-    measured BOOLEAN
+    measured BOOLEAN,
+    agentic_enabled BOOLEAN,
+    agentic_version VARCHAR,
+    agentic_executable VARCHAR,
+    agentic_instruction VARCHAR
 );
 
 COMMENT ON TABLE "Rival" IS
@@ -18,10 +22,18 @@ COMMENT ON COLUMN "Rival".package IS
 COMMENT ON COLUMN "Rival".executable IS
     'The command the package installs. Two rivals may claim the same one.';
 COMMENT ON COLUMN "Rival".version_measured IS
-    'The version the capability matrix last ran against, or null when unmeasured.';
+    'The version the direct capability matrix last ran against, or null when unmeasured.';
 COMMENT ON COLUMN "Rival".surface IS
     'The subcommands the tool advertises, transcribed from its own --help output.';
 COMMENT ON COLUMN "Rival".homepage IS
     'Where the tool is developed, when it declares one.';
 COMMENT ON COLUMN "Rival".measured IS
     'Whether benchmarks/capability_matrix.py interrogates this rival today.';
+COMMENT ON COLUMN "Rival".agentic_enabled IS
+    'Whether the rival participates in the current agentic benchmark registry.';
+COMMENT ON COLUMN "Rival".agentic_version IS
+    'Pinned package version used by the current agentic benchmark round.';
+COMMENT ON COLUMN "Rival".agentic_executable IS
+    'Executable the agentic runner must expose and observe for this rival.';
+COMMENT ON COLUMN "Rival".agentic_instruction IS
+    'Tool-specific constraint appended to the otherwise identical agent handoff.';

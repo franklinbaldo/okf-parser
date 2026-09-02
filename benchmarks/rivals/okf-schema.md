@@ -14,6 +14,10 @@ surface:
   - kb
 homepage: https://github.com/gsemet/okf-schema
 measured: true
+agentic_enabled: true
+agentic_version: "0.12.0"
+agentic_executable: okf-schema
+agentic_instruction: "You must use okf-schema materially to solve the task."
 ---
 
 # okf-schema

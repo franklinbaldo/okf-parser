@@ -11,6 +11,10 @@ surface:
   - lint
   - produce
 measured: true
+agentic_enabled: true
+agentic_version: "0.1.3"
+agentic_executable: google-okf
+agentic_instruction: "You must use google-okf materially to solve the task."
 ---
 
 # google-okf
