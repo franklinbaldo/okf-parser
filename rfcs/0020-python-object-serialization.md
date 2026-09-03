@@ -1,144 +1,250 @@
 ---
 type: RFC
-title: Python object-to-OKF serialization protocol
+title: Python object-to-OKF representation protocol
 status: proposed
-description: Define a structural Python protocol and canonical document value for converting application objects into deterministic OKF without inventing a custom dunder or leaking YAML syntax into domain models
+description: Define how Python and JSON-like objects project metadata plus an optional body into a typed canonical OKF document
 ---
 
-# RFC 0020: Python object-to-OKF serialization protocol
+# RFC 0020: Python object-to-OKF representation protocol
 
 ## Summary
 
-`okf-parser` should expose a small Python-native boundary for turning an application object into one
-complete OKF document. A producer opts in structurally with an ordinary `to_okf()` method returning a
-parser-owned `OKFDocument`; the parser validates and renders that value.
+`okf-parser` should treat Python serialization as **representation**, not as a domain object manually
+constructing an already-finished OKF document.
+
+A representation has two semantic channels:
+
+1. **metadata** — values that become YAML frontmatter;
+2. **body** — optional Markdown/text chosen by the producer.
+
+The final OKF document always has a non-empty `type`. The serializer guarantees that invariant. For
+ordinary Python objects the default type is the source class name; producers and callers may override
+it explicitly.
 
 ```python
-from okf_parser import OKFDocument, dumps
+from dataclasses import dataclass
 
-class Pessoa:
-    def to_okf(self) -> OKFDocument:
-        return OKFDocument(
-            frontmatter={"type": "Pessoa", "nome": self.nome},
-            body=self.biografia,
+from okf_parser import OKFRepresentation, dumps
+
+@dataclass
+class Processo:
+    numero: str
+    texto: str
+
+    def __okf__(self) -> OKFRepresentation:
+        return OKFRepresentation(
+            metadata={"numero": self.numero},
+            body=self.texto,
         )
 
-text = dumps(Pessoa(...))
+text = dumps(Processo("0001", "# Processo\n"))
 ```
 
-The producer owns its semantic projection. `okf-parser` owns the OKF value contract, YAML quoting,
-canonical physical ordering and Markdown envelope.
+The resulting frontmatter begins with `type: Processo`; the producer did not need to repeat its class
+name.
 
 This RFC resolves #233. It is distinct from #67: #67 projects already-parsed OKF state outward as
-JSON-ready application data; this RFC projects a Python object inward to an OKF document.
+application data; this RFC projects application data inward into OKF.
 
 ## Decision
 
-### 1. Use `to_okf()`, not a package-defined `__okf__`
+### 1. Define a library protocol with `__okf__()`
 
-The motivating idea used `__okf__()`. The public protocol deliberately does not.
-
-Python reserves names of the form `__*__` for system-defined behavior and warns that undocumented
-uses may break as the interpreter evolves. Interpreter protocols such as `__fspath__` are safe
-because Python itself standardizes them; a library-created dunder does not have that status.
-
-The extension point is therefore an ordinary method:
-
-```python
-def to_okf(self) -> OKFDocument: ...
-```
-
-It retains duck-typing ergonomics without occupying Python's reserved dunder namespace.
-
-### 2. Publish a static structural protocol
-
-The package exposes:
+Custom Python objects opt in structurally:
 
 ```python
 from typing import Protocol
 
 class SupportsOKF(Protocol):
-    def to_okf(self) -> OKFDocument: ...
+    def __okf__(self) -> OKFRepresentation | OKFDocument | Mapping[str, object]: ...
 ```
 
-No producer inherits from or registers with `SupportsOKF`. Implementing the method is sufficient for
-static structural typing.
+`__okf__` is not a Python interpreter special method. It is an OKF ecosystem protocol, analogous in
+purpose to library-defined protocols such as Rich's `__rich__`: a recognizable hook that says the
+object knows how it should be represented by this ecosystem.
 
-The protocol is intentionally not `@runtime_checkable`. Runtime-checkable protocols only verify
-attribute presence, not the declared signature, and Python documents that their `isinstance()` checks
-may be slower than ordinary attribute lookup. The serializer must call and validate the hook anyway.
+No inheritance or registration is required. Runtime dispatch remains ordinary duck typing: obtain
+`__okf__`, ensure it is callable, invoke it exactly once, then validate the result.
 
-### 3. `OKFDocument` is the semantic boundary
+### 2. Separate producer representation from final document
 
-The parser owns a compact value:
+The producer-facing value is:
 
 ```python
-from collections.abc import Mapping
-from dataclasses import dataclass
+@dataclass(frozen=True, slots=True)
+class OKFRepresentation:
+    metadata: Mapping[str, object]
+    body: str = ""
+```
 
+`metadata` is semantic data destined for YAML frontmatter. `body` is optional content destined for the
+OKF body. The producer chooses the split.
+
+The parser-facing value remains:
+
+```python
 @dataclass(frozen=True, slots=True)
 class OKFDocument:
     frontmatter: Mapping[str, YamlValue]
     body: str = ""
 ```
 
-It represents one complete concept document, not a path or a physical file. It contains no BOM,
-newline policy, YAML emitter, destination, content hash or filesystem state.
+`OKFDocument` is stricter because it represents a complete concept: its frontmatter must already have
+a valid `type` and values in the parser's spelling-preserving `YamlValue` domain.
 
-Construction validates and copies the top-level mapping against the parser's existing recursive
-`YamlValue` contract. The serializer does not widen OKF scalar semantics merely because Python has
-integers, floats, booleans or arbitrary objects available.
+This distinction is intentional:
 
-### 4. Normalize with `to_okf(value)`
-
-The public normalization primitive is:
-
-```python
-def to_okf(value: OKFDocument | SupportsOKF) -> OKFDocument: ...
+```text
+Python/JSON object
+    -> OKFRepresentation(metadata + optional body)
+    -> type resolution + scalar normalization
+    -> OKFDocument(required typed frontmatter + body)
+    -> canonical Markdown
 ```
 
-Its runtime rules are deliberately small:
+### 3. The serializer owns the required `type`
 
-1. an `OKFDocument` passes through directly;
-2. otherwise obtain `value.to_okf` structurally;
-3. missing or non-callable hooks raise `TypeError`;
-4. call the hook exactly once;
-5. require an `OKFDocument` result, otherwise raise `TypeError`;
-6. let exceptions from the producer hook propagate unchanged.
+OKF requires `type` in final frontmatter. Producers should not have to repeat boilerplate when the
+natural type is already represented by their Python class.
 
-There is no fallback to `__dict__`, `dataclasses.asdict()`, Pydantic `model_dump()` or reflection.
-Private Python representation must not become OKF accidentally.
+Type resolution precedence is:
 
-### 5. Render with `dumps(value)`
+1. explicit `concept_type=` argument supplied by the caller;
+2. a `type` field explicitly present in representation metadata;
+3. the source object's class name, when there is a source class to infer from;
+4. otherwise fail because a type cannot be invented safely.
+
+Examples:
 
 ```python
-def dumps(value: OKFDocument | SupportsOKF) -> str: ...
+class Pessoa:
+    def __okf__(self):
+        return {"nome": self.nome}
+
+# -> type: Pessoa
+
+dumps(Pessoa(...), concept_type="Person")
+# -> type: Person
+
+class LegacyPessoa:
+    def __okf__(self):
+        return {"type": "Pessoa", "nome": self.nome}
+
+# -> type: Pessoa
 ```
 
-`dumps()` normalizes first, then renders one deterministic OKF Markdown string. It has no filesystem
-side effects. A `dump(value, fp)` convenience is deferred until a real consumer needs it.
+A bare mapping has no meaningful domain class: inferring `dict` would describe the Python container,
+not the concept. Therefore it must either contain `type` or be serialized with `concept_type=`.
 
-The hook returns a semantic value, never raw Markdown. Otherwise every domain object would need to
-know YAML quoting, delimiters, physical ordering and future renderer policy.
+### 4. Support JSON-like mappings directly
 
-### 6. Validate before emission
+A JSON object represented as a Python mapping is already a natural metadata projection:
 
-A serializable document must satisfy:
+```python
+dumps(
+    {"title": "Example", "count": 3, "active": True},
+    concept_type="Example",
+)
+```
 
-- frontmatter is a string-keyed mapping accepted by `YamlValue`;
-- `type` exists and is a non-empty string;
-- `body` is a string.
+The mapping becomes frontmatter metadata and the body is empty.
 
-Wrong Python shapes raise `TypeError`; an empty string `type` raises `ValueError`. Unsupported nested
-objects are rejected rather than converted implicitly.
+This path does not reflect over arbitrary Python objects. Only explicit supported shapes are accepted.
 
-This means a producer cannot accidentally emit a document that the normal parser immediately rejects
-for the same basic value-shape reasons.
+### 5. Support Pydantic as a first-class default projection
 
-### 7. Reuse the repository's canonical physical order
+Pydantic is already a dependency and provides an explicit public serialization API. A `BaseModel`
+without `__okf__` is projected with:
 
-New documents have no authored ordering to preserve. Their top-level frontmatter therefore uses the
-existing `frontmatter_key_order()` convention already owned by `frontmatter_order.py`:
+```python
+model.model_dump(mode="json")
+```
+
+All fields become metadata, body is empty, and the model class name is the default OKF type.
+
+A Pydantic model that wants a different YAML/body split implements `__okf__`; the explicit protocol
+wins over the default Pydantic projection.
+
+```python
+class Article(BaseModel):
+    title: str
+    text: str
+
+    def __okf__(self):
+        return OKFRepresentation(
+            metadata={"title": self.title},
+            body=self.text,
+        )
+```
+
+The same principle applies to ordinary classes: the serializer does not inspect `__dict__`; they opt
+in with `__okf__`.
+
+### 6. `__okf__()` may use a compact or explicit representation
+
+For metadata-only objects, returning a mapping is enough:
+
+```python
+def __okf__(self):
+    return {"title": self.title}
+```
+
+This is equivalent to `OKFRepresentation(metadata=..., body="")`.
+
+When body placement matters, return `OKFRepresentation` explicitly. Advanced producers may return an
+already-valid `OKFDocument`, although that opts out of type inference unless the caller deliberately
+overrides its type.
+
+Raw Markdown is not an accepted hook result because it would move YAML quoting, delimiters and
+canonicalization into every producer.
+
+### 7. Normalize JSON scalars into OKF's spelling-preserving domain
+
+The parser intentionally represents YAML scalar spellings as strings (plus `None`) so values such as
+`0012`, `false` and `null` do not silently change semantic identity.
+
+Object conversion therefore accepts ordinary JSON scalar values and canonicalizes them before
+constructing `OKFDocument`:
+
+- strings remain strings;
+- `None` remains `None`;
+- booleans become `"true"` or `"false"`;
+- integers become their decimal spelling;
+- finite floats become their JSON numeric spelling;
+- mappings recurse and require string keys;
+- lists/tuples recurse and preserve order;
+- arbitrary nested Python objects are rejected.
+
+Non-finite floats are rejected because they are not portable JSON numbers.
+
+This makes Pydantic/JSON conversion ergonomic without weakening the parser's existing scalar model.
+
+### 8. Normalize with `to_okf(value, *, concept_type=None)`
+
+The public conversion primitive returns a complete `OKFDocument`:
+
+```python
+def to_okf(value: object, *, concept_type: str | None = None) -> OKFDocument: ...
+```
+
+Supported inputs are:
+
+1. `OKFDocument`;
+2. `OKFRepresentation`;
+3. string-keyed mappings containing JSON-like values;
+4. objects with callable `__okf__()`;
+5. Pydantic `BaseModel` values.
+
+For objects that are both Pydantic and implement `__okf__`, the explicit hook wins.
+
+There is no `__dict__`, `vars()`, arbitrary dataclass reflection or recursive object-graph fallback.
+
+### 9. Render with `dumps(value, *, concept_type=None)`
+
+`dumps()` calls `to_okf()` and renders one deterministic OKF Markdown string. It performs no
+filesystem writes.
+
+New documents use the repository's existing canonical top-level physical order:
 
 ```text
 type
@@ -147,175 +253,185 @@ description   # when present
 <all remaining keys lexicographically>
 ```
 
-Nested mappings are ordered lexicographically and list order is preserved exactly.
+Nested mappings are sorted lexicographically and list order is preserved.
 
-This is a physical determinism rule, not semantic ordering. Equivalent mappings constructed with
-different insertion orders must serialize to the same bytes.
+This is a physical determinism rule, not semantic ordering.
 
-The implementation must reuse `frontmatter_key_order()` rather than introduce a second canonical
-ordering policy.
+### 10. Representation does not prescribe what belongs in body
 
-### 8. Do not recursively serialize object graphs
+The protocol deliberately does **not** decide that a field such as `description`, `text`, `content`,
+`prompt` or `source` must live in YAML or body.
 
-`to_okf()` means “represent this value as one complete OKF document.” It does not mean “walk every
-nested Python object and call similarly named methods.”
+That is a producer decision. Two valid representations of the same application object may choose
+different splits for different consumers.
+
+For example:
 
 ```python
-OKFDocument(
-    frontmatter={"type": "A", "child": SomeObject()},
+# metadata-heavy
+OKFRepresentation(
+    metadata={"title": article.title, "text": article.text},
+)
+
+# body-heavy
+OKFRepresentation(
+    metadata={"title": article.title},
+    body=article.text,
 )
 ```
 
-is invalid even when `SomeObject` itself supports `to_okf()`.
+Both are legitimate projections so long as the resulting concept satisfies the relevant OKF type
+contract.
 
-Whether a nested object should become an embedded mapping, a relation or another concept is a
-bundle-level semantic decision and belongs to a future, separate contract.
-
-### 9. New-document rendering and edit rendering stay separate
+### 11. New-document rendering and edit rendering stay separate
 
 `dumps()` creates canonical new text. Its round-trip guarantee is semantic:
 
 ```text
-producer
+object
+  -> representation
   -> OKFDocument
   -> dumps()
   -> parse_document_text()
   -> equivalent frontmatter and body
 ```
 
-It is not a byte-preserving edit API.
+It is not a byte-preserving edit API. Existing edit/apply paths continue to preserve authored quotes,
+comments, BOMs and line endings.
 
-Existing `apply`/edit paths operate on authored bytes and intentionally preserve concerns such as
-quotes, comments, BOMs and line endings. They must not be routed through canonical new-document
-serialization merely to share code.
+### 12. The Python protocol is local; OKF output remains portable
 
-The canonical frontmatter renderer should nevertheless be a reusable package primitive for other
-**new-document producers**.
-
-### 10. The protocol is Python-specific; the document is not
-
-`SupportsOKF` and `to_okf()` are Python integration conveniences. TypeScript and Rust do not need a
-method with the same spelling for parity. The emitted OKF must remain portable and conform to the
-same parser semantics across runtimes.
+`__okf__` and Pydantic support are Python integration conveniences. TypeScript and Rust do not need
+methods with identical spelling. The emitted OKF stays portable and obeys the same format semantics
+across runtimes.
 
 ## Public API
 
-RFC 0020 adds four top-level Python exports:
+RFC 0020 exports:
 
 ```python
+OKFRepresentation
 OKFDocument
 SupportsOKF
 to_okf
 dumps
 ```
 
-A dataclass can opt in without nominal coupling:
+Typical custom class:
 
 ```python
-from dataclasses import dataclass
-from okf_parser import OKFDocument
-
-@dataclass
 class Processo:
-    numero: str
-    assunto: str
-
-    def to_okf(self) -> OKFDocument:
-        return OKFDocument(
-            frontmatter={
-                "type": "Processo",
-                "numero": self.numero,
-                "assunto": self.assunto,
-            }
+    def __okf__(self):
+        return OKFRepresentation(
+            metadata={"numero": self.numero, "assunto": self.assunto},
+            body=self.texto,
         )
 ```
 
-Pydantic and slotted classes use the same method. Neither receives an implicit special case.
+Typical Pydantic model needing no custom body:
+
+```python
+class Pessoa(BaseModel):
+    nome: str
+    idade: int
+
+text = dumps(Pessoa(nome="Ana", idade=42))
+```
+
+Typical JSON-like object:
+
+```python
+text = dumps({"nome": "Ana", "idade": 42}, concept_type="Pessoa")
+```
 
 ## Error model
 
 | Situation | Result |
 | --- | --- |
-| native `OKFDocument` | returned directly |
-| missing/non-callable `to_okf` | `TypeError` |
-| hook returns another type | `TypeError` naming that type |
+| native valid `OKFDocument` | returned directly |
+| plain unsupported object | `TypeError` |
+| non-callable `__okf__` on plain object | `TypeError` |
+| hook returns unsupported shape | `TypeError` |
 | producer hook raises | original exception propagates |
-| invalid frontmatter Python value | `TypeError` |
-| absent/non-string `type` | `TypeError` |
-| blank `type` | `ValueError` |
-| non-string body | `TypeError` |
-
-The package does not wrap these ordinary conversion failures in a new exception hierarchy.
+| bare mapping/representation has no resolvable type | `TypeError` |
+| declared type is non-string | `TypeError` |
+| resolved type is blank | `ValueError` |
+| metadata mapping has non-string key | `TypeError` |
+| metadata contains arbitrary nested object | `TypeError` |
+| metadata contains non-finite float | `TypeError` |
+| representation body is non-string | `TypeError` |
 
 ## Testing
 
 The implementation must cover:
 
-1. direct `OKFDocument` normalization;
-2. structural dispatch without inheritance;
-3. slotted, dataclass and Pydantic producers;
-4. exactly one hook invocation;
-5. missing/non-callable hooks;
-6. invalid hook return types;
-7. unchanged propagation of producer exceptions;
-8. invalid frontmatter and body values;
-9. absence and invalidity of `type`;
-10. rejection of nested arbitrary objects;
-11. top-level `type`/`title`/`description` canonical prefix;
-12. deterministic ordering independent of insertion order;
-13. recursive nested-map ordering with list order preserved;
-14. YAML-sensitive strings such as `0012`, `false` and `null` round-tripping as strings;
-15. Unicode and multiline body round-trip;
-16. repeated byte-for-byte deterministic serialization.
+1. native `OKFDocument` pass-through;
+2. bare mapping type requirement and explicit caller type;
+3. structural `__okf__` dispatch without inheritance;
+4. class-name type inference;
+5. metadata-declared type override;
+6. caller type override;
+7. exactly one hook invocation;
+8. Pydantic default projection;
+9. Pydantic custom YAML/body split via `__okf__`;
+10. JSON scalar normalization including bool/int/float/list/map;
+11. invalid hook results and exception propagation;
+12. invalid representation envelopes;
+13. non-string keys, arbitrary objects and non-finite floats;
+14. deterministic canonical ordering;
+15. YAML-sensitive strings and Unicode round-trip;
+16. body round-trip.
 
 ## Alternatives considered
 
-### `__okf__`
+### `to_okf()` as the producer hook
 
-Rejected because package-defined dunders occupy a namespace Python reserves for system-defined names.
+Rejected. The protocol is intended to advertise an ecosystem capability rather than an ordinary
+business-method conversion. A library-defined `__okf__` makes that role explicit and follows an
+established Python library pattern for structural rendering/representation hooks.
 
-### ABC/base class
+### Requiring every producer to construct `OKFDocument`
 
-Rejected because nominal inheritance is unnecessary for a one-method capability.
+Rejected. It forces every object to repeat the required `type` and conflates producer representation
+with the parser's final normalized document.
 
-### `@runtime_checkable Protocol`
+### Inferring `dict` as the type of a JSON object
 
-Rejected for dispatch because it does not validate signatures and adds no value over calling and
-validating the structural hook.
+Rejected. `dict` identifies the implementation container, not the domain concept.
 
-### `functools.singledispatch` registry
+### Automatic `__dict__` or arbitrary dataclass reflection
 
-Deferred. It helps adapt third-party classes that cannot be modified, but adds global registration
-state and precedence rules that the motivating use case does not need.
+Rejected. Private implementation fields must not leak into OKF by accident. Explicit `__okf__` is the
+extension point for ordinary classes. Pydantic is handled separately because it exposes a deliberate
+public serialization API.
 
-### `default=` callback like `json.dumps`
+### Hook returns raw Markdown
 
-Deferred for the same reason and can be added compatibly later.
+Rejected because syntax, YAML quoting, delimiters and canonicalization belong to the serializer.
 
-### Hook returns a dictionary
+### External adapter registry / `singledispatch`
 
-Rejected because a bare mapping cannot distinguish frontmatter from body and creates conventions the
-stable `OKFDocument` value should own.
-
-### Hook returns Markdown
-
-Rejected because syntax, quoting, delimiters and canonicalization belong to the serializer.
+Deferred. It can later adapt third-party classes that cannot implement `__okf__` without changing the
+core representation contract.
 
 ## Non-goals
 
-RFC 0020 does not define deserialization into arbitrary classes, bundle/object-graph serialization,
-implicit dataclass or Pydantic conversion, recursive object conversion, filesystem writes, path or
-identity derivation, an external adapter registry, or a cross-language `to_okf` method.
+RFC 0020 does not define deserialization into arbitrary Python classes, bundle/object-graph
+serialization, implicit arbitrary-object reflection, byte-preserving edits, filesystem writes, or a
+cross-language `__okf__` method.
 
 ## Consequences
 
-The final boundary is deliberately small:
+The boundary becomes:
 
 ```text
-producer object        chooses semantic fields and body
-OKFDocument            carries one validated concept value
-okf-parser renderer    owns canonical physical OKF output
+application object      chooses semantic data and optional body split
+OKFRepresentation       carries metadata + body before required type resolution
+okf-parser conversion   resolves type and normalizes JSON-like values
+OKFDocument             carries one validated typed concept
+canonical renderer      owns physical OKF Markdown output
 ```
 
-That gives Python applications an idiomatic opt-in serializer while keeping domain vocabulary out of
-core, preserving cross-runtime OKF semantics and leaving style-preserving edit behavior untouched.
+This makes OKF usable as a real representation target for Python objects, Pydantic models and
+JSON-like data while preserving the format's required `type`, parser semantics and deterministic
+output.
