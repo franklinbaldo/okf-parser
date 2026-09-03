@@ -141,16 +141,9 @@ def _lexical_hits(passages: Sequence[_Passage], query: str) -> list[_Hit]:
     if average_length == 0:
         return []
 
-    document_frequency = {
-        term: sum(term in tokens for tokens in tokenized)
-        for term in query_terms
-    }
+    document_frequency = {term: sum(term in tokens for tokens in tokenized) for term in query_terms}
     inverse_document_frequency = {
-        term: math.log(
-            1.0
-            + (document_count - frequency + 0.5)
-            / (frequency + 0.5)
-        )
+        term: math.log(1.0 + (document_count - frequency + 0.5) / (frequency + 0.5))
         for term, frequency in document_frequency.items()
         if frequency
     }
@@ -158,17 +151,12 @@ def _lexical_hits(passages: Sequence[_Passage], query: str) -> list[_Hit]:
     hits: list[_Hit] = []
     for passage, tokens in zip(passages, tokenized, strict=True):
         frequencies = Counter(tokens)
-        length_normalizer = _BM25_K1 * (
-            1.0 - _BM25_B + _BM25_B * len(tokens) / average_length
-        )
+        length_normalizer = _BM25_K1 * (1.0 - _BM25_B + _BM25_B * len(tokens) / average_length)
         score = 0.0
         for term, idf in inverse_document_frequency.items():
             frequency = frequencies[term]
             if frequency:
-                score += idf * (
-                    frequency * (_BM25_K1 + 1.0)
-                    / (frequency + length_normalizer)
-                )
+                score += idf * (frequency * (_BM25_K1 + 1.0) / (frequency + length_normalizer))
         if score > 0.0:
             hits.append(_Hit(passage=passage, score=score))
     return hits
@@ -215,6 +203,10 @@ def _ordered_unique(hits: Sequence[_Hit]) -> list[_Hit]:
     )
 
 
+_LAST_CONTROL_CODEPOINT = 0x1F
+_DELETE_CODEPOINT = 0x7F
+
+
 def _escape_location_path(path: str) -> str:
     """Escape the compact location path without changing raw path identity."""
     escaped: list[str] = []
@@ -224,7 +216,7 @@ def _escape_location_path(path: str) -> str:
             escaped.append("%25")
         elif character == "#":
             escaped.append("%23")
-        elif codepoint <= 0x1F or codepoint == 0x7F:
+        elif codepoint <= _LAST_CONTROL_CODEPOINT or codepoint == _DELETE_CODEPOINT:
             escaped.append(f"%{codepoint:02X}")
         else:
             escaped.append(character)
@@ -274,14 +266,21 @@ def _render_compact(hits: Sequence[_Hit], *, context: int, with_score: bool) -> 
     return "\n".join(rows)
 
 
+@dataclass(frozen=True, slots=True)
+class _FullRender:
+    """Non-passage fields the structured rendering echoes back."""
+
+    query: str
+    mode: str
+    profile: str | None
+    engine: str
+
+
 def _render_full(
     hits: Sequence[_Hit],
+    render: _FullRender,
     *,
-    query: str,
-    mode: str,
-    profile: str | None,
     context: int,
-    engine: str,
 ) -> dict[str, object]:
     """Render the stable-core structured result plus non-semantic diagnostics."""
     results: list[dict[str, object]] = []
@@ -302,12 +301,43 @@ def _render_full(
             }
         )
     return {
-        "query": query,
-        "mode": mode,
-        "profile": profile,
+        "query": render.query,
+        "mode": render.mode,
+        "profile": render.profile,
         "results": results,
-        "diagnostics": {"engine": engine},
+        "diagnostics": {"engine": render.engine},
     }
+
+
+def _validated_query(query: str, *, limit: int, context: int) -> str:
+    """Return the normalized query, rejecting empty text and out-of-range bounds."""
+    normalized_query = query.strip()
+    if not normalized_query:
+        msg = "query must not be empty"
+        raise SearchError(msg)
+    if limit < 1:
+        msg = "limit must be at least 1"
+        raise SearchError(msg)
+    if context < 0:
+        msg = "context must be non-negative"
+        raise SearchError(msg)
+    return normalized_query
+
+
+def _validate_selectors(*, mode: str, detail: str, profile: str | None) -> None:
+    """Reject unknown modes and detail levels, and unconfigured retrieval requests."""
+    if mode not in _ALLOWED_MODES:
+        msg = f"unsupported search mode: {mode}"
+        raise SearchError(msg)
+    if detail not in _ALLOWED_DETAILS:
+        msg = f"unsupported search detail: {detail}"
+        raise SearchError(msg)
+    if profile is not None:
+        msg = f"profile is not configured: {profile}"
+        raise SearchError(msg)
+    if mode in {"vector", "hybrid"}:
+        msg = f"{mode} retrieval is not configured"
+        raise SearchError(msg)
 
 
 def search_bundle(  # noqa: PLR0913 - public RFC 0016 schema is intentionally flat.
@@ -323,28 +353,8 @@ def search_bundle(  # noqa: PLR0913 - public RFC 0016 schema is intentionally fl
     profile: str | None = None,
 ) -> str | dict[str, object]:
     """Search one already-loaded OKF bundle without filesystem or network access."""
-    normalized_query = query.strip()
-    if not normalized_query:
-        msg = "query must not be empty"
-        raise SearchError(msg)
-    if limit < 1:
-        msg = "limit must be at least 1"
-        raise SearchError(msg)
-    if context < 0:
-        msg = "context must be non-negative"
-        raise SearchError(msg)
-    if mode not in _ALLOWED_MODES:
-        msg = f"unsupported search mode: {mode}"
-        raise SearchError(msg)
-    if detail not in _ALLOWED_DETAILS:
-        msg = f"unsupported search detail: {detail}"
-        raise SearchError(msg)
-    if profile is not None:
-        msg = f"profile is not configured: {profile}"
-        raise SearchError(msg)
-    if mode in {"vector", "hybrid"}:
-        msg = f"{mode} retrieval is not configured"
-        raise SearchError(msg)
+    normalized_query = _validated_query(query, limit=limit, context=context)
+    _validate_selectors(mode=mode, detail=detail, profile=profile)
 
     candidates = _passages(
         bundle,
@@ -370,9 +380,11 @@ def search_bundle(  # noqa: PLR0913 - public RFC 0016 schema is intentionally fl
         return _render_compact(selected, context=context, with_score=True)
     return _render_full(
         selected,
-        query=normalized_query,
-        mode=mode,
-        profile=profile,
+        _FullRender(
+            query=normalized_query,
+            mode=mode,
+            profile=profile,
+            engine=engine,
+        ),
         context=context,
-        engine=engine,
     )
