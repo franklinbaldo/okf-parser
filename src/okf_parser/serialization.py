@@ -132,8 +132,6 @@ def _resolve_representation(value: object) -> tuple[OKFRepresentation | OKFDocum
     """Resolve supported Python inputs and preserve the source class for type inference."""
     if isinstance(value, OKFDocument | OKFRepresentation):
         return value, None
-    if isinstance(value, Mapping):
-        return OKFRepresentation(metadata=value), None
 
     hook = getattr(value, "__okf__", None)
     if callable(hook):
@@ -141,6 +139,9 @@ def _resolve_representation(value: object) -> tuple[OKFRepresentation | OKFDocum
 
     if isinstance(value, BaseModel):
         return OKFRepresentation(metadata=value.model_dump(mode="json")), type(value).__name__
+
+    if isinstance(value, Mapping):
+        return OKFRepresentation(metadata=value), None
 
     msg = f"object of type {type(value).__qualname__!r} does not support OKF serialization"
     raise TypeError(msg)
