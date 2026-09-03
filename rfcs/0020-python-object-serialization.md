@@ -9,70 +9,48 @@ description: Define a structural Python protocol and canonical document value fo
 
 ## Summary
 
-`okf-parser` should expose a small Python-native boundary for turning application objects into one
-complete OKF document. The boundary is structural: an object may implement an ordinary `to_okf()`
-method returning a parser-owned `OKFDocument`. The package then validates and renders that value.
+`okf-parser` should expose a small Python-native boundary for turning an application object into one
+complete OKF document. A producer opts in structurally with an ordinary `to_okf()` method returning a
+parser-owned `OKFDocument`; the parser validates and renders that value.
 
 ```python
 from okf_parser import OKFDocument, dumps
 
 class Pessoa:
-    def __init__(self, nome: str, biografia: str) -> None:
-        self.nome = nome
-        self.biografia = biografia
-
     def to_okf(self) -> OKFDocument:
         return OKFDocument(
             frontmatter={"type": "Pessoa", "nome": self.nome},
             body=self.biografia,
         )
 
-text = dumps(Pessoa("Ada", "Primeira programadora."))
+text = dumps(Pessoa(...))
 ```
 
-The object owns its semantic projection. `okf-parser` owns the OKF value contract, validation,
-canonical YAML rendering and Markdown envelope.
+The producer owns its semantic projection. `okf-parser` owns the OKF value contract, YAML quoting,
+canonical physical ordering and Markdown envelope.
 
-This RFC resolves #233. It is deliberately separate from #67: #67 projects already-parsed parser
-state outward as JSON-ready application data; this RFC projects an application object inward to an
-OKF document.
-
-## Motivation
-
-The package already owns parsing, validation, canonical concepts and guarded filesystem writes, but
-an application that wants to produce OKF from a Python object still has to know too much about the
-physical format. Typical consumers otherwise end up doing some combination of:
-
-- building YAML themselves;
-- choosing quoting and key ordering independently;
-- reproducing the `---` envelope;
-- reflecting over `__dict__`, dataclasses or Pydantic models;
-- coupling domain classes to parser-internal write helpers.
-
-Those choices create multiple informal serializers around one canonical parser. A first-class value
-and conversion protocol make the boundary explicit without teaching `okf-parser` any producer
-vocabulary.
+This RFC resolves #233. It is distinct from #67: #67 projects already-parsed OKF state outward as
+JSON-ready application data; this RFC projects a Python object inward to an OKF document.
 
 ## Decision
 
-### 1. Use an ordinary structural method, not `__okf__`
+### 1. Use `to_okf()`, not a package-defined `__okf__`
 
-The motivating idea used `__okf__()`. This RFC rejects that spelling for the public protocol.
+The motivating idea used `__okf__()`. The public protocol deliberately does not.
 
-Python reserves identifiers of the form `__*__` for system-defined names and explicitly warns that
-undocumented uses may break as the interpreter evolves. A library-specific dunder is therefore not
-the most conservative or canonical extension point when an ordinary method works just as well.
+Python reserves names of the form `__*__` for system-defined behavior and warns that undocumented
+uses may break as the interpreter evolves. Interpreter protocols such as `__fspath__` are safe
+because Python itself standardizes them; a library-created dunder does not have that status.
 
-The protocol method is:
+The extension point is therefore an ordinary method:
 
 ```python
 def to_okf(self) -> OKFDocument: ...
 ```
 
-No inheritance or registration is required. Any object with the correct method structurally
-satisfies the contract.
+It retains duck-typing ergonomics without occupying Python's reserved dunder namespace.
 
-### 2. Publish `SupportsOKF` for static structural typing
+### 2. Publish a static structural protocol
 
 The package exposes:
 
@@ -83,17 +61,16 @@ class SupportsOKF(Protocol):
     def to_okf(self) -> OKFDocument: ...
 ```
 
-`Protocol` is the standard typing mechanism for structural subtyping. A domain class should not
-inherit from `SupportsOKF`; implementing the method is sufficient for type checkers.
+No producer inherits from or registers with `SupportsOKF`. Implementing the method is sufficient for
+static structural typing.
 
-`SupportsOKF` is not decorated with `@runtime_checkable`. Runtime-checkable protocols test method
-presence rather than signatures, and Python documents their `isinstance()` checks as potentially
-more expensive than ordinary attribute checks. Runtime dispatch here needs neither nominal identity
-nor protocol introspection.
+The protocol is intentionally not `@runtime_checkable`. Runtime-checkable protocols only verify
+attribute presence, not the declared signature, and Python documents that their `isinstance()` checks
+may be slower than ordinary attribute lookup. The serializer must call and validate the hook anyway.
 
-### 3. `OKFDocument` is the only accepted semantic return value
+### 3. `OKFDocument` is the semantic boundary
 
-The parser owns a compact document value:
+The parser owns a compact value:
 
 ```python
 from collections.abc import Mapping
@@ -105,129 +82,125 @@ class OKFDocument:
     body: str = ""
 ```
 
-The dataclass is frozen and slotted so its public shape is explicit and cheap. Construction or
-normalization copies and validates the mapping against the parser's existing `YamlValue` contract;
-the value does not widen OKF scalar semantics just because Python has additional scalar types.
+It represents one complete concept document, not a path or a physical file. It contains no BOM,
+newline policy, YAML emitter, destination, content hash or filesystem state.
 
-The representation is semantic rather than physical. It contains no BOM, newline policy, delimiter
-spelling, YAML emitter object, destination path or filesystem state.
+Construction validates and copies the top-level mapping against the parser's existing recursive
+`YamlValue` contract. The serializer does not widen OKF scalar semantics merely because Python has
+integers, floats, booleans or arbitrary objects available.
 
-### 4. Normalize through `to_okf(value)`
+### 4. Normalize with `to_okf(value)`
 
-The public normalizer is:
+The public normalization primitive is:
 
 ```python
 def to_okf(value: OKFDocument | SupportsOKF) -> OKFDocument: ...
 ```
 
-Runtime rules are intentionally small:
+Its runtime rules are deliberately small:
 
-1. if `value` is already `OKFDocument`, return it directly;
+1. an `OKFDocument` passes through directly;
 2. otherwise obtain `value.to_okf` structurally;
-3. if it is absent or not callable, raise `TypeError`;
-4. call it exactly once;
-5. require the result to be `OKFDocument`, otherwise raise `TypeError`;
-6. do not catch exceptions raised by the application's method.
+3. missing or non-callable hooks raise `TypeError`;
+4. call the hook exactly once;
+5. require an `OKFDocument` result, otherwise raise `TypeError`;
+6. let exceptions from the producer hook propagate unchanged.
 
-Calling the hook once matters: domain conversion may be computed, stateful or expensive, and a
-serializer must not make duplicated conversion observable.
+There is no fallback to `__dict__`, `dataclasses.asdict()`, Pydantic `model_dump()` or reflection.
+Private Python representation must not become OKF accidentally.
 
-The parser does not fall back to `__dict__`, `dataclasses.asdict()`, Pydantic `model_dump()` or
-attribute reflection. Such reflection is convenient but changes private implementation details into
-wire format by accident. Explicit projection keeps domain ownership with the producer.
-
-### 5. Render through `dumps(value)`
-
-The textual API is:
+### 5. Render with `dumps(value)`
 
 ```python
 def dumps(value: OKFDocument | SupportsOKF) -> str: ...
 ```
 
-`dumps()` first calls the normalization primitive, then renders one complete UTF-8-compatible OKF
-Markdown string. It does not write a path and has no filesystem effects.
+`dumps()` normalizes first, then renders one deterministic OKF Markdown string. It has no filesystem
+side effects. A `dump(value, fp)` convenience is deferred until a real consumer needs it.
 
-A separate `dump(value, fp)` is deferred. It is a trivial convenience once a real consumer needs it,
-but adding it now would expand API and typing surface without adding serialization semantics.
+The hook returns a semantic value, never raw Markdown. Otherwise every domain object would need to
+know YAML quoting, delimiters, physical ordering and future renderer policy.
 
 ### 6. Validate before emission
 
-`OKFDocument`/normalization must reject values that cannot represent a conformant concept document:
+A serializable document must satisfy:
 
-- frontmatter must be a string-keyed mapping whose values satisfy the existing recursive
-  `YamlValue` contract;
-- `type` must exist, be a string and remain non-empty after stripping;
-- `body` must be a string.
+- frontmatter is a string-keyed mapping accepted by `YamlValue`;
+- `type` exists and is a non-empty string;
+- `body` is a string.
 
-Invalid Python objects fail before text is emitted. The public exception for an invalid document
-value is `ValueError` when the shape is representable but violates the OKF document contract, and
-`TypeError` when a Python value has the wrong Python type or cannot participate in the protocol.
+Wrong Python shapes raise `TypeError`; an empty string `type` raises `ValueError`. Unsupported nested
+objects are rejected rather than converted implicitly.
 
-The serializer should reuse the same parser-side validation vocabulary rather than create a second
-wider frontmatter type.
+This means a producer cannot accidentally emit a document that the normal parser immediately rejects
+for the same basic value-shape reasons.
 
-### 7. Canonicalize physical ordering deterministically
+### 7. Reuse the repository's canonical physical order
 
-For a new document there is no authored key ordering to preserve. The renderer therefore has a
-canonical order:
+New documents have no authored ordering to preserve. Their top-level frontmatter therefore uses the
+existing `frontmatter_key_order()` convention already owned by `frontmatter_order.py`:
 
-1. `type` first;
-2. remaining top-level keys ordered lexicographically by Python string code point;
-3. nested mappings recursively ordered by the same rule;
-4. list order preserved exactly.
+```text
+type
+title         # when present
+description   # when present
+<all remaining keys lexicographically>
+```
 
-Canonical ordering makes semantically equal producer mappings render identically even when they were
-constructed in different insertion orders. It also avoids locale-dependent ordering.
+Nested mappings are ordered lexicographically and list order is preserved exactly.
 
-The renderer must configure one package-owned YAML emitter and expose the frontmatter-rendering
-primitive internally so other **new-document** producers can reuse it. Existing-document writers
-that preserve authored YAML style remain a different concern and must not be forced through the
-canonical new-document renderer.
+This is a physical determinism rule, not semantic ordering. Equivalent mappings constructed with
+different insertion orders must serialize to the same bytes.
 
-### 8. Do not recursively serialize arbitrary objects inside frontmatter
+The implementation must reuse `frontmatter_key_order()` rather than introduce a second canonical
+ordering policy.
 
-`to_okf()` means “represent this object as one complete OKF document.” It does not mean “walk every
-object graph and call similarly named methods.”
+### 8. Do not recursively serialize object graphs
 
-Nested frontmatter values remain `YamlValue` only. In particular:
+`to_okf()` means “represent this value as one complete OKF document.” It does not mean “walk every
+nested Python object and call similarly named methods.”
 
 ```python
 OKFDocument(
-    frontmatter={"type": "A", "child": SomeOtherObject()},
+    frontmatter={"type": "A", "child": SomeObject()},
 )
 ```
 
-is invalid even if `SomeOtherObject` implements `to_okf()`.
+is invalid even when `SomeObject` itself supports `to_okf()`.
 
-This avoids ambiguous questions about whether nested objects become mappings, links, embedded
-concepts or separate documents. A future bundle-level producer protocol may answer those questions
-separately.
+Whether a nested object should become an embedded mapping, a relation or another concept is a
+bundle-level semantic decision and belongs to a future, separate contract.
 
-### 9. Round-trip is semantic, not byte-preserving
+### 9. New-document rendering and edit rendering stay separate
 
-`dumps()` creates a new canonical document. Its contract is:
+`dumps()` creates canonical new text. Its round-trip guarantee is semantic:
 
 ```text
-object
+producer
   -> OKFDocument
-  -> canonical OKF text
-  -> parse_document_text(...)
-  -> equivalent frontmatter/body semantics
+  -> dumps()
+  -> parse_document_text()
+  -> equivalent frontmatter and body
 ```
 
-It does not promise to reproduce an existing document byte-for-byte. Byte/style preservation belongs
-to the existing edit/apply write path, where comments, quoting, BOM and line endings originate from
-real authored bytes.
+It is not a byte-preserving edit API.
 
-### 10. Python-only protocol; OKF semantics remain cross-runtime
+Existing `apply`/edit paths operate on authored bytes and intentionally preserve concerns such as
+quotes, comments, BOMs and line endings. They must not be routed through canonical new-document
+serialization merely to share code.
 
-`to_okf()` and `SupportsOKF` are Python integration conveniences, so TypeScript and Rust do not need
-syntactic equivalents for parity. What must remain portable is the emitted OKF document itself. A
-serialized document must pass the same conformance rules consumed by the other runtimes.
+The canonical frontmatter renderer should nevertheless be a reusable package primitive for other
+**new-document producers**.
+
+### 10. The protocol is Python-specific; the document is not
+
+`SupportsOKF` and `to_okf()` are Python integration conveniences. TypeScript and Rust do not need a
+method with the same spelling for parity. The emitted OKF must remain portable and conform to the
+same parser semantics across runtimes.
 
 ## Public API
 
-The first implementation exports these names from `okf_parser`:
+RFC 0020 adds four top-level Python exports:
 
 ```python
 OKFDocument
@@ -236,11 +209,10 @@ to_okf
 dumps
 ```
 
-A typical dataclass remains independent of the parser's inheritance tree:
+A dataclass can opt in without nominal coupling:
 
 ```python
 from dataclasses import dataclass
-
 from okf_parser import OKFDocument
 
 @dataclass
@@ -258,123 +230,92 @@ class Processo:
         )
 ```
 
-Pydantic models work the same way: they opt in with a method instead of receiving an implicit
-`model_dump()` special case.
+Pydantic and slotted classes use the same method. Neither receives an implicit special case.
 
 ## Error model
 
-Errors should be local and unsurprising:
-
 | Situation | Result |
 | --- | --- |
-| `OKFDocument` input | returned directly |
-| object has no `to_okf` | `TypeError` |
-| `to_okf` exists but is not callable | `TypeError` |
-| hook returns dict/string/other type | `TypeError` naming returned type |
-| hook itself raises | original exception propagates |
-| invalid frontmatter Python shape | `TypeError` |
-| absent/blank/non-string `type` | `ValueError` or `TypeError` according to Python type |
+| native `OKFDocument` | returned directly |
+| missing/non-callable `to_okf` | `TypeError` |
+| hook returns another type | `TypeError` naming that type |
+| producer hook raises | original exception propagates |
+| invalid frontmatter Python value | `TypeError` |
+| absent/non-string `type` | `TypeError` |
+| blank `type` | `ValueError` |
 | non-string body | `TypeError` |
 
-The API should not wrap every failure in a package-specific exception. These are ordinary Python
-conversion errors and preserving their native classes makes them compose naturally with callers.
-
-## Internal rendering boundary
-
-The implementation should introduce one small package-internal helper for canonical frontmatter
-rendering rather than copy the `StringIO` + `ruamel.yaml` setup already present in producers such as
-`bundle_import.py`.
-
-The helper is for newly generated YAML and may be reused by `bundle_import` when doing so preserves
-that command's established semantics. Existing apply/edit code uses round-trip YAML specifically to
-preserve authored style and is not required to migrate.
-
-This distinction prevents an attractive but incorrect refactor where canonical serialization would
-silently reorder an existing user's frontmatter during an edit.
+The package does not wrap these ordinary conversion failures in a new exception hierarchy.
 
 ## Testing
 
-The implementation must cover at least:
+The implementation must cover:
 
 1. direct `OKFDocument` normalization;
-2. plain object structural dispatch without inheritance;
-3. slotted object dispatch;
-4. dataclass opt-in;
-5. Pydantic opt-in;
-6. hook called exactly once;
-7. missing/non-callable method;
-8. invalid hook return type;
-9. propagation of an application exception unchanged;
-10. missing, blank and wrong-type `type`;
-11. invalid nested Python values rejected instead of reflected/converted;
-12. canonical key ordering independent of insertion order;
-13. nested mapping ordering with list order preserved;
-14. YAML-sensitive strings round-trip as strings;
-15. Unicode round-trip;
-16. body round-trip including empty and multiline bodies;
-17. `parse_document_text()` accepts emitted text and sees equivalent semantics;
-18. repeated serialization is byte-for-byte deterministic.
+2. structural dispatch without inheritance;
+3. slotted, dataclass and Pydantic producers;
+4. exactly one hook invocation;
+5. missing/non-callable hooks;
+6. invalid hook return types;
+7. unchanged propagation of producer exceptions;
+8. invalid frontmatter and body values;
+9. absence and invalidity of `type`;
+10. rejection of nested arbitrary objects;
+11. top-level `type`/`title`/`description` canonical prefix;
+12. deterministic ordering independent of insertion order;
+13. recursive nested-map ordering with list order preserved;
+14. YAML-sensitive strings such as `0012`, `false` and `null` round-tripping as strings;
+15. Unicode and multiline body round-trip;
+16. repeated byte-for-byte deterministic serialization.
 
 ## Alternatives considered
 
-### Custom `__okf__` dunder
+### `__okf__`
 
-Rejected. It is attractive because it resembles interpreter protocols such as `__fspath__`, but
-those names are useful precisely because Python itself standardizes them. A package-defined dunder
-occupies a namespace Python reserves for future system behavior.
+Rejected because package-defined dunders occupy a namespace Python reserves for system-defined names.
 
 ### ABC/base class
 
-Rejected. Requiring domain classes to inherit from an `OKFSerializable` base is nominal coupling for
-a one-method protocol. Structural typing is the more idiomatic fit.
+Rejected because nominal inheritance is unnecessary for a one-method capability.
 
 ### `@runtime_checkable Protocol`
 
-Rejected for dispatch. It adds no validation of the return signature and is unnecessary when the
-implementation must call and validate the method anyway. The static Protocol remains valuable.
+Rejected for dispatch because it does not validate signatures and adds no value over calling and
+validating the structural hook.
 
 ### `functools.singledispatch` registry
 
-Deferred. Registries are useful when serializing third-party classes that cannot be modified, but
-they introduce global registration state, precedence rules and plugin lifecycle. The motivating use
-case controls its domain classes and needs only explicit opt-in.
+Deferred. It helps adapt third-party classes that cannot be modified, but adds global registration
+state and precedence rules that the motivating use case does not need.
 
-### Generic `default=` callback like `json.dumps`
+### `default=` callback like `json.dumps`
 
-Deferred for the same reason. It can be added compatibly if an external-class adapter becomes a real
-consumer requirement.
+Deferred for the same reason and can be added compatibly later.
 
-### Return a dict from the hook
+### Hook returns a dictionary
 
-Rejected. A bare dict cannot distinguish frontmatter from body, makes future document-level metadata
-awkward, and encourages renderer-specific conventions. `OKFDocument` gives the semantic boundary a
-stable name and type.
+Rejected because a bare mapping cannot distinguish frontmatter from body and creates conventions the
+stable `OKFDocument` value should own.
 
-### Return Markdown from the hook
+### Hook returns Markdown
 
-Rejected. That pushes YAML quoting, delimiter handling and canonicalization into every producer and
-prevents parser-owned validation before emission.
+Rejected because syntax, quoting, delimiters and canonicalization belong to the serializer.
 
 ## Non-goals
 
-This RFC does not define deserialization back into arbitrary application classes, a bundle-level
-object graph serializer, implicit dataclass/Pydantic serialization, recursive object conversion,
-filesystem writes, identity/path derivation, external adapter registries, or a cross-language method
-named `to_okf`.
+RFC 0020 does not define deserialization into arbitrary classes, bundle/object-graph serialization,
+implicit dataclass or Pydantic conversion, recursive object conversion, filesystem writes, path or
+identity derivation, an external adapter registry, or a cross-language `to_okf` method.
 
 ## Consequences
 
-Application models gain a tiny explicit opt-in surface while remaining otherwise independent of the
-parser. The serializer becomes deterministic and testable, generated OKF remains portable, and the
-package gains a reusable new-document rendering primitive without disturbing style-preserving edit
-semantics.
-
-Most importantly, the API distinguishes three responsibilities cleanly:
+The final boundary is deliberately small:
 
 ```text
-producer object        chooses semantic fields/body
-OKFDocument            represents one valid OKF concept value
-okf-parser renderer    owns syntax and canonical physical output
+producer object        chooses semantic fields and body
+OKFDocument            carries one validated concept value
+okf-parser renderer    owns canonical physical OKF output
 ```
 
-That boundary is small enough to stay stable even if YAML/rendering internals evolve later.
+That gives Python applications an idiomatic opt-in serializer while keeping domain vocabulary out of
+core, preserving cross-runtime OKF semantics and leaving style-preserving edit behavior untouched.
