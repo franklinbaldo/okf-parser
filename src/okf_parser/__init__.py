@@ -21,7 +21,7 @@ from okf_parser.graphql_adapter import (
 )
 from okf_parser.ingestion import DocumentEnvelope, IngestionCapability, ingest_documents
 from okf_parser.models import Severity, ValidationReport, Violation
-from okf_parser.serialization import OKFDocument, SupportsOKF, dumps, to_okf
+from okf_parser.serialization import OKFDocument, OKFRepresentation, SupportsOKF, dumps, to_okf
 from okf_parser.typed_relations import TypedRelations
 
 __all__ = [
@@ -36,6 +36,7 @@ __all__ = [
     "GraphQLResult",
     "IngestionCapability",
     "OKFDocument",
+    "OKFRepresentation",
     "Severity",
     "SupportsOKF",
     "TypedRelations",
