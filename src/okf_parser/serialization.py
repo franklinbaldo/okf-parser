@@ -22,6 +22,7 @@ class OKFDocument:
     body: str = ""
 
     def __post_init__(self) -> None:
+        """Validate and detach the semantic document value from producer mappings."""
         if not isinstance(self.frontmatter, Mapping):
             msg = "OKFDocument.frontmatter must be a mapping"
             raise TypeError(msg)
