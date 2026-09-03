@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Self
-
-import pytest
+from typing import TYPE_CHECKING, Self, cast
 
 import okf_parser.search as search_module
 import okf_parser.search_fts as fts_module
 from okf_parser.bundle import load_bundle
 from okf_parser.search import search_bundle
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    import pytest
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,7 +122,8 @@ def test_search_prefers_local_fts_scores_when_available(
     assert result["diagnostics"] == {"engine": "duckdb_fts"}
     rows = result["results"]
     assert isinstance(rows, list)
-    assert [row["body_start_line"] for row in rows] == [2, 1]
+    typed_rows = cast("list[dict[str, object]]", rows)
+    assert [row["body_start_line"] for row in typed_rows] == [2, 1]
 
 
 def test_search_uses_builtin_scorer_when_local_fts_is_unavailable(

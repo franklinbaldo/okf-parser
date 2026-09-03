@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-
-import pytest
+from typing import TYPE_CHECKING
 
 import okf_parser.search as search_module
 from okf_parser.bundle import load_bundle
 from okf_parser.search import search_bundle
+
+if TYPE_CHECKING:
+    import pytest
 
 
 def test_shared_search_conformance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
