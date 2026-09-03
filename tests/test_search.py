@@ -6,8 +6,19 @@ from pathlib import Path
 
 import pytest
 
+import okf_parser.search as search_module
 from okf_parser.bundle import load_bundle
 from okf_parser.search import SearchError, search_bundle
+
+
+@pytest.fixture(autouse=True)
+def _disable_optional_fts(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep Phase 1A core tests independent of host extension availability."""
+
+    def no_fts(_passages: object, _query: str) -> None:
+        return None
+
+    monkeypatch.setattr(search_module, "try_duckdb_fts_scores", no_fts)
 
 
 def _write_concept(path: Path, concept_type: str, body: str) -> None:
