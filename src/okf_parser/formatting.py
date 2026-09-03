@@ -8,7 +8,9 @@ from pydantic import BaseModel, ConfigDict
 
 from okf_parser.discovery import discover_markdown
 from okf_parser.exclusion import ExclusionRules
+from okf_parser.frontmatter_order import canonicalize_simple_frontmatter_block
 from okf_parser.markdown_style import format_markdown, protected_block_signature
+from okf_parser.parser import _split_frontmatter_source
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -42,16 +44,33 @@ class FormatReport(BaseModel):
         return self.written or not self.changed_paths
 
 
+def _ordered_simple_frontmatter(original: str) -> str:
+    """Put only the deliberately simple frontmatter subset in physical canonical order."""
+    if not original.startswith("---\n"):
+        return original
+    split = _split_frontmatter_source(original)
+    if split is None:
+        return original
+    frontmatter, body = split
+    ordered = canonicalize_simple_frontmatter_block(frontmatter)
+    if ordered == frontmatter:
+        return original
+    return f"---\n{ordered}\n---\n{body}"
+
+
 def _canonical_text(original: str) -> str | None:
     """Return canonical Markdown, or ``None`` when formatting is not safe to apply.
 
     ``--write`` rewrites a whole tree, so a rewrite that changes the document's
-    protected block structure is refused rather than saved. Marker numbering is
+    protected block structure is refused rather than saved.  The only intended
+    protected-block content change before mdformat runs is the safe physical
+    reordering of simple top-level frontmatter fields.  Marker numbering is
     decided while rendering, so nothing here has to inspect or repair the
     formatted text.
     """
-    formatted = format_markdown(original)
-    if protected_block_signature(formatted) != protected_block_signature(original):
+    ordered = _ordered_simple_frontmatter(original)
+    formatted = format_markdown(ordered)
+    if protected_block_signature(formatted) != protected_block_signature(ordered):
         return None
     return formatted
 

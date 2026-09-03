@@ -4,6 +4,11 @@ use serde_json::{Map, Value};
 use yaml_rust2::parser::{Event, MarkedEventReceiver, Parser, Tag};
 use yaml_rust2::scanner::{Marker, ScanError, TScalarStyle};
 
+const PREFERRED_KEYS: &[&str] = &["type", "title", "description"];
+const UNSAFE_VALUE_PREFIXES: &[char] = &[
+    '-', '?', ':', ',', '[', ']', '{', '}', '#', '&', '*', '!', '|', '>', '\'', '"', '%', '@', '`',
+];
+
 #[derive(Default)]
 struct Loader {
     documents: Vec<Value>,
@@ -127,7 +132,86 @@ impl MarkedEventReceiver for Loader {
     }
 }
 
-pub fn parse_mapping(source: &str) -> Result<Map<String, Value>, String> {
+fn preferred_rank(key: &str) -> usize {
+    PREFERRED_KEYS
+        .iter()
+        .position(|candidate| *candidate == key)
+        .unwrap_or(PREFERRED_KEYS.len())
+}
+
+fn simple_key(key: &str) -> bool {
+    let mut bytes = key.bytes();
+    let Some(first) = bytes.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == b'_') {
+        return false;
+    }
+    bytes.all(|value| value.is_ascii_alphanumeric() || matches!(value, b'_' | b'.' | b'-'))
+}
+
+fn simple_scalar(value: &str) -> bool {
+    value == value.trim()
+        && !value.contains('\t')
+        && !value.contains('#')
+        && !value.contains(": ")
+        && !value
+            .chars()
+            .next()
+            .is_some_and(|first| UNSAFE_VALUE_PREFIXES.contains(&first))
+}
+
+fn key_follows(previous: &str, current: &str) -> bool {
+    let previous_rank = preferred_rank(previous);
+    let current_rank = preferred_rank(current);
+    if current_rank != previous_rank {
+        return current_rank > previous_rank;
+    }
+    current_rank == PREFERRED_KEYS.len() && current > previous
+}
+
+fn try_parse_canonical_mapping(source: &str) -> Option<Map<String, Value>> {
+    if source.is_empty() {
+        return Some(Map::new());
+    }
+    let mut result = Map::new();
+    let mut previous: Option<&str> = None;
+    for line in source.split('\n') {
+        let (key, remainder) = line.split_once(':')?;
+        if !simple_key(key) {
+            return None;
+        }
+        if let Some(prior) = previous
+            && !key_follows(prior, key)
+        {
+            return None;
+        }
+        let value = if remainder.is_empty() {
+            ""
+        } else {
+            let value = remainder.strip_prefix(' ')?;
+            if value.starts_with(' ') {
+                return None;
+            }
+            value
+        };
+        if !simple_scalar(value) {
+            return None;
+        }
+        let parsed = if matches!(value, "" | "~" | "null" | "Null" | "NULL") {
+            Value::Null
+        } else {
+            Value::String(value.into())
+        };
+        if result.insert(key.into(), parsed).is_some() {
+            return None;
+        }
+        previous = Some(key);
+    }
+    Some(result)
+}
+
+fn parse_mapping_yaml(source: &str) -> Result<Map<String, Value>, String> {
     let mut parser = Parser::new_from_str(source);
     let mut loader = Loader::default();
     parser
@@ -144,6 +228,13 @@ pub fn parse_mapping(source: &str) -> Result<Map<String, Value>, String> {
         Value::Object(mapping) => Ok(mapping),
         _ => Err("frontmatter must be a YAML mapping".into()),
     }
+}
+
+pub fn parse_mapping(source: &str) -> Result<Map<String, Value>, String> {
+    if let Some(mapping) = try_parse_canonical_mapping(source) {
+        return Ok(mapping);
+    }
+    parse_mapping_yaml(source)
 }
 
 fn write_sorted(value: &Value, output: &mut String, spaced: bool) {
@@ -202,4 +293,48 @@ pub fn canonical_parsed(mapping: &Map<String, Value>, body: &str) -> String {
         false,
     );
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_mapping, parse_mapping_yaml, try_parse_canonical_mapping};
+
+    #[test]
+    fn canonical_flat_mapping_matches_yaml_parser() {
+        let source = "type: Reference\ntitle: Example\ndescription: Plain text\nactive: false\ncreated: 2026-08-28\nnothing: null";
+
+        assert_eq!(
+            try_parse_canonical_mapping(source),
+            Some(parse_mapping_yaml(source).unwrap())
+        );
+        assert_eq!(parse_mapping(source), parse_mapping_yaml(source));
+    }
+
+    #[test]
+    fn out_of_order_mapping_falls_back_without_changing_semantics() {
+        let source = "title: Example\ntype: Reference\nactive: false";
+
+        assert!(try_parse_canonical_mapping(source).is_none());
+        assert_eq!(parse_mapping(source), parse_mapping_yaml(source));
+    }
+
+    #[test]
+    fn complex_yaml_falls_back_without_changing_semantics() {
+        let source = "type: Reference\nitems:\n  - one\n  - two";
+
+        assert!(try_parse_canonical_mapping(source).is_none());
+        assert_eq!(parse_mapping(source), parse_mapping_yaml(source));
+    }
+
+    #[test]
+    fn comments_and_quoted_scalars_stay_on_yaml_path() {
+        for source in [
+            "type: Reference # comment",
+            "type: 'Reference'",
+            "type: Reference\ntitle: Example: subtitle",
+        ] {
+            assert!(try_parse_canonical_mapping(source).is_none());
+            assert_eq!(parse_mapping(source), parse_mapping_yaml(source));
+        }
+    }
 }
