@@ -1,0 +1,214 @@
+name: Bootstrap npm v0.45.7
+
+# One-shot bridge for the first publication of the scoped npm packages.
+# The packages do not exist yet, so npm Trusted Publishing cannot be configured
+# until this bootstrap has succeeded. The workflow consumes the exact artifact
+# set produced by the green #222 release dry run, publishes only those reviewed
+# bytes with the short-lived NPM_TOKEN, verifies the public registry, and only
+# then creates v0.45.7. The tag starts the normal publish.yml PyPI/GitHub-release
+# path from the already-reviewed release candidate commit.
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/bootstrap-npm-v0.45.7.yml"
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: bootstrap-npm-v0.45.7
+  cancel-in-progress: false
+
+jobs:
+  bootstrap:
+    name: Publish tested npm artifacts and create v0.45.7
+    if: github.repository == 'franklinbaldo/okf-parser'
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_VERSION: "0.45.7"
+      RELEASE_TAG: "v0.45.7"
+      RELEASE_CANDIDATE: "ed6e2e1ca83941e6cfe4b46865e3820b60da23f8"
+      RELEASE_TREE: "837a2e7827af1c87500040840d54e0c8bcea1460"
+      DRY_RUN_COMMIT: "dc99669a52141477e497aec7c171ff8a3d5b8a83"
+      DRY_RUN_ID: "33680743197"
+      DRY_RUN_ARTIFACT: "release-dry-run-dc99669a52141477e497aec7c171ff8a3d5b8a83"
+    steps:
+      - name: Check out repository history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Install Node.js with npm registry authentication
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+
+      - name: Download the exact green release-dry-run artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ env.DRY_RUN_ARTIFACT }}
+          path: release
+          run-id: ${{ env.DRY_RUN_ID }}
+          github-token: ${{ github.token }}
+
+      - name: Prove artifact provenance and byte integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          test "$(git show "${RELEASE_CANDIDATE}^{tree}")" = "$RELEASE_TREE"
+          test "$(git show "${DRY_RUN_COMMIT}^{tree}")" = "$RELEASE_TREE"
+
+          MANIFEST=release/manifest.json \
+          EXPECTED_VERSION="$RELEASE_VERSION" \
+          EXPECTED_COMMIT="$DRY_RUN_COMMIT" \
+          node <<'NODE'
+          const fs = require('node:fs');
+          const manifest = JSON.parse(fs.readFileSync(process.env.MANIFEST, 'utf8'));
+          if (manifest.repository !== 'franklinbaldo/okf-parser') {
+            throw new Error(`unexpected repository ${manifest.repository}`);
+          }
+          if (manifest.version !== process.env.EXPECTED_VERSION) {
+            throw new Error(`unexpected version ${manifest.version}`);
+          }
+          if (manifest.commit !== process.env.EXPECTED_COMMIT) {
+            throw new Error(`unexpected dry-run commit ${manifest.commit}`);
+          }
+          const required = new Map([
+            ['npm-native', '@franklinbaldo/okf-parser-native-linux-x64'],
+            ['npm-parser', '@franklinbaldo/okf-parser'],
+            ['npm-duckdb', '@franklinbaldo/okf-parser-duckdb'],
+          ]);
+          for (const [kind, packageName] of required) {
+            const artifact = manifest.artifacts.find((item) => item.kind === kind);
+            if (!artifact) throw new Error(`missing ${kind}`);
+            if (artifact.package !== packageName) {
+              throw new Error(`${kind} package mismatch: ${artifact.package}`);
+            }
+            if (artifact.version !== process.env.EXPECTED_VERSION) {
+              throw new Error(`${kind} version mismatch: ${artifact.version}`);
+            }
+          }
+          NODE
+
+          (cd release && sha256sum --check SHA256SUMS)
+
+      - name: Publish npm packages in dependency order
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${NODE_AUTH_TOKEN:-}" || {
+            echo "::error::Repository secret NPM_TOKEN is missing"
+            exit 1
+          }
+
+          publish_exact() {
+            package="$1"
+            tarball="$2"
+
+            expected_integrity="$({ PACKAGE="$package" node <<'NODE'
+          const fs = require('node:fs');
+          const manifest = JSON.parse(fs.readFileSync('release/manifest.json', 'utf8'));
+          const artifact = manifest.artifacts.find((item) => item.package === process.env.PACKAGE);
+          if (!artifact) throw new Error(`manifest has no artifact for ${process.env.PACKAGE}`);
+          process.stdout.write(artifact.sri);
+          NODE
+            })"
+
+            remote_integrity="$(npm view "${package}@${RELEASE_VERSION}" dist.integrity --registry=https://registry.npmjs.org 2>/dev/null || true)"
+            if [ -n "$remote_integrity" ]; then
+              if [ "$remote_integrity" != "$expected_integrity" ]; then
+                echo "::error::${package}@${RELEASE_VERSION} exists with different integrity"
+                echo "expected: $expected_integrity"
+                echo "actual:   $remote_integrity"
+                exit 1
+              fi
+              echo "${package}@${RELEASE_VERSION} already matches the tested artifact; skipping"
+              return
+            fi
+
+            npm publish "$tarball" --access public --registry=https://registry.npmjs.org
+
+            for attempt in $(seq 1 30); do
+              remote_integrity="$(npm view "${package}@${RELEASE_VERSION}" dist.integrity --registry=https://registry.npmjs.org 2>/dev/null || true)"
+              if [ "$remote_integrity" = "$expected_integrity" ]; then
+                echo "${package}@${RELEASE_VERSION} is public with the expected integrity"
+                return
+              fi
+              if [ -n "$remote_integrity" ] && [ "$remote_integrity" != "$expected_integrity" ]; then
+                echo "::error::${package}@${RELEASE_VERSION} became visible with conflicting integrity"
+                exit 1
+              fi
+              echo "waiting for ${package}@${RELEASE_VERSION} propagation (${attempt}/30)"
+              sleep 10
+            done
+
+            echo "::error::${package}@${RELEASE_VERSION} did not become verifiable within 5 minutes"
+            exit 1
+          }
+
+          publish_exact \
+            '@franklinbaldo/okf-parser-native-linux-x64' \
+            "release/native-npm/franklinbaldo-okf-parser-native-linux-x64-${RELEASE_VERSION}.tgz"
+          publish_exact \
+            '@franklinbaldo/okf-parser' \
+            "release/npm/franklinbaldo-okf-parser-${RELEASE_VERSION}.tgz"
+          publish_exact \
+            '@franklinbaldo/okf-parser-duckdb' \
+            "release/npm/franklinbaldo-okf-parser-duckdb-${RELEASE_VERSION}.tgz"
+
+      - name: Smoke-test the public npm packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          smoke="$RUNNER_TEMP/npm-public-smoke"
+          mkdir -p "$smoke"
+          cd "$smoke"
+          npm init --yes >/dev/null
+
+          installed=false
+          for attempt in $(seq 1 30); do
+            rm -rf node_modules package-lock.json
+            if npm install --registry=https://registry.npmjs.org \
+              "@franklinbaldo/okf-parser@${RELEASE_VERSION}" \
+              "@franklinbaldo/okf-parser-duckdb@${RELEASE_VERSION}"; then
+              installed=true
+              break
+            fi
+            echo "public npm install not ready yet (${attempt}/30)"
+            sleep 10
+          done
+          test "$installed" = true
+
+          test -x "node_modules/@franklinbaldo/okf-parser-native-linux-x64/bin/okf-core"
+          ./node_modules/.bin/okf-parser-ts --version
+          node --input-type=module <<'NODE'
+          await import('@franklinbaldo/okf-parser');
+          await import('@franklinbaldo/okf-parser-duckdb');
+          console.log('public parser, native companion, and DuckDB adapter import successfully');
+          NODE
+
+      - name: Create the release tag only after npm is verified
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin --tags --force
+          existing="$(git rev-parse -q --verify "refs/tags/${RELEASE_TAG}^{commit}" || true)"
+          if [ -n "$existing" ]; then
+            if [ "$existing" != "$RELEASE_CANDIDATE" ]; then
+              echo "::error::${RELEASE_TAG} already points to ${existing}, expected ${RELEASE_CANDIDATE}"
+              exit 1
+            fi
+            echo "${RELEASE_TAG} already points to the intended release candidate"
+            exit 0
+          fi
+
+          git tag "$RELEASE_TAG" "$RELEASE_CANDIDATE"
+          git push origin "refs/tags/${RELEASE_TAG}"
+          echo "Created ${RELEASE_TAG} at ${RELEASE_CANDIDATE}; publish.yml now owns PyPI and GitHub Release finalization"
