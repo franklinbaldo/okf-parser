@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
@@ -224,9 +225,16 @@ fn id(path: &str) -> String {
 fn hash(prefix: &str, value: &str) -> String {
     format!("{prefix}{:x}", Sha256::digest(value.as_bytes()))
 }
+fn normalized_newlines(text: &str) -> Cow<'_, str> {
+    if text.as_bytes().contains(&b'\r') {
+        Cow::Owned(text.replace("\r\n", "\n").replace('\r', "\n"))
+    } else {
+        Cow::Borrowed(text)
+    }
+}
 fn parse_concept(path: String, text: String) -> Result<Parsed, String> {
-    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
-    let (s, b) = split_source(&normalized)
+    let normalized = normalized_newlines(&text);
+    let (s, b) = split_source(normalized.as_ref())
         .ok_or("concept must start with YAML frontmatter delimited by ---")?;
     let map = parse_mapping(s)?;
     let identity = id(&path);
@@ -436,42 +444,48 @@ pub fn load_bundle(
     let mut reserved_rows = Vec::new();
     let mut diagnostics = Vec::new();
     let mut facts = Vec::new();
-    for doc in &loaded {
-        let text = match &doc.content {
-            Ok(v) => v.clone(),
+    for doc in loaded {
+        let Loaded {
+            path,
+            relative,
+            content,
+        } = doc;
+        let text = match content {
+            Ok(v) => v,
             Err(e) => {
                 diagnostics.push(diag(
-                    if reserved(&doc.path) {
-                        "OKF003"
-                    } else {
-                        "OKF001"
-                    },
+                    if reserved(&path) { "OKF003" } else { "OKF001" },
                     "error",
-                    &doc.relative,
+                    &relative,
                     e,
                 ));
                 continue;
             }
         };
-        if reserved(&doc.path) {
-            let (r, d) = validate_reserved(&root, doc);
+        if reserved(&path) {
+            let doc = Loaded {
+                path,
+                relative,
+                content: Ok(text),
+            };
+            let (r, d) = validate_reserved(&root, &doc);
             reserved_rows.push(r);
             diagnostics.extend(d);
         } else {
-            match parse_concept(doc.relative.clone(), text) {
+            match parse_concept(relative.clone(), text) {
                 Ok(p) => {
                     if p.record.concept_type.is_empty() {
                         diagnostics.push(diag(
                             "OKF002",
                             "error",
-                            &doc.relative,
+                            &relative,
                             "frontmatter must contain a non-empty string type",
                         ));
                     }
-                    facts.push((doc.path.clone(), p.facts));
+                    facts.push((path, p.facts));
                     concepts.push(p.record);
                 }
-                Err(e) => diagnostics.push(diag("OKF001", "error", &doc.relative, e)),
+                Err(e) => diagnostics.push(diag("OKF001", "error", &relative, e)),
             }
         }
     }
