@@ -1,5 +1,5 @@
 ---
-type: Benchmark
+type: BenchmarkResult
 title: No-copy Rust loader benchmark
 ---
 
