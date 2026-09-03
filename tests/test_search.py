@@ -2,12 +2,23 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
 from okf_parser.bundle import load_bundle
 from okf_parser.search import SearchError, search_bundle
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+def _result_rows(result: str | dict[str, object]) -> list[dict[str, object]]:
+    """Return the structured result rows of a full-detail search response."""
+    assert isinstance(result, dict)
+    rows = result["results"]
+    assert isinstance(rows, list)
+    return cast("list[dict[str, object]]", rows)
 
 
 def _write_concept(path: Path, concept_type: str, body: str) -> None:
@@ -34,9 +45,7 @@ def test_context_expands_after_selection_and_preserves_blank_lines(tmp_path: Pat
         detail="full",
     )
 
-    assert isinstance(result, dict)
-    rows = result["results"]
-    assert isinstance(rows, list)
+    rows = _result_rows(result)
     assert rows[0]["body_start_line"] == 2
     assert rows[0]["body_end_line"] == 4
     assert rows[0]["location"] == "legal.md#B2-B4"
@@ -101,10 +110,7 @@ def test_literal_ties_use_raw_path_then_body_coordinates(tmp_path: Path) -> None
     result = search_bundle(load_bundle(tmp_path), "needle", mode="literal")
 
     assert result == (
-        "location\tsnippet\n"
-        "a.md#B1\tneedle first\n"
-        "b.md#B1\tneedle second\n"
-        "b.md#B2\tneedle third"
+        "location\tsnippet\na.md#B1\tneedle first\nb.md#B1\tneedle second\nb.md#B2\tneedle third"
     )
 
 
@@ -119,10 +125,11 @@ def test_builtin_lexical_ranking_is_deterministic_and_reported(tmp_path: Path) -
     assert first == second
     assert isinstance(first, dict)
     assert first["diagnostics"] == {"engine": "builtin_lexical_v1"}
-    rows = first["results"]
-    assert isinstance(rows, list)
+    rows = _result_rows(first)
     assert [row["path"] for row in rows] == ["a.md", "b.md"]
-    assert rows[0]["score"] > rows[1]["score"] > 0
+    scores = [row["score"] for row in rows]
+    assert all(isinstance(score, float) for score in scores)
+    assert cast("float", scores[0]) > cast("float", scores[1]) > 0
 
 
 def test_limit_is_applied_before_context_expansion(tmp_path: Path) -> None:
@@ -168,10 +175,10 @@ def test_empty_body_returns_only_the_normative_header(tmp_path: Path) -> None:
 )
 def test_search_request_validation(
     tmp_path: Path,
-    kwargs: dict[str, object],
+    kwargs: dict[str, Any],
     message: str,
 ) -> None:
     _write_concept(tmp_path / "a.md", "Tese", "x")
 
     with pytest.raises(SearchError, match=message):
-        search_bundle(load_bundle(tmp_path), **kwargs)  # type: ignore[arg-type]
+        search_bundle(load_bundle(tmp_path), **kwargs)
