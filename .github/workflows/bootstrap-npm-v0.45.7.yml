@@ -34,7 +34,9 @@ jobs:
       RELEASE_TREE: "837a2e7827af1c87500040840d54e0c8bcea1460"
       DRY_RUN_COMMIT: "dc99669a52141477e497aec7c171ff8a3d5b8a83"
       DRY_RUN_ID: "33680743197"
+      DRY_RUN_ARTIFACT_ID: "9866352307"
       DRY_RUN_ARTIFACT: "release-dry-run-dc99669a52141477e497aec7c171ff8a3d5b8a83"
+      DRY_RUN_ARTIFACT_DIGEST: "sha256:8eb944e634ef3bbf9c239c1155af163df4e6cb71f71a946fcdcf93c5026783b0"
     steps:
       - name: Check out repository history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -56,12 +58,28 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Prove artifact provenance and byte integrity
+        env:
+          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
 
+          # The release candidate is a normal reachable commit, so prove its
+          # tree locally. DRY_RUN_COMMIT is GitHub's synthetic PR merge commit;
+          # it is queryable through the commit API but is not guaranteed to be
+          # reachable from a normal clone after the PR run has finished.
           test "$(git rev-parse "${RELEASE_CANDIDATE}^{tree}")" = "$RELEASE_TREE"
-          test "$(git rev-parse "${DRY_RUN_COMMIT}^{tree}")" = "$RELEASE_TREE"
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/commits/${DRY_RUN_COMMIT}" --jq '.commit.tree.sha')" = "$RELEASE_TREE"
+
+          # Pin the immutable Actions artifact itself, not merely its friendly
+          # name. This ties the downloaded bytes to the reviewed dry-run run and
+          # to the digest observed when #222 was green.
+          metadata="$RUNNER_TEMP/dry-run-artifact.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${DRY_RUN_ARTIFACT_ID}" > "$metadata"
+          test "$(jq -r '.name' "$metadata")" = "$DRY_RUN_ARTIFACT"
+          test "$(jq -r '.digest' "$metadata")" = "$DRY_RUN_ARTIFACT_DIGEST"
+          test "$(jq -r '.workflow_run.id' "$metadata")" = "$DRY_RUN_ID"
+          test "$(jq -r '.expired' "$metadata")" = "false"
 
           MANIFEST=release/manifest.json \
           EXPECTED_VERSION="$RELEASE_VERSION" \
