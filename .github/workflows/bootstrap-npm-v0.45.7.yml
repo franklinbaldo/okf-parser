@@ -205,7 +205,7 @@ jobs:
           test "$installed" = true
 
           test -x "node_modules/@franklinbaldo/okf-parser-native-linux-x64/bin/okf-core"
-          ./node_modules/.bin/okf-parser-ts --version
+          ./node_modules/.bin/okf-parser-ts --help
           node --input-type=module <<'NODE'
           await import('@franklinbaldo/okf-parser');
           await import('@franklinbaldo/okf-parser-duckdb');
