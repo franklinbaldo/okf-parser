@@ -1,5 +1,5 @@
 ---
-type: Benchmark
+type: BenchmarkResult
 title: DuckDB to SQLite physical materialization
 ---
 
