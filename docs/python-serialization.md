@@ -1,6 +1,7 @@
 ---
-type: Reference
+type: Documentation
 title: Python object serialization
+description: Serialize Python domain objects into deterministic OKF documents through the structural to_okf protocol
 ---
 
 # Python object serialization
