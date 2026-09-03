@@ -1,0 +1,76 @@
+[
+  {
+    "name": "literal-unicode-casefold-and-body-coordinate",
+    "files": {
+      "legal.md": "---\ntype: Tese\n---\n# Título\nA Straße está aberta.\n"
+    },
+    "request": {
+      "query": "STRASSE",
+      "mode": "literal"
+    },
+    "expected": "location\tsnippet\nlegal.md#B2\tA Straße está aberta."
+  },
+  {
+    "name": "compact-context-keeps-whole-lines-and-normalizes-only-tabs",
+    "files": {
+      "legal.md": "---\ntype: Tese\n---\nalpha\n\nbeta\tgama\n  last  "
+    },
+    "request": {
+      "query": "beta",
+      "mode": "literal",
+      "context": 1
+    },
+    "expected": "location\tsnippet\nlegal.md#B2-B4\t beta gama   last  "
+  },
+  {
+    "name": "raw-path-filter-and-compact-location-escaping",
+    "files": {
+      "legal/100%#a.md": "---\ntype: Tese\n---\nneedle A",
+      "legal/b.md": "---\ntype: tese\n---\nneedle B",
+      "other/c.md": "---\ntype: Tese\n---\nneedle C"
+    },
+    "request": {
+      "query": "needle",
+      "mode": "literal",
+      "concept_type": "Tese",
+      "path_glob": "legal/*.md"
+    },
+    "expected": "location\tsnippet\nlegal/100%25%23a.md#B1\tneedle A"
+  },
+  {
+    "name": "bundle-exclusion-is-applied-before-search",
+    "files": {
+      "kept.md": "---\ntype: Tese\n---\nneedle kept",
+      "vendor/hidden.md": "---\ntype: Tese\n---\nneedle hidden"
+    },
+    "exclude": ["vendor"],
+    "request": {
+      "query": "needle",
+      "mode": "literal"
+    },
+    "expected": "location\tsnippet\nkept.md#B1\tneedle kept"
+  },
+  {
+    "name": "builtin-lexical-v1-freezes-score-and-ranking",
+    "files": {
+      "a.md": "---\ntype: Tese\n---\nalpha alpha beta",
+      "b.md": "---\ntype: Tese\n---\nalpha beta gamma delta",
+      "c.md": "---\ntype: Tese\n---\nunrelated"
+    },
+    "request": {
+      "query": "alpha beta",
+      "detail": "score"
+    },
+    "expected": "location\tscore\tsnippet\na.md#B1\t1.07144529535\talpha alpha beta\nb.md#B1\t0.780383384408\talpha beta gamma delta"
+  },
+  {
+    "name": "empty-body-has-no-ranked-passage",
+    "files": {
+      "empty.md": "---\ntype: Tese\n---\n"
+    },
+    "request": {
+      "query": "needle"
+    },
+    "expected": "location\tsnippet"
+  }
+]
