@@ -108,6 +108,11 @@ jobs:
           name: wheel-linux-${{ matrix.target }}
           path: dist/*.whl
           if-no-files-found: error
+          # Consumed by the collecting job inside this same run and never
+          # afterwards. The 90-day default kept every wheel of every run for a
+          # quarter, which is what pushed this repository's artifact storage to
+          # 3.7 GB against a 500 MB allowance.
+          retention-days: 1
 
   wheels-windows:
     name: Build wheel (windows-x64)
@@ -171,6 +176,11 @@ jobs:
           name: wheel-windows-x64
           path: dist/*.whl
           if-no-files-found: error
+          # Consumed by the collecting job inside this same run and never
+          # afterwards. The 90-day default kept every wheel of every run for a
+          # quarter, which is what pushed this repository's artifact storage to
+          # 3.7 GB against a 500 MB allowance.
+          retention-days: 1
 
   wheels-macos:
     name: Build wheel (macos-${{ matrix.target }})
@@ -242,6 +252,11 @@ jobs:
           name: wheel-macos-${{ matrix.target }}
           path: dist/*.whl
           if-no-files-found: error
+          # Consumed by the collecting job inside this same run and never
+          # afterwards. The 90-day default kept every wheel of every run for a
+          # quarter, which is what pushed this repository's artifact storage to
+          # 3.7 GB against a 500 MB allowance.
+          retention-days: 1
 
   sdist:
     name: Build sdist
@@ -263,6 +278,11 @@ jobs:
           name: sdist
           path: dist/*.tar.gz
           if-no-files-found: error
+          # Consumed by the collecting job inside this same run and never
+          # afterwards. The 90-day default kept every wheel of every run for a
+          # quarter, which is what pushed this repository's artifact storage to
+          # 3.7 GB against a 500 MB allowance.
+          retention-days: 1
 
   build-release-set:
     name: Build and verify release set
