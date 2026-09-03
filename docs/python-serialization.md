@@ -1,64 +1,113 @@
 ---
 type: Documentation
 title: Python object serialization
-description: Serialize Python domain objects into deterministic OKF documents through the structural to_okf protocol
+description: Represent Python, Pydantic, and JSON-like objects as typed OKF metadata plus an optional body
 ---
 
 # Python object serialization
 
-`okf-parser` can serialize an application object without requiring it to inherit from a parser base
-class. The object opts in structurally by defining `to_okf()` and returning an `OKFDocument`.
+`okf-parser` treats serialization as an object-to-OKF **representation**. A producer supplies metadata
+for YAML frontmatter and, when useful, a body. The serializer resolves the required OKF `type`,
+normalizes JSON-like values, and owns the physical Markdown/YAML rendering.
+
+## Custom Python objects
+
+A class opts into the OKF protocol with `__okf__()`:
 
 ```python
 from dataclasses import dataclass
 
-from okf_parser import OKFDocument, dumps
+from okf_parser import OKFRepresentation, dumps
 
 @dataclass
 class Processo:
     numero: str
-    assunto: str
+    texto: str
 
-    def to_okf(self) -> OKFDocument:
-        return OKFDocument(
-            frontmatter={
-                "type": "Processo",
-                "numero": self.numero,
-                "assunto": self.assunto,
-            },
-            body=f"# Processo {self.numero}\n",
+    def __okf__(self) -> OKFRepresentation:
+        return OKFRepresentation(
+            metadata={"numero": self.numero},
+            body=self.texto,
         )
 
-text = dumps(Processo("0001234-56.2026.8.22.0001", "Cobrança"))
+text = dumps(Processo("0001", "# Processo\n"))
 ```
 
-The public serialization surface is:
+The type is inferred as `Processo`. A metadata-only producer may return a mapping directly:
 
-- `OKFDocument(frontmatter, body="")` — the validated semantic representation of one complete OKF
-  concept document;
-- `SupportsOKF` — a typing `Protocol` for classes that implement `to_okf()`; inheritance is not
-  required;
-- `to_okf(value)` — normalize an `OKFDocument` or call a compatible object's `to_okf()` exactly once;
-- `dumps(value)` — render the normalized document as deterministic OKF Markdown.
+```python
+class Pessoa:
+    def __okf__(self):
+        return {"nome": self.nome}
+```
 
-`to_okf()` must return `OKFDocument`, not a dictionary and not Markdown text. The domain object owns
-which semantic fields it exposes; the parser owns YAML quoting, canonical frontmatter ordering and
-the `---` document envelope.
+A producer can override the inferred class type by returning `{"type": "Person", ...}`. A caller can
+override either form with `concept_type=`.
 
-Frontmatter values use OKF's existing Python value contract: strings, `None`, lists of supported
-values, and string-keyed mappings of supported values. Python integers, floats, booleans and arbitrary
-nested objects are not implicitly converted. This preserves the parser's scalar-spelling semantics
-and prevents private Python representation details from leaking into OKF.
+## Pydantic
 
-The renderer uses the repository's canonical physical order for new documents: `type`, `title`, and
-`description` first when present, followed by the remaining keys in lexical order. Nested mappings
-are sorted recursively; list order is preserved. This ordering is physical only and does not change
-OKF semantics.
+Pydantic models work without a custom hook. Their `model_dump(mode="json")` representation becomes
+frontmatter metadata, their class name becomes the default type, and the body is empty:
 
-The API intentionally does not use a package-defined `__okf__` dunder. Python reserves double-leading
-and double-trailing names for system-defined behavior. A normal structural method gives the same duck
-typing ergonomics without occupying that namespace.
+```python
+from pydantic import BaseModel
+from okf_parser import dumps
 
-Serialization creates a new canonical document; it is not a byte-preserving edit operation. Existing
-document writes continue through the parser's style-preserving edit/apply surfaces when comments,
-quotes, BOMs or original line endings matter.
+class Pessoa(BaseModel):
+    nome: str
+    idade: int
+
+text = dumps(Pessoa(nome="Ana", idade=42))
+```
+
+If a model wants some fields in the body instead, it implements `__okf__()` just like any other class:
+
+```python
+class Article(BaseModel):
+    title: str
+    text: str
+
+    def __okf__(self):
+        return OKFRepresentation(
+            metadata={"title": self.title},
+            body=self.text,
+        )
+```
+
+The explicit protocol wins over the default Pydantic projection.
+
+## JSON-like objects
+
+A Python mapping containing JSON-like values is treated as metadata. Since a bare `dict` has no useful
+domain class name, it must contain `type` or receive `concept_type=`:
+
+```python
+text = dumps(
+    {"nome": "Ana", "idade": 42, "active": True},
+    concept_type="Pessoa",
+)
+```
+
+JSON scalars are normalized into OKF's spelling-preserving scalar domain: booleans become `"true"` or
+`"false"`, integers and finite floats become their canonical textual spelling, strings stay strings,
+and `None` stays `None`. Nested mappings and lists recurse. Arbitrary nested Python objects and
+non-finite floats are rejected.
+
+## Public API
+
+- `OKFRepresentation(metadata, body="")` — producer-facing semantic projection before type resolution;
+- `OKFDocument(frontmatter, body="")` — complete validated OKF document with a required type;
+- `SupportsOKF` — structural typing protocol for `__okf__()` producers;
+- `to_okf(value, concept_type=None)` — convert a supported Python value into `OKFDocument`;
+- `dumps(value, concept_type=None)` — render deterministic OKF Markdown.
+
+Type resolution is: caller `concept_type=` first, then metadata `type`, then the source object's class
+name. A bare mapping or standalone `OKFRepresentation` without either an explicit type or a caller
+override is rejected rather than becoming `type: dict`.
+
+The producer decides what belongs in metadata and what belongs in body. `okf-parser` does not impose a
+policy such as forcing `text`, `description`, or `content` into one channel.
+
+The renderer keeps the repository's canonical physical order for new documents: `type`, `title`, and
+`description` first when present, followed by remaining keys lexically. Existing authored-document
+edits continue through the style-preserving edit/apply paths rather than canonical serialization.
