@@ -109,7 +109,7 @@ def _metadata_value_to_okf(value: object) -> YamlValue:
     raise TypeError(msg)
 
 
-def _representation_from_hook(value: SupportsOKF) -> OKFRepresentation | OKFDocument:
+def _representation_from_hook(value: object) -> OKFRepresentation | OKFDocument:
     """Call a producer's OKF protocol exactly once and normalize the result envelope."""
     hook = getattr(value, "__okf__", None)
     if not callable(hook):
