@@ -1,0 +1,50 @@
+{
+  "benchmark": "no-copy-loader-v1",
+  "date": "2026-08-28",
+  "environment": {
+    "os": "Ubuntu 24.04.4 LTS",
+    "runner_image": "ubuntu-24.04",
+    "runner_image_version": "20260823.283.1"
+  },
+  "run_id": 33217626605,
+  "baseline_sha": "949331cd4f0b8b20b302b5ff6b09e72d3564bf3b",
+  "candidate_sha": "0ef344c53518441e3d71dfe7d2622a2871950c09",
+  "parity": "byte-for-byte stdout equality before timing",
+  "rounds": 5,
+  "warmups": 1,
+  "cases": [
+    {
+      "documents": 50000,
+      "body_bytes_per_document": 64,
+      "baseline_ns": 768005944,
+      "candidate_ns": 741290113,
+      "baseline_ns_per_document": 15360,
+      "candidate_ns_per_document": 14825,
+      "base_to_candidate_speedup": 1.0360396429568999,
+      "latency_reduction": 0.03478596905234366,
+      "output_bytes": 32639011
+    },
+    {
+      "documents": 10000,
+      "body_bytes_per_document": 1024,
+      "baseline_ns": 228533976,
+      "candidate_ns": 214632093,
+      "baseline_ns_per_document": 22853,
+      "candidate_ns_per_document": 21463,
+      "base_to_candidate_speedup": 1.0647707563472346,
+      "latency_reduction": 0.06083070554025627,
+      "output_bytes": 16119011
+    },
+    {
+      "documents": 1000,
+      "body_bytes_per_document": 16384,
+      "baseline_ns": 122624888,
+      "candidate_ns": 112875997,
+      "baseline_ns_per_document": 122624,
+      "candidate_ns_per_document": 112875,
+      "base_to_candidate_speedup": 1.0863681496430104,
+      "latency_reduction": 0.07950173214429357,
+      "output_bytes": 16971010
+    }
+  ]
+}
