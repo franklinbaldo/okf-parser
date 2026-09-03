@@ -1,4 +1,4 @@
-"""Offline bundle search primitives for RFC 0016 Phase 1A."""
+"""Offline bundle search primitives for RFC 0016 Phase 1."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, cast
 
 from okf_parser.body_lines import body_lines
 from okf_parser.exclusion import ExclusionRules
+from okf_parser.search_fts import try_duckdb_fts_scores
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -16,6 +17,7 @@ if TYPE_CHECKING:
     from okf_parser.bundle import Bundle
 
 _BUILTIN_LEXICAL_ENGINE = "builtin_lexical_v1"
+_DUCKDB_FTS_ENGINE = "duckdb_fts"
 _LITERAL_ENGINE = "literal_v1"
 _BM25_K1 = 1.2
 _BM25_B = 0.75
@@ -76,7 +78,7 @@ def _passages(
     concept_type: str | None,
     path_glob: str | None,
 ) -> list[_Passage]:
-    """Build Phase 1A line passages from already-discovered bundle concepts."""
+    """Build Phase 1 line passages from already-discovered bundle concepts."""
     matcher = _validate_path_glob(path_glob) if path_glob is not None else None
     frame = bundle.concepts.execute()
     rows = cast("list[dict[str, object]]", frame.to_dict(orient="records"))
@@ -158,6 +160,18 @@ def _lexical_hits(passages: Sequence[_Passage], query: str) -> list[_Hit]:
         if score > 0.0:
             hits.append(_Hit(passage=passage, score=score))
     return hits
+
+
+def _local_fts_hits(passages: Sequence[_Passage], query: str) -> list[_Hit] | None:
+    """Resolve optional local FTS scores back to the already-built passages."""
+    scores = try_duckdb_fts_scores(passages, query)
+    if scores is None:
+        return None
+    return [
+        _Hit(passage=passages[index], score=score)
+        for index, score in scores
+        if 0 <= index < len(passages)
+    ]
 
 
 def _literal_hits(passages: Sequence[_Passage], query: str) -> list[_Hit]:
@@ -351,8 +365,13 @@ def search_bundle(  # noqa: PLR0913 - public RFC 0016 schema is intentionally fl
         hits = _literal_hits(candidates, normalized_query)
         engine = _LITERAL_ENGINE
     else:
-        hits = _lexical_hits(candidates, normalized_query)
-        engine = _BUILTIN_LEXICAL_ENGINE
+        fts_hits = _local_fts_hits(candidates, normalized_query)
+        if fts_hits is None:
+            hits = _lexical_hits(candidates, normalized_query)
+            engine = _BUILTIN_LEXICAL_ENGINE
+        else:
+            hits = fts_hits
+            engine = _DUCKDB_FTS_ENGINE
 
     selected = _ordered_unique(hits)[:limit]
     if detail == "compact":
