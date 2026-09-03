@@ -1,19 +1,16 @@
-"""Tests for the RFC 0020 Python object-to-OKF serialization protocol."""
+"""Tests for the RFC 0020 Python object-to-OKF representation protocol."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import cast
 
 import pytest
 from pydantic import BaseModel
 
-from okf_parser import OKFDocument, SupportsOKF, dumps, to_okf
+from okf_parser import OKFDocument, OKFRepresentation, SupportsOKF, dumps, to_okf
 from okf_parser.parser import parse_document_text
-
-if TYPE_CHECKING:
-    from okf_parser.models import YamlValue
 
 
 def test_native_document_is_already_normalized() -> None:
@@ -22,75 +19,135 @@ def test_native_document_is_already_normalized() -> None:
     assert to_okf(document) is document
 
 
-@dataclass
-class _DataclassConcept:
-    title: str
+def test_mapping_requires_or_accepts_an_explicit_type() -> None:
+    with pytest.raises(TypeError, match="type is required"):
+        to_okf({"title": "Untyped"})
 
-    def to_okf(self) -> OKFDocument:
-        return OKFDocument(
-            frontmatter={"type": "Reference", "title": self.title},
-            body=f"# {self.title}\n",
+    document = to_okf({"title": "Typed"}, concept_type="Reference")
+
+    assert document.frontmatter == {"type": "Reference", "title": "Typed"}
+
+
+@dataclass
+class Processo:
+    numero: str
+    texto: str
+
+    def __okf__(self) -> OKFRepresentation:
+        return OKFRepresentation(
+            metadata={"numero": self.numero},
+            body=self.texto,
         )
 
 
-class _SlottedConcept:
-    __slots__ = ("calls",)
+class CustomType:
+    def __okf__(self) -> dict[str, object]:
+        return {"type": "Pessoa", "nome": "Ana"}
 
+
+class CountingProducer:
     def __init__(self) -> None:
         self.calls = 0
 
-    def to_okf(self) -> OKFDocument:
+    def __okf__(self) -> dict[str, object]:
         self.calls += 1
-        return OKFDocument(frontmatter={"type": "Reference"})
+        return {"title": "Once"}
 
 
-class _PydanticConcept(BaseModel):
+class PydanticExample(BaseModel):
     title: str
-
-    def to_okf(self) -> OKFDocument:
-        return OKFDocument(frontmatter={"type": "Reference", "title": self.title})
-
-
-def _consume_protocol(value: SupportsOKF) -> OKFDocument:
-    return value.to_okf()
+    count: int
+    active: bool
+    ratio: float
+    items: list[int]
 
 
-def test_structural_protocol_needs_no_inheritance() -> None:
-    value = _DataclassConcept("Example")
-
-    assert _consume_protocol(value).frontmatter["title"] == "Example"
-    assert to_okf(value).body == "# Example\n"
+def _consume_protocol(value: SupportsOKF) -> object:
+    return value.__okf__()
 
 
-def test_slotted_hook_is_called_exactly_once() -> None:
-    value = _SlottedConcept()
+def test_dunder_protocol_is_structural_and_infers_class_name() -> None:
+    value = Processo("0001", "# Processo\n")
 
-    assert dumps(value).startswith("---\ntype: Reference\n---\n")
+    representation = _consume_protocol(value)
+    document = to_okf(value)
+
+    assert isinstance(representation, OKFRepresentation)
+    assert document.frontmatter == {"type": "Processo", "numero": "0001"}
+    assert document.body == "# Processo\n"
+
+
+def test_protocol_metadata_can_override_inferred_class_type() -> None:
+    document = to_okf(CustomType())
+
+    assert document.frontmatter == {"type": "Pessoa", "nome": "Ana"}
+
+
+def test_caller_can_override_declared_or_inferred_type() -> None:
+    document = to_okf(CustomType(), concept_type="Person")
+
+    assert document.frontmatter["type"] == "Person"
+
+
+def test_hook_is_called_exactly_once() -> None:
+    value = CountingProducer()
+
+    assert dumps(value).startswith("---\ntype: CountingProducer\n")
     assert value.calls == 1
 
 
-def test_pydantic_model_opts_in_explicitly() -> None:
-    value = _PydanticConcept(title="Typed")
+def test_pydantic_models_default_to_metadata_and_infer_type() -> None:
+    value = PydanticExample(
+        title="Typed",
+        count=12,
+        active=False,
+        ratio=1.5,
+        items=[2, 1],
+    )
 
-    assert to_okf(value).frontmatter["title"] == "Typed"
+    document = to_okf(value)
+
+    assert document.frontmatter == {
+        "type": "PydanticExample",
+        "title": "Typed",
+        "count": "12",
+        "active": "false",
+        "ratio": "1.5",
+        "items": ["2", "1"],
+    }
+    assert document.body == ""
 
 
-def test_missing_or_non_callable_hook_is_rejected() -> None:
+def test_pydantic_can_customize_yaml_body_split_with_dunder() -> None:
+    class Article(BaseModel):
+        title: str
+        text: str
+
+        def __okf__(self) -> OKFRepresentation:
+            return OKFRepresentation(metadata={"title": self.title}, body=self.text)
+
+    document = to_okf(Article(title="News", text="# News\n\nBody."))
+
+    assert document.frontmatter == {"type": "Article", "title": "News"}
+    assert document.body == "# News\n\nBody."
+
+
+def test_missing_or_non_callable_hook_is_rejected_for_plain_objects() -> None:
     class NonCallable:
-        to_okf = "not callable"
+        __okf__ = "not callable"
 
     with pytest.raises(TypeError, match="does not support OKF serialization"):
-        to_okf(cast("SupportsOKF", object()))
+        to_okf(object())
     with pytest.raises(TypeError, match="does not support OKF serialization"):
-        to_okf(cast("SupportsOKF", NonCallable()))
+        to_okf(NonCallable())
 
 
 def test_invalid_hook_return_type_is_rejected() -> None:
     class Invalid:
-        def to_okf(self) -> OKFDocument:
-            return cast("OKFDocument", {"type": "Reference"})
+        def __okf__(self) -> OKFRepresentation:
+            return cast("OKFRepresentation", 42)
 
-    with pytest.raises(TypeError, match="must return OKFDocument, not dict"):
+    with pytest.raises(TypeError, match="__okf__.*must return"):
         to_okf(Invalid())
 
 
@@ -98,7 +155,7 @@ def test_hook_exception_propagates_unchanged() -> None:
     failure = RuntimeError("producer failed")
 
     class Broken:
-        def to_okf(self) -> OKFDocument:
+        def __okf__(self) -> dict[str, object]:
             raise failure
 
     with pytest.raises(RuntimeError, match="producer failed") as caught:
@@ -107,69 +164,54 @@ def test_hook_exception_propagates_unchanged() -> None:
     assert caught.value is failure
 
 
-@pytest.mark.parametrize(
-    ("frontmatter", "error", "message"),
-    [
-        ([], TypeError, "frontmatter must be a mapping"),
-        ({}, TypeError, "must contain a string type"),
-        ({"type": None}, TypeError, "must contain a string type"),
-        ({"type": "   "}, ValueError, "type must be non-empty"),
-        ({"type": 42}, TypeError, "only string keys and OKF YAML values"),
-        ({"type": "Reference", "count": 42}, TypeError, "only string keys and OKF YAML values"),
-    ],
-)
-def test_invalid_document_values_fail_before_rendering(
-    frontmatter: object,
-    error: type[Exception],
-    message: str,
-) -> None:
-    typed_frontmatter = cast("dict[str, YamlValue]", frontmatter)
-
-    with pytest.raises(error, match=message):
-        OKFDocument(frontmatter=typed_frontmatter)
-
-
-def test_non_string_body_is_rejected() -> None:
+def test_invalid_representation_envelope_is_rejected() -> None:
+    with pytest.raises(TypeError, match="metadata must be a mapping"):
+        OKFRepresentation(metadata=cast("dict[str, object]", []))
     with pytest.raises(TypeError, match="body must be a string"):
-        OKFDocument(frontmatter={"type": "Reference"}, body=cast("str", 42))
+        OKFRepresentation(metadata={}, body=cast("str", 42))
 
 
-def test_nested_objects_are_not_recursively_serialized() -> None:
-    nested = _DataclassConcept("Nested")
-    frontmatter = {
-        "type": "Reference",
-        "nested": cast("YamlValue", nested),
-    }
+def test_invalid_metadata_values_are_rejected() -> None:
+    with pytest.raises(TypeError, match="string keys"):
+        to_okf(cast("dict[str, object]", {1: "value"}), concept_type="Reference")
+    with pytest.raises(TypeError, match="not JSON-like OKF metadata"):
+        to_okf({"nested": object()}, concept_type="Reference")
+    with pytest.raises(TypeError, match="non-finite"):
+        to_okf({"ratio": float("nan")}, concept_type="Reference")
 
-    with pytest.raises(TypeError, match="only string keys and OKF YAML values"):
-        OKFDocument(frontmatter=frontmatter)
+
+def test_invalid_declared_type_is_rejected() -> None:
+    with pytest.raises(TypeError, match="type must be a string"):
+        to_okf({"type": 42, "title": "Bad"})
+    with pytest.raises(ValueError, match="type must be non-empty"):
+        to_okf({"type": "   ", "title": "Bad"})
 
 
 def test_canonical_order_is_independent_of_mapping_insertion_order() -> None:
-    first = OKFDocument(
-        frontmatter={
+    first = to_okf(
+        {
             "zeta": "last",
             "description": "Description",
-            "type": "Reference",
             "alpha": "first",
             "title": "Title",
-            "nested": {"z": "2", "a": "1"},
+            "nested": {"z": 2, "a": 1},
             "items": ["second", "first"],
-        }
+        },
+        concept_type="Reference",
     )
-    second = OKFDocument(
-        frontmatter={
+    second = to_okf(
+        {
             "items": ["second", "first"],
-            "nested": {"a": "1", "z": "2"},
+            "nested": {"a": 1, "z": 2},
             "title": "Title",
             "alpha": "first",
-            "type": "Reference",
             "description": "Description",
             "zeta": "last",
-        }
+        },
+        concept_type="Reference",
     )
 
-    expected_prefix = (
+    expected = (
         "---\n"
         "type: Reference\n"
         "title: Title\n"
@@ -186,14 +228,14 @@ def test_canonical_order_is_independent_of_mapping_insertion_order() -> None:
     )
 
     assert dumps(first) == dumps(second)
-    assert dumps(first) == expected_prefix
+    assert dumps(first) == expected
 
 
 def test_yaml_sensitive_strings_unicode_and_body_round_trip() -> None:
-    document = OKFDocument(
-        frontmatter={
+    representation = OKFRepresentation(
+        metadata={
             "type": "Reference",
-            "active": "false",
+            "active": False,
             "count": "0012",
             "empty": None,
             "literal_null": "null",
@@ -202,6 +244,7 @@ def test_yaml_sensitive_strings_unicode_and_body_round_trip() -> None:
         body="# Ação\n\nTexto sem newline final.",
     )
 
+    document = to_okf(representation)
     text = dumps(document)
     parsed = parse_document_text(Path("concept.md"), text)
 
