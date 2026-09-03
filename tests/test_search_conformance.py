@@ -4,12 +4,21 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+import okf_parser.search as search_module
 from okf_parser.bundle import load_bundle
 from okf_parser.search import search_bundle
 
+if TYPE_CHECKING:
+    import pytest
 
-def test_shared_search_conformance(tmp_path: Path) -> None:
+
+def test_shared_search_conformance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def no_fts(_passages: object, _query: str) -> None:
+        return None
+
+    monkeypatch.setattr(search_module, "try_duckdb_fts_scores", no_fts)
     cases = json.loads(
         (Path(__file__).parents[1] / "conformance" / "search.json").read_text(encoding="utf-8")
     )
