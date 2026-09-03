@@ -23,21 +23,24 @@ class OKFDocument:
 
     def __post_init__(self) -> None:
         if not isinstance(self.frontmatter, Mapping):
-            raise TypeError("OKFDocument.frontmatter must be a mapping")
+            msg = "OKFDocument.frontmatter must be a mapping"
+            raise TypeError(msg)
         try:
             frontmatter = FRONTMATTER_ADAPTER.validate_python(dict(self.frontmatter), strict=True)
         except (TypeError, ValueError, ValidationError) as exc:
-            raise TypeError(
-                "OKFDocument.frontmatter must contain only string keys and OKF YAML values"
-            ) from exc
+            msg = "OKFDocument.frontmatter must contain only string keys and OKF YAML values"
+            raise TypeError(msg) from exc
 
         concept_type = frontmatter.get("type")
         if not isinstance(concept_type, str):
-            raise TypeError("OKFDocument.frontmatter must contain a string type")
+            msg = "OKFDocument.frontmatter must contain a string type"
+            raise TypeError(msg)
         if not concept_type.strip():
-            raise ValueError("OKFDocument.frontmatter type must be non-empty")
+            msg = "OKFDocument.frontmatter type must be non-empty"
+            raise ValueError(msg)
         if not isinstance(self.body, str):
-            raise TypeError("OKFDocument.body must be a string")
+            msg = "OKFDocument.body must be a string"
+            raise TypeError(msg)
 
         object.__setattr__(self, "frontmatter", frontmatter)
 
@@ -57,16 +60,16 @@ def to_okf(value: OKFDocument | SupportsOKF) -> OKFDocument:
 
     hook = getattr(value, "to_okf", None)
     if not callable(hook):
-        raise TypeError(
-            f"object of type {type(value).__qualname__!r} does not support OKF serialization"
-        )
+        msg = f"object of type {type(value).__qualname__!r} does not support OKF serialization"
+        raise TypeError(msg)
 
     document = hook()
     if not isinstance(document, OKFDocument):
-        raise TypeError(
+        msg = (
             f"{type(value).__qualname__}.to_okf() must return OKFDocument, "
             f"not {type(document).__qualname__}"
         )
+        raise TypeError(msg)
     return document
 
 
