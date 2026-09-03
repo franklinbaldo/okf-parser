@@ -21,10 +21,17 @@ from okf_parser.graphql_adapter import (
 )
 from okf_parser.ingestion import DocumentEnvelope, IngestionCapability, ingest_documents
 from okf_parser.models import Severity, ValidationReport, Violation
+from okf_parser.relational_read import (
+    CanonicalRelations,
+    PortableRelationProvider,
+    RelationProvider,
+    open_relations,
+)
 from okf_parser.typed_relations import TypedRelations
 
 __all__ = [
     "Bundle",
+    "CanonicalRelations",
     "DocumentEnvelope",
     "EditError",
     "GitCommitMessage",
@@ -34,6 +41,8 @@ __all__ = [
     "GraphQLReadAdapter",
     "GraphQLResult",
     "IngestionCapability",
+    "PortableRelationProvider",
+    "RelationProvider",
     "Severity",
     "TypedRelations",
     "ValidationReport",
@@ -44,6 +53,7 @@ __all__ = [
     "format_git_commit_message",
     "ingest_documents",
     "load_bundle",
+    "open_relations",
     "parse_git_commit_message",
     "preview_concept_edit",
     "resolve_relations",
