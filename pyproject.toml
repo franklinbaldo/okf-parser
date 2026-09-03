@@ -1,6 +1,6 @@
 [project]
 name = "okf-parser"
-version = "0.45.7"
+version = "0.45.8"
 description = "Relational inspection and validation for Open Knowledge Format bundles"
 # Derived from README.md by scripts/pypi_readme.py. README.md is an OKF concept
 # and must open with frontmatter, which PyPI would otherwise render as a heading
