@@ -1,5 +1,5 @@
 ---
-type: Benchmark
+type: BenchmarkResult
 title: Ordered frontmatter fast path — 2026-08-28
 description: Same-host end-to-end comparison of the RFC 0012 Rust engine before and after the canonical simple-frontmatter fast path.
 ---
