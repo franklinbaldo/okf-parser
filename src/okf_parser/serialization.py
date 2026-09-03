@@ -163,7 +163,13 @@ def to_okf(value: object, *, concept_type: str | None = None) -> OKFDocument:
         msg = "OKF metadata type must be a string when provided"
         raise TypeError(msg)
 
-    resolved_type = concept_type or declared_type or inferred_type
+    if concept_type is not None:
+        resolved_type = concept_type
+    elif has_declared_type:
+        resolved_type = declared_type
+    else:
+        resolved_type = inferred_type
+
     if not isinstance(resolved_type, str):
         msg = "OKF type is required for mapping/representation inputs"
         raise TypeError(msg)
