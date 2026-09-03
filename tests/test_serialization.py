@@ -34,6 +34,7 @@ class Processo:
     texto: str
 
     def __okf__(self) -> OKFRepresentation:
+        """Project this process into OKF metadata plus body."""
         return OKFRepresentation(
             metadata={"numero": self.numero},
             body=self.texto,
@@ -42,6 +43,7 @@ class Processo:
 
 class CustomType:
     def __okf__(self) -> dict[str, object]:
+        """Project with an explicit OKF type override."""
         return {"type": "Pessoa", "nome": "Ana"}
 
 
@@ -50,6 +52,7 @@ class CountingProducer:
         self.calls = 0
 
     def __okf__(self) -> dict[str, object]:
+        """Count protocol invocation while returning metadata."""
         self.calls += 1
         return {"title": "Once"}
 
@@ -124,6 +127,7 @@ def test_pydantic_can_customize_yaml_body_split_with_dunder() -> None:
         text: str
 
         def __okf__(self) -> OKFRepresentation:
+            """Place article text in the OKF body rather than metadata."""
             return OKFRepresentation(metadata={"title": self.title}, body=self.text)
 
     document = to_okf(Article(title="News", text="# News\n\nBody."))
@@ -145,6 +149,7 @@ def test_missing_or_non_callable_hook_is_rejected_for_plain_objects() -> None:
 def test_invalid_hook_return_type_is_rejected() -> None:
     class Invalid:
         def __okf__(self) -> OKFRepresentation:
+            """Return an invalid protocol result for validation coverage."""
             return cast("OKFRepresentation", 42)
 
     with pytest.raises(TypeError, match="__okf__.*must return"):
@@ -156,6 +161,7 @@ def test_hook_exception_propagates_unchanged() -> None:
 
     class Broken:
         def __okf__(self) -> dict[str, object]:
+            """Raise a producer error that the serializer must not wrap."""
             raise failure
 
     with pytest.raises(RuntimeError, match="producer failed") as caught:
