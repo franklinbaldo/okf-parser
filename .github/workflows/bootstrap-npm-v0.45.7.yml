@@ -60,8 +60,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          test "$(git show "${RELEASE_CANDIDATE}^{tree}")" = "$RELEASE_TREE"
-          test "$(git show "${DRY_RUN_COMMIT}^{tree}")" = "$RELEASE_TREE"
+          # `git show <commit>^{tree}` prints the tree listing, not its object
+          # name, so comparing it against a SHA could never be true and this
+          # guard rejected every run. `git rev-parse` is what resolves the
+          # revision to the object name the comparison needs.
+          test "$(git rev-parse "${RELEASE_CANDIDATE}^{tree}")" = "$RELEASE_TREE"
+          test "$(git rev-parse "${DRY_RUN_COMMIT}^{tree}")" = "$RELEASE_TREE"
 
           MANIFEST=release/manifest.json \
           EXPECTED_VERSION="$RELEASE_VERSION" \
