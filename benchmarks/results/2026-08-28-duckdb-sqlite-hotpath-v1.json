@@ -1,0 +1,59 @@
+{
+  "benchmark": "duckdb-sqlite-hotpath-v1",
+  "date": "2026-08-28",
+  "runner": "github-hosted ubuntu-24.04",
+  "query_count_per_batch": 1000,
+  "repetitions": [
+    {
+      "job_id": 99019203513,
+      "cases": {
+        "1000": {"export_ns": 60247481, "memory_copy_ns": 287413, "duckdb_point_ns": 269106, "sqlite_file_point_ns": 9216, "sqlite_memory_point_ns": 1668, "duckdb_outgoing_ns": 463525, "sqlite_file_outgoing_ns": 10171, "sqlite_memory_outgoing_ns": 2559},
+        "10000": {"export_ns": 34853682, "memory_copy_ns": 2685921, "duckdb_point_ns": 313084, "sqlite_file_point_ns": 9350, "sqlite_memory_point_ns": 1753, "duckdb_outgoing_ns": 551225, "sqlite_file_outgoing_ns": 10420, "sqlite_memory_outgoing_ns": 2734},
+        "50000": {"export_ns": 638523602, "memory_copy_ns": 13118310, "duckdb_point_ns": 495823, "sqlite_file_point_ns": 10877, "sqlite_memory_point_ns": 1941, "duckdb_outgoing_ns": 909831, "sqlite_file_outgoing_ns": 13384, "sqlite_memory_outgoing_ns": 3120}
+      }
+    },
+    {
+      "job_id": 99019456146,
+      "cases": {
+        "1000": {"export_ns": 13265052, "memory_copy_ns": 344948, "duckdb_point_ns": 342103, "sqlite_file_point_ns": 11960, "sqlite_memory_point_ns": 2170, "duckdb_outgoing_ns": 599452, "sqlite_file_outgoing_ns": 13303, "sqlite_memory_outgoing_ns": 3342},
+        "10000": {"export_ns": 41452347, "memory_copy_ns": 3272648, "duckdb_point_ns": 396541, "sqlite_file_point_ns": 12312, "sqlite_memory_point_ns": 2315, "duckdb_outgoing_ns": 712807, "sqlite_file_outgoing_ns": 13992, "sqlite_memory_outgoing_ns": 3957},
+        "50000": {"export_ns": 186347730, "memory_copy_ns": 16742411, "duckdb_point_ns": 618014, "sqlite_file_point_ns": 14405, "sqlite_memory_point_ns": 2522, "duckdb_outgoing_ns": 1163033, "sqlite_file_outgoing_ns": 17138, "sqlite_memory_outgoing_ns": 3991}
+      }
+    },
+    {
+      "job_id": 99019738959,
+      "cases": {
+        "1000": {"export_ns": 15587814, "memory_copy_ns": 270094, "duckdb_point_ns": 342546, "sqlite_file_point_ns": 9992, "sqlite_memory_point_ns": 2269, "duckdb_outgoing_ns": 619684, "sqlite_file_outgoing_ns": 11388, "sqlite_memory_outgoing_ns": 3466},
+        "10000": {"export_ns": 44162538, "memory_copy_ns": 2535776, "duckdb_point_ns": 398143, "sqlite_file_point_ns": 10044, "sqlite_memory_point_ns": 2342, "duckdb_outgoing_ns": 722074, "sqlite_file_outgoing_ns": 11586, "sqlite_memory_outgoing_ns": 3616},
+        "50000": {"export_ns": 192228488, "memory_copy_ns": 13676662, "duckdb_point_ns": 622519, "sqlite_file_point_ns": 11782, "sqlite_memory_point_ns": 2525, "duckdb_outgoing_ns": 1176834, "sqlite_file_outgoing_ns": 14283, "sqlite_memory_outgoing_ns": 3978}
+      }
+    }
+  ],
+  "median_50000": {
+    "documents": 50000,
+    "links": 100000,
+    "export_ns": 192228488,
+    "memory_copy_ns": 13676662,
+    "duckdb_point_ns": 618014,
+    "sqlite_file_point_ns": 11782,
+    "sqlite_memory_point_ns": 2522,
+    "duckdb_outgoing_ns": 1163033,
+    "sqlite_file_outgoing_ns": 14283,
+    "sqlite_memory_outgoing_ns": 3978,
+    "sqlite_file_point_speedup": 52.4541,
+    "sqlite_memory_point_speedup": 245.0492,
+    "sqlite_file_outgoing_speedup": 81.4278,
+    "sqlite_memory_outgoing_speedup": 292.3663,
+    "sqlite_file_point_break_even_queries": 318,
+    "sqlite_memory_point_break_even_queries": 335,
+    "sqlite_file_outgoing_break_even_queries": 168,
+    "sqlite_memory_outgoing_break_even_queries": 178,
+    "memory_vs_file_point_break_even_queries": 1477,
+    "memory_vs_file_outgoing_break_even_queries": 1328
+  },
+  "notes": [
+    "Parity between DuckDB, SQLite file-backed, and SQLite in-memory results is checked before timing.",
+    "The first 50000-document export result was an outlier; three complete repetitions are preserved and medians are reported rather than selecting the best run.",
+    "These are physical-layer synthetic timings, not end-to-end product speedups."
+  ]
+}
