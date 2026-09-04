@@ -120,7 +120,13 @@ def _representation_from_hook(value: object) -> OKFRepresentation | OKFDocument:
     if isinstance(representation, OKFDocument | OKFRepresentation):
         return representation
     if isinstance(representation, Mapping):
-        return OKFRepresentation(metadata=representation)
+        metadata: dict[str, object] = {}
+        for key, item in representation.items():
+            if not isinstance(key, str):
+                msg = "OKF metadata mappings must use string keys"
+                raise TypeError(msg)
+            metadata[key] = item
+        return OKFRepresentation(metadata=metadata)
     msg = (
         f"{type(value).__qualname__}.__okf__() must return OKFRepresentation, "
         f"OKFDocument, or a mapping, not {type(representation).__qualname__}"
@@ -141,7 +147,13 @@ def _resolve_representation(value: object) -> tuple[OKFRepresentation | OKFDocum
         return OKFRepresentation(metadata=value.model_dump(mode="json")), type(value).__name__
 
     if isinstance(value, Mapping):
-        return OKFRepresentation(metadata=value), None
+        metadata: dict[str, object] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                msg = "OKF metadata mappings must use string keys"
+                raise TypeError(msg)
+            metadata[key] = item
+        return OKFRepresentation(metadata=metadata), None
 
     msg = f"object of type {type(value).__qualname__!r} does not support OKF serialization"
     raise TypeError(msg)
