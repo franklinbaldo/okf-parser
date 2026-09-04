@@ -74,7 +74,7 @@ class SupportsOKF(Protocol):
         ...
 
 
-def _json_scalar_to_okf(value: str | int | float | bool | None) -> str | None:
+def _json_scalar_to_okf(value: object) -> str | None:
     """Convert one JSON scalar to the parser's spelling-preserving scalar domain."""
     if value is None or isinstance(value, str):
         return value
