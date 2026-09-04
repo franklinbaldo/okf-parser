@@ -30,6 +30,8 @@ def test_mapping_requires_or_accepts_an_explicit_type() -> None:
 
 @dataclass
 class Processo:
+    """Test producer whose class name is also the inferred OKF type."""
+
     numero: str
     texto: str
 
@@ -42,13 +44,18 @@ class Processo:
 
 
 class CustomType:
+    """Test producer that declares a type different from its class name."""
+
     def __okf__(self) -> dict[str, object]:
         """Project with an explicit OKF type override."""
         return {"type": "Pessoa", "nome": "Ana"}
 
 
 class CountingProducer:
+    """Test producer that records how often the protocol hook runs."""
+
     def __init__(self) -> None:
+        """Initialize the hook invocation counter."""
         self.calls = 0
 
     def __okf__(self) -> dict[str, object]:
@@ -58,6 +65,8 @@ class CountingProducer:
 
 
 class PydanticExample(BaseModel):
+    """Pydantic fixture for the default all-metadata projection."""
+
     title: str
     count: int
     active: bool
@@ -152,7 +161,7 @@ def test_invalid_hook_return_type_is_rejected() -> None:
             """Return an invalid protocol result for validation coverage."""
             return cast("OKFRepresentation", 42)
 
-    with pytest.raises(TypeError, match="__okf__.*must return"):
+    with pytest.raises(TypeError, match=r"__okf__.*must return"):
         to_okf(Invalid())
 
 
