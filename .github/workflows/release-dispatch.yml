@@ -7,13 +7,16 @@ on:
         description: "Version to release (for example, 0.45.8 or v0.45.8)"
         required: true
         type: string
+  push:
+    branches:
+      - "release/v*"
 
 permissions:
   contents: write
   actions: write
 
 concurrency:
-  group: release-dispatch-${{ inputs.version }}
+  group: release-dispatch-${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -37,11 +40,13 @@ jobs:
         id: release
         shell: bash
         env:
-          REQUESTED_VERSION: ${{ inputs.version }}
+          REQUESTED_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || github.ref_name }}
+          TRIGGER_SHA: ${{ github.event_name == 'push' && github.sha || '' }}
         run: |
           set -euo pipefail
 
-          version="${REQUESTED_VERSION#v}"
+          requested="${REQUESTED_VERSION#release/}"
+          version="${requested#v}"
           tag="v${version}"
           if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::release version must be a simple semantic version, got ${REQUESTED_VERSION}"
@@ -55,6 +60,11 @@ jobs:
           fi
 
           head_sha="$(git rev-parse HEAD)"
+          if [ -n "$TRIGGER_SHA" ] && [ "$TRIGGER_SHA" != "$head_sha" ]; then
+            echo "::error::release ref points at ${TRIGGER_SHA}, while current main is ${head_sha}"
+            exit 1
+          fi
+
           if git rev-parse --verify --quiet "refs/tags/${tag}" >/dev/null; then
             tag_sha="$(git rev-list -n 1 "$tag")"
             if [ "$tag_sha" != "$head_sha" ]; then
