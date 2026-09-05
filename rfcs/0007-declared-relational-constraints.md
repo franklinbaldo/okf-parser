@@ -1,11 +1,13 @@
 ---
 type: RFC
 title: Bundle relational schema
-status: accepted
-description: Add one optional bundle-level okf.schema.sql contract for UNIQUE, PRIMARY KEY, and FOREIGN KEY relationships across concept types.
+status: superseded
+description: Historical metadata-only bundle relational contract for UNIQUE, PRIMARY KEY, and FOREIGN KEY relationships; superseded by RFC 0021
 ---
 
 # RFC 0007: Bundle relational schema
+
+> Superseded by RFC 0021. This RFC remains as the historical contract for `okf.schema.sql` compatibility, but new relation modeling should execute `okf.relations.sql` over the real RFC 0006 typed tables instead of redeclaring partial tables in a metadata-only database.
 
 ## Summary
 
