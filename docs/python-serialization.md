@@ -33,6 +33,17 @@ class Processo:
 text = dumps(Processo("0001", "# Processo\n"))
 ```
 
+The output is canonical OKF text. The class supplies semantic data; the serializer owns `type`, YAML
+quoting and delimiters:
+
+```markdown
+---
+type: Processo
+numero: '0001'
+---
+# Processo
+```
+
 The type is inferred as `Processo`. A metadata-only producer may return a mapping directly:
 
 ```python
@@ -43,6 +54,10 @@ class Pessoa:
 
 A producer can override the inferred class type by returning `{"type": "Person", ...}`. A caller can
 override either form with `concept_type=`.
+
+Protocol dispatch is strict. `__okf__` is resolved once and the resolved callable is invoked once. If
+an object explicitly exposes `__okf__` but that attribute is not callable, serialization raises
+`TypeError` instead of silently choosing another representation path.
 
 ## Pydantic
 
@@ -74,7 +89,8 @@ class Article(BaseModel):
         )
 ```
 
-The explicit protocol wins over the default Pydantic projection.
+The explicit protocol wins over the default Pydantic projection. A present but non-callable `__okf__`
+is treated as an invalid explicit protocol declaration and does not fall back to `model_dump()`.
 
 ## JSON-like objects
 
@@ -104,6 +120,10 @@ non-finite floats are rejected.
 Type resolution is: caller `concept_type=` first, then metadata `type`, then the source object's class
 name. A bare mapping or standalone `OKFRepresentation` without either an explicit type or a caller
 override is rejected rather than becoming `type: dict`.
+
+Precedence only selects among valid candidates. Whenever present, both caller `concept_type=` and a
+metadata `type` must be non-empty strings. A malformed metadata `type` is rejected even when the caller
+also supplies a valid override, so broken input cannot be hidden accidentally.
 
 The producer decides what belongs in metadata and what belongs in body. `okf-parser` does not impose a
 policy such as forcing `text`, `description`, or `content` into one channel.
