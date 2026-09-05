@@ -107,6 +107,14 @@ class PydanticRootList(RootModel[list[int]]):
     """Pydantic root-model fixture whose JSON projection is not a mapping."""
 
 
+class PydanticRootExplicit(RootModel[list[int]]):
+    """Root model that explicitly chooses its OKF metadata representation."""
+
+    def __okf__(self) -> OKFRepresentation:
+        """Wrap the root list in a domain-owned metadata field."""
+        return OKFRepresentation(metadata={"items": self.root})
+
+
 def _consume_protocol(value: SupportsOKF) -> object:
     return value.__okf__()
 
@@ -174,6 +182,15 @@ def test_pydantic_models_default_to_metadata_and_infer_type() -> None:
 def test_pydantic_root_model_requires_an_explicit_protocol() -> None:
     with pytest.raises(TypeError, match="default OKF projection must be a mapping"):
         to_okf(PydanticRootList([1, 2]))
+
+
+def test_pydantic_root_model_can_choose_an_explicit_protocol() -> None:
+    document = to_okf(PydanticRootExplicit([1, 2]))
+
+    assert document.frontmatter == {
+        "type": "PydanticRootExplicit",
+        "items": ["1", "2"],
+    }
 
 
 def test_pydantic_can_customize_yaml_body_split_with_dunder() -> None:
@@ -318,9 +335,16 @@ def test_yaml_sensitive_strings_unicode_and_body_round_trip() -> None:
         metadata={
             "type": "Reference",
             "active": False,
+            "boolean_text": "true",
+            "colon_text": "a: b",
+            "comment_text": "# not a comment",
             "count": "0012",
             "empty": None,
+            "empty_text": "",
             "literal_null": "null",
+            "multiline": "line one\nline two\n",
+            "numeric_text": "42",
+            "padded_text": " padded ",
             "title": "Ação pública",
         },
         body="# Ação\n\nTexto sem newline final.",
