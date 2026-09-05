@@ -1,3 +1,5 @@
+"""Contract-first schema export for declared types with no instances yet."""
+
 from pathlib import Path
 
 from okf_parser.schema_export import build_schema_contracts, export_pydantic_source
