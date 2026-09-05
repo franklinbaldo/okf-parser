@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import ClassVar, cast
 
 import pytest
 from pydantic import BaseModel
@@ -64,6 +65,26 @@ class CountingProducer:
         return {"title": "Once"}
 
 
+class LookupCountingProducer:
+    """Producer whose protocol attribute records both lookup and invocation counts."""
+
+    def __init__(self) -> None:
+        """Initialize descriptor lookup and invocation counters."""
+        self.lookups = 0
+        self.calls = 0
+
+    @property
+    def __okf__(self) -> Callable[[], dict[str, object]]:
+        """Return a fresh callable while recording each protocol attribute lookup."""
+        self.lookups += 1
+
+        def hook() -> dict[str, object]:
+            self.calls += 1
+            return {"title": "Resolved once"}
+
+        return hook
+
+
 class PydanticExample(BaseModel):
     """Pydantic fixture for the default all-metadata projection."""
 
@@ -72,6 +93,12 @@ class PydanticExample(BaseModel):
     active: bool
     ratio: float
     items: list[int]
+
+
+class PydanticNonCallableHook(BaseModel):
+    """Pydantic fixture that explicitly defines an invalid protocol attribute."""
+
+    __okf__: ClassVar[str] = "not callable"
 
 
 def _consume_protocol(value: SupportsOKF) -> object:
@@ -99,6 +126,14 @@ def test_caller_can_override_declared_or_inferred_type() -> None:
     document = to_okf(CustomType(), concept_type="Person")
 
     assert document.frontmatter["type"] == "Person"
+
+
+def test_hook_is_resolved_and_called_exactly_once() -> None:
+    value = LookupCountingProducer()
+
+    assert dumps(value).startswith("---\ntype: LookupCountingProducer\n")
+    assert value.lookups == 1
+    assert value.calls == 1
 
 
 def test_hook_is_called_exactly_once() -> None:
@@ -145,13 +180,18 @@ def test_pydantic_can_customize_yaml_body_split_with_dunder() -> None:
     assert document.body == "# News\n\nBody."
 
 
+def test_non_callable_hook_is_rejected_before_fallback_projection() -> None:
+    with pytest.raises(TypeError, match="non-callable __okf__"):
+        to_okf(PydanticNonCallableHook())
+
+
 def test_missing_or_non_callable_hook_is_rejected_for_plain_objects() -> None:
     class NonCallable:
         __okf__ = "not callable"
 
     with pytest.raises(TypeError, match="does not support OKF serialization"):
         to_okf(object())
-    with pytest.raises(TypeError, match="does not support OKF serialization"):
+    with pytest.raises(TypeError, match="non-callable __okf__"):
         to_okf(NonCallable())
 
 
@@ -200,6 +240,20 @@ def test_invalid_declared_type_is_rejected() -> None:
         to_okf({"type": 42, "title": "Bad"})
     with pytest.raises(ValueError, match="type must be non-empty"):
         to_okf({"type": "   ", "title": "Bad"})
+
+
+def test_invalid_declared_type_is_not_hidden_by_caller_override() -> None:
+    with pytest.raises(TypeError, match="metadata type must be a string"):
+        to_okf({"type": 42, "title": "Bad"}, concept_type="Reference")
+    with pytest.raises(ValueError, match="metadata type must be non-empty"):
+        to_okf({"type": "   ", "title": "Bad"}, concept_type="Reference")
+
+
+def test_invalid_caller_type_is_rejected_precisely() -> None:
+    with pytest.raises(TypeError, match="concept_type must be a string"):
+        to_okf({"title": "Bad"}, concept_type=cast("str", 42))
+    with pytest.raises(ValueError, match="concept_type must be non-empty"):
+        to_okf({"title": "Bad"}, concept_type="   ")
 
 
 def test_canonical_order_is_independent_of_mapping_insertion_order() -> None:
