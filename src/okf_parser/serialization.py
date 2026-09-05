@@ -26,14 +26,21 @@ class OKFRepresentation:
     body: str = ""
 
     def __post_init__(self) -> None:
-        """Validate the representation envelope without constraining JSON-like metadata yet."""
+        """Validate and detach the producer-facing representation envelope."""
         if not isinstance(self.metadata, Mapping):
             msg = "OKFRepresentation.metadata must be a mapping"
             raise TypeError(msg)
         if not isinstance(self.body, str):
             msg = "OKFRepresentation.body must be a string"
             raise TypeError(msg)
-        object.__setattr__(self, "metadata", dict(self.metadata))
+
+        metadata: dict[str, object] = {}
+        for key, item in self.metadata.items():
+            if not isinstance(key, str):
+                msg = "OKF metadata mappings must use string keys"
+                raise TypeError(msg)
+            metadata[key] = item
+        object.__setattr__(self, "metadata", metadata)
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,7 +165,14 @@ def _resolve_representation(value: object) -> tuple[OKFRepresentation | OKFDocum
         return _representation_from_hook(value, hook), type(value).__name__
 
     if isinstance(value, BaseModel):
-        return OKFRepresentation(metadata=value.model_dump(mode="json")), type(value).__name__
+        metadata = value.model_dump(mode="json")
+        if not isinstance(metadata, Mapping):
+            msg = (
+                "Pydantic default OKF projection must be a mapping; "
+                "define __okf__ for root/scalar models"
+            )
+            raise TypeError(msg)
+        return OKFRepresentation(metadata=metadata), type(value).__name__
 
     if isinstance(value, Mapping):
         metadata: dict[str, object] = {}
