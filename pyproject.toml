@@ -90,6 +90,9 @@ target-version = "py312"
 select = ["ALL"]
 ignore = ["COM812", "ISC001"]
 
+[tool.ruff.lint.pep8-naming]
+extend-ignore-names = ["__okf__"]
+
 [tool.ruff.lint.flake8-type-checking]
 runtime-evaluated-base-classes = ["pydantic.BaseModel"]
 

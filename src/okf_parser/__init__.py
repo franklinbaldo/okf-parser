@@ -21,6 +21,7 @@ from okf_parser.graphql_adapter import (
 )
 from okf_parser.ingestion import DocumentEnvelope, IngestionCapability, ingest_documents
 from okf_parser.models import Severity, ValidationReport, Violation
+from okf_parser.serialization import OKFDocument, OKFRepresentation, SupportsOKF, dumps, to_okf
 from okf_parser.typed_relations import TypedRelations
 
 __all__ = [
@@ -34,12 +35,16 @@ __all__ = [
     "GraphQLReadAdapter",
     "GraphQLResult",
     "IngestionCapability",
+    "OKFDocument",
+    "OKFRepresentation",
     "Severity",
+    "SupportsOKF",
     "TypedRelations",
     "ValidationReport",
     "Violation",
     "build_graphql_schema",
     "concept",
+    "dumps",
     "export_graphql_sdl",
     "format_git_commit_message",
     "ingest_documents",
@@ -47,6 +52,7 @@ __all__ = [
     "parse_git_commit_message",
     "preview_concept_edit",
     "resolve_relations",
+    "to_okf",
     "validate_git_commit_message",
     "validate_path",
     "write_concept_edit",
