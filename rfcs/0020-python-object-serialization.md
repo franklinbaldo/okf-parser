@@ -81,7 +81,9 @@ class OKFRepresentation:
 ```
 
 `metadata` is semantic data destined for YAML frontmatter. `body` is optional content destined for the
-OKF body. The producer chooses the split.
+OKF body. The producer chooses the split. The representation envelope is validated immediately:
+metadata must be a string-keyed mapping and body must be a string. Metadata values remain
+producer-facing until `to_okf()` normalizes the JSON-like value tree.
 
 The parser-facing value remains:
 
@@ -159,7 +161,7 @@ The mapping becomes frontmatter metadata and the body is empty.
 
 This path does not reflect over arbitrary Python objects. Only explicit supported shapes are accepted.
 
-### 5. Support Pydantic as a first-class default projection
+### 5. Support mapping-shaped Pydantic models as a first-class default projection
 
 Pydantic is already a dependency and provides an explicit public serialization API. A `BaseModel`
 without an explicit `__okf__` attribute is projected with:
@@ -168,7 +170,13 @@ without an explicit `__okf__` attribute is projected with:
 model.model_dump(mode="json")
 ```
 
-All fields become metadata, body is empty, and the model class name is the default OKF type.
+When that public JSON projection is a mapping, its fields become metadata, body is empty, and the model
+class name is the default OKF type.
+
+Pydantic root/scalar models are deliberately not wrapped in an invented metadata field. For example,
+`RootModel[list[int]]` serializes to a list rather than an object-shaped mapping, so its default OKF
+projection is rejected with `TypeError`. Such a model implements `__okf__()` and explicitly decides
+how the root value maps to metadata and/or body.
 
 A Pydantic model that wants a different YAML/body split implements `__okf__`; the explicit protocol
 wins over the default Pydantic projection. A present but non-callable `__okf__` is an error rather than
@@ -242,10 +250,11 @@ Supported inputs are:
 2. `OKFRepresentation`;
 3. string-keyed mappings containing JSON-like values;
 4. objects with callable `__okf__()`;
-5. Pydantic `BaseModel` values.
+5. Pydantic `BaseModel` values whose default JSON projection is mapping-shaped.
 
 For objects that are both Pydantic and implement `__okf__`, the explicit hook wins. Any supported
 fallback object that explicitly exposes a non-callable `__okf__` is rejected before fallback.
+Pydantic root/scalar models whose default dump is not a mapping must opt in through `__okf__`.
 
 There is no `__dict__`, `vars()`, arbitrary dataclass reflection or recursive object-graph fallback.
 
@@ -338,7 +347,7 @@ class Processo:
         )
 ```
 
-Typical Pydantic model needing no custom body:
+Typical mapping-shaped Pydantic model needing no custom body:
 
 ```python
 class Pessoa(BaseModel):
@@ -366,9 +375,10 @@ text = dumps({"nome": "Ana", "idade": 42}, concept_type="Pessoa")
 | bare mapping/representation has no resolvable type | `TypeError` |
 | caller or declared type is non-string | `TypeError` |
 | caller, declared or resolved type is blank | `ValueError` |
-| metadata mapping has non-string key | `TypeError` |
+| representation or nested metadata mapping has non-string key | `TypeError` |
 | metadata contains arbitrary nested object | `TypeError` |
 | metadata contains non-finite float | `TypeError` |
+| Pydantic default JSON projection is not a mapping | `TypeError`; implement `__okf__` |
 | representation body is non-string | `TypeError` |
 
 ## Testing
@@ -383,16 +393,17 @@ The implementation must cover:
 6. metadata-declared type override;
 7. caller type override;
 8. invalid explicit hooks fail before Pydantic fallback;
-9. Pydantic default projection;
-10. Pydantic custom YAML/body split via `__okf__`;
-11. JSON scalar normalization including bool/int/float/list/map;
-12. invalid hook results and exception propagation;
-13. invalid representation envelopes;
-14. invalid caller/declared types, including malformed metadata under caller override;
-15. non-string keys, arbitrary objects and non-finite floats;
-16. deterministic canonical ordering;
-17. YAML-sensitive strings and Unicode round-trip;
-18. body round-trip.
+9. Pydantic mapping-shaped default projection;
+10. Pydantic root-model rejection without an explicit hook;
+11. Pydantic custom YAML/body split via `__okf__`;
+12. JSON scalar normalization including bool/int/float/list/map;
+13. invalid hook results and exception propagation;
+14. invalid representation envelopes, including non-string top-level keys;
+15. invalid caller/declared types, including malformed metadata under caller override;
+16. non-string nested keys, arbitrary objects and non-finite floats;
+17. deterministic canonical ordering;
+18. YAML-sensitive strings and Unicode round-trip;
+19. body round-trip.
 
 ## Alternatives considered
 
