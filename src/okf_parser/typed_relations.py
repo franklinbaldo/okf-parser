@@ -117,9 +117,7 @@ def compile_bundle_types(
             overwrite=False,
         )
         relation_catalog = (
-            execute_bundle_relations(connection, bundle.root)
-            if relations
-            else None
+            execute_bundle_relations(connection, bundle.root) if relations else None
         )
         backend = ibis.duckdb.from_connection(connection)
         stack.pop_all()
@@ -128,6 +126,8 @@ def compile_bundle_types(
         schema=materialized.schema,
         tables=materialized.tables,
         diagnostics=tuple(bundle.validate()),
-        relation_schema=(relation_catalog.schema if relation_catalog is not None else RELATIONS_SCHEMA),
+        relation_schema=(
+            relation_catalog.schema if relation_catalog is not None else RELATIONS_SCHEMA
+        ),
         relation_names=(relation_catalog.relations if relation_catalog is not None else ()),
     )
