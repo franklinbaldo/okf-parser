@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from io import StringIO
 from typing import Protocol
@@ -14,6 +14,8 @@ from ruamel.yaml import YAML
 
 from okf_parser.frontmatter_order import frontmatter_key_order
 from okf_parser.models import FRONTMATTER_ADAPTER, YamlValue
+
+_MISSING_HOOK = object()
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,13 +111,22 @@ def _metadata_value_to_okf(value: object) -> YamlValue:
     raise TypeError(msg)
 
 
-def _representation_from_hook(value: object) -> OKFRepresentation | OKFDocument:
-    """Call a producer's OKF protocol exactly once and normalize the result envelope."""
-    hook = getattr(value, "__okf__", None)
-    if not callable(hook):
-        msg = f"object of type {type(value).__qualname__!r} does not support OKF serialization"
+def _validated_type(value: object, *, label: str) -> str:
+    """Return one valid non-empty OKF type spelling or raise a precise input error."""
+    if not isinstance(value, str):
+        msg = f"{label} must be a string"
         raise TypeError(msg)
+    if not value.strip():
+        msg = f"{label} must be non-empty"
+        raise ValueError(msg)
+    return value
 
+
+def _representation_from_hook(
+    value: object,
+    hook: Callable[[], object],
+) -> OKFRepresentation | OKFDocument:
+    """Invoke a resolved producer hook exactly once and normalize its result envelope."""
     representation = hook()
     if isinstance(representation, OKFDocument | OKFRepresentation):
         return representation
@@ -139,9 +150,12 @@ def _resolve_representation(value: object) -> tuple[OKFRepresentation | OKFDocum
     if isinstance(value, OKFDocument | OKFRepresentation):
         return value, None
 
-    hook = getattr(value, "__okf__", None)
-    if callable(hook):
-        return _representation_from_hook(value), type(value).__name__
+    hook = getattr(value, "__okf__", _MISSING_HOOK)
+    if hook is not _MISSING_HOOK:
+        if not callable(hook):
+            msg = f"object of type {type(value).__qualname__!r} defines non-callable __okf__"
+            raise TypeError(msg)
+        return _representation_from_hook(value, hook), type(value).__name__
 
     if isinstance(value, BaseModel):
         return OKFRepresentation(metadata=value.model_dump(mode="json")), type(value).__name__
@@ -161,34 +175,35 @@ def _resolve_representation(value: object) -> tuple[OKFRepresentation | OKFDocum
 
 def to_okf(value: object, *, concept_type: str | None = None) -> OKFDocument:
     """Convert a supported Python value into one validated semantic OKF document."""
+    explicit_type = None
+    if concept_type is not None:
+        explicit_type = _validated_type(concept_type, label="concept_type")
+
     representation, inferred_type = _resolve_representation(value)
     if isinstance(representation, OKFDocument):
-        if concept_type is None:
+        if explicit_type is None:
             return representation
         frontmatter = dict(representation.frontmatter)
-        frontmatter["type"] = concept_type
+        frontmatter["type"] = explicit_type
         return OKFDocument(frontmatter=frontmatter, body=representation.body)
 
     metadata = dict(representation.metadata)
     has_declared_type = "type" in metadata
-    declared_type = metadata.pop("type", None)
-    if has_declared_type and not isinstance(declared_type, str):
-        msg = "OKF metadata type must be a string when provided"
-        raise TypeError(msg)
+    declared_type: str | None = None
+    if has_declared_type:
+        declared_type = _validated_type(metadata.pop("type"), label="OKF metadata type")
 
-    if concept_type is not None:
-        resolved_type = concept_type
-    elif has_declared_type:
+    if explicit_type is not None:
+        resolved_type: object = explicit_type
+    elif declared_type is not None:
         resolved_type = declared_type
     else:
         resolved_type = inferred_type
 
-    if not isinstance(resolved_type, str):
+    if resolved_type is None:
         msg = "OKF type is required for mapping/representation inputs"
         raise TypeError(msg)
-    if not resolved_type.strip():
-        msg = "OKF type must be non-empty"
-        raise ValueError(msg)
+    resolved_type = _validated_type(resolved_type, label="OKF type")
 
     normalized = _metadata_value_to_okf(metadata)
     if not isinstance(normalized, dict):
