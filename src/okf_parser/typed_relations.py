@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 import duckdb
 import ibis
 
+from okf_parser.bundle_relations import RELATIONS_SCHEMA, execute_bundle_relations
 from okf_parser.typed_tables import discover_declared_schemas, materialize_typed_tables
 
 if TYPE_CHECKING:
@@ -37,6 +38,8 @@ class TypedRelations:
     schema: str
     tables: tuple[str, ...]
     diagnostics: tuple[Violation, ...]
+    relation_schema: str = RELATIONS_SCHEMA
+    relation_names: tuple[str, ...] = ()
     _closed: bool = field(default=False, init=False, repr=False)
 
     def relation(self, concept_type: str) -> Table:
@@ -47,6 +50,15 @@ class TypedRelations:
         if concept_type not in self.tables:
             raise KeyError(concept_type)
         return self._backend.table(concept_type, database=self.schema)
+
+    def bundle_relation(self, name: str) -> Table:
+        """Return one producer-defined relation published under ``okf_relations``."""
+        if self._closed:
+            msg = "typed relations are closed"
+            raise RuntimeError(msg)
+        if name not in self.relation_names:
+            raise KeyError(name)
+        return self._backend.table(name, database=self.relation_schema)
 
     def __getitem__(self, concept_type: str) -> Table:
         """Return the typed Ibis relation for ``concept_type``."""
@@ -76,13 +88,23 @@ class TypedRelations:
         self.close()
 
 
-def compile_bundle_types(bundle: Bundle, spec_template: str | None = None) -> TypedRelations:
+def compile_bundle_types(
+    bundle: Bundle,
+    spec_template: str | None = None,
+    *,
+    relations: bool = False,
+) -> TypedRelations:
     """Compile one loaded bundle's declared types into live Ibis relations.
 
     The implementation deliberately reuses the same declared-schema discovery
     and typed-table materializer as persistent DuckDB export. With no matching
     declarations, the result is a valid empty relation set rather than an
     independently inferred schema.
+
+    When ``relations`` is true, an optional bundle-root ``okf.relations.sql``
+    program executes after typed materialization in the same DuckDB connection.
+    Relations it publishes under ``okf_relations`` are available through
+    :meth:`TypedRelations.bundle_relation`.
     """
     declarations = discover_declared_schemas(bundle.root, bundle.concept_types, spec_template)
     with ExitStack() as stack:
@@ -94,6 +116,11 @@ def compile_bundle_types(bundle: Bundle, spec_template: str | None = None) -> Ty
             declarations=declarations,
             overwrite=False,
         )
+        relation_catalog = (
+            execute_bundle_relations(connection, bundle.root)
+            if relations
+            else None
+        )
         backend = ibis.duckdb.from_connection(connection)
         stack.pop_all()
     return TypedRelations(
@@ -101,4 +128,6 @@ def compile_bundle_types(bundle: Bundle, spec_template: str | None = None) -> Ty
         schema=materialized.schema,
         tables=materialized.tables,
         diagnostics=tuple(bundle.validate()),
+        relation_schema=(relation_catalog.schema if relation_catalog is not None else RELATIONS_SCHEMA),
+        relation_names=(relation_catalog.relations if relation_catalog is not None else ()),
     )
