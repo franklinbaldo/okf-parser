@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import ClassVar, cast
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, RootModel
 
 from okf_parser import OKFDocument, OKFRepresentation, SupportsOKF, dumps, to_okf
 from okf_parser.parser import parse_document_text
@@ -101,6 +101,10 @@ class PydanticNonCallableHook(BaseModel):
     __okf__: ClassVar[str] = "not callable"
 
 
+class PydanticRootList(RootModel[list[int]]):
+    """Pydantic root-model fixture whose JSON projection is not a mapping."""
+
+
 def _consume_protocol(value: SupportsOKF) -> object:
     return value.__okf__()
 
@@ -165,6 +169,11 @@ def test_pydantic_models_default_to_metadata_and_infer_type() -> None:
     assert document.body == ""
 
 
+def test_pydantic_root_model_requires_an_explicit_protocol() -> None:
+    with pytest.raises(TypeError, match="default OKF projection must be a mapping"):
+        to_okf(PydanticRootList([1, 2]))
+
+
 def test_pydantic_can_customize_yaml_body_split_with_dunder() -> None:
     class Article(BaseModel):
         title: str
@@ -222,6 +231,8 @@ def test_hook_exception_propagates_unchanged() -> None:
 def test_invalid_representation_envelope_is_rejected() -> None:
     with pytest.raises(TypeError, match="metadata must be a mapping"):
         OKFRepresentation(metadata=cast("dict[str, object]", []))
+    with pytest.raises(TypeError, match="string keys"):
+        OKFRepresentation(metadata=cast("dict[str, object]", {1: "value"}))
     with pytest.raises(TypeError, match="body must be a string"):
         OKFRepresentation(metadata={}, body=cast("str", 42))
 
