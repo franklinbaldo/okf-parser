@@ -16,7 +16,7 @@ def test_declared_type_without_documents_is_exported(tmp_path: Path) -> None:
     knowledge.mkdir()
 
     _write(
-        specs / "run-goal.md",
+        specs / "rungoal.md",
         """---
 type: ConceptSpecification
 concept_type: RunGoal
@@ -27,7 +27,7 @@ description: Goal contract.
 """,
     )
     _write(
-        specs / "run-goal.schema.sql",
+        specs / "rungoal.schema.sql",
         'CREATE TABLE "RunGoal" ("id" VARCHAR, "goal" VARCHAR);\n',
     )
 
