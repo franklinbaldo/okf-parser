@@ -22,6 +22,16 @@ def test_native_document_is_already_normalized() -> None:
     assert to_okf(document) is document
 
 
+def test_native_document_type_can_be_overridden() -> None:
+    document = OKFDocument(frontmatter={"type": "Reference"}, body="# Body\n")
+
+    overridden = to_okf(document, concept_type="Documentation")
+
+    assert overridden.frontmatter == {"type": "Documentation"}
+    assert overridden.body == document.body
+    assert overridden is not document
+
+
 def test_mapping_requires_or_accepts_an_explicit_type() -> None:
     with pytest.raises(TypeError, match="type is required"):
         to_okf({"title": "Untyped"})
@@ -29,6 +39,18 @@ def test_mapping_requires_or_accepts_an_explicit_type() -> None:
     document = to_okf({"title": "Typed"}, concept_type="Reference")
 
     assert document.frontmatter == {"type": "Reference", "title": "Typed"}
+
+
+def test_standalone_representation_requires_or_accepts_an_explicit_type() -> None:
+    representation = OKFRepresentation(metadata={"title": "Projected"}, body="# Body\n")
+
+    with pytest.raises(TypeError, match="type is required"):
+        to_okf(representation)
+
+    document = to_okf(representation, concept_type="Reference")
+
+    assert document.frontmatter == {"type": "Reference", "title": "Projected"}
+    assert document.body == "# Body\n"
 
 
 @dataclass
@@ -52,6 +74,14 @@ class CustomType:
     def __okf__(self) -> dict[str, object]:
         """Project with an explicit OKF type override."""
         return {"type": "Pessoa", "nome": "Ana"}
+
+
+class FinalDocumentProducer:
+    """Test producer that returns an already-complete OKF document."""
+
+    def __okf__(self) -> OKFDocument:
+        """Return a final document whose declared type must be preserved."""
+        return OKFDocument(frontmatter={"type": "Reference", "title": "Final"}, body="# Final\n")
 
 
 class CountingProducer:
@@ -136,10 +166,23 @@ def test_protocol_metadata_can_override_inferred_class_type() -> None:
     assert document.frontmatter == {"type": "Pessoa", "nome": "Ana"}
 
 
+def test_protocol_can_return_a_final_document_without_class_type_inference() -> None:
+    document = to_okf(FinalDocumentProducer())
+
+    assert document.frontmatter == {"type": "Reference", "title": "Final"}
+    assert document.body == "# Final\n"
+
+
 def test_caller_can_override_declared_or_inferred_type() -> None:
     document = to_okf(CustomType(), concept_type="Person")
 
     assert document.frontmatter["type"] == "Person"
+
+
+def test_caller_can_override_type_of_document_returned_by_protocol() -> None:
+    document = to_okf(FinalDocumentProducer(), concept_type="Documentation")
+
+    assert document.frontmatter == {"type": "Documentation", "title": "Final"}
 
 
 def test_hook_is_resolved_and_called_exactly_once() -> None:
