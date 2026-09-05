@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar, cast
 
 import pytest
 from pydantic import BaseModel, RootModel
 
 from okf_parser import OKFDocument, OKFRepresentation, SupportsOKF, dumps, to_okf
 from okf_parser.parser import parse_document_text
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 def test_native_document_is_already_normalized() -> None:
