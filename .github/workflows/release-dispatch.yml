@@ -1,0 +1,77 @@
+name: Dispatch release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (for example, 0.45.8 or v0.45.8)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: release-dispatch-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  tag-and-dispatch:
+    name: Create immutable tag and dispatch release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Validate source version and create tag
+        id: release
+        shell: bash
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+
+          version="${REQUESTED_VERSION#v}"
+          tag="v${version}"
+          if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::release version must be a simple semantic version, got ${REQUESTED_VERSION}"
+            exit 1
+          fi
+
+          source_version="$(uv run --script scripts/project_version.py)"
+          if [ "$source_version" != "$version" ]; then
+            echo "::error::requested ${tag}, but main declares ${source_version}"
+            exit 1
+          fi
+
+          head_sha="$(git rev-parse HEAD)"
+          if git rev-parse --verify --quiet "refs/tags/${tag}" >/dev/null; then
+            tag_sha="$(git rev-list -n 1 "$tag")"
+            if [ "$tag_sha" != "$head_sha" ]; then
+              echo "::error::${tag} already exists at ${tag_sha}, while main is ${head_sha}"
+              exit 1
+            fi
+            echo "${tag} already identifies current main; reusing it"
+          else
+            git tag "$tag" "$head_sha"
+            git push origin "refs/tags/${tag}"
+          fi
+
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch release workflow on immutable tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: gh workflow run publish.yml --ref "$RELEASE_TAG"
