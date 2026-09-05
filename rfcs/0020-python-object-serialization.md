@@ -63,8 +63,11 @@ class SupportsOKF(Protocol):
 purpose to library-defined protocols such as Rich's `__rich__`: a recognizable hook that says the
 object knows how it should be represented by this ecosystem.
 
-No inheritance or registration is required. Runtime dispatch remains ordinary duck typing: obtain
-`__okf__`, ensure it is callable, invoke it exactly once, then validate the result.
+No inheritance or registration is required. Runtime dispatch remains ordinary duck typing: resolve
+`__okf__` once, ensure it is callable, invoke that resolved callable exactly once, then validate the
+result. If an object explicitly defines `__okf__` but the resolved attribute is not callable,
+serialization fails with `TypeError`; Pydantic or mapping fallback must not silently ignore a broken
+explicit protocol declaration.
 
 ### 2. Separate producer representation from final document
 
@@ -114,6 +117,11 @@ Type resolution precedence is:
 3. the source object's class name, when there is a source class to infer from;
 4. otherwise fail because a type cannot be invented safely.
 
+Precedence chooses **which valid type value wins**; it does not make malformed candidates acceptable.
+When supplied, both `concept_type=` and metadata `type` must be non-empty strings. An invalid metadata
+`type` is rejected even if the caller also supplies a valid `concept_type=` override, so broken input
+is not silently hidden.
+
 Examples:
 
 ```python
@@ -154,7 +162,7 @@ This path does not reflect over arbitrary Python objects. Only explicit supporte
 ### 5. Support Pydantic as a first-class default projection
 
 Pydantic is already a dependency and provides an explicit public serialization API. A `BaseModel`
-without `__okf__` is projected with:
+without an explicit `__okf__` attribute is projected with:
 
 ```python
 model.model_dump(mode="json")
@@ -163,7 +171,8 @@ model.model_dump(mode="json")
 All fields become metadata, body is empty, and the model class name is the default OKF type.
 
 A Pydantic model that wants a different YAML/body split implements `__okf__`; the explicit protocol
-wins over the default Pydantic projection.
+wins over the default Pydantic projection. A present but non-callable `__okf__` is an error rather than
+a request to fall back to `model_dump()`.
 
 ```python
 class Article(BaseModel):
@@ -235,7 +244,8 @@ Supported inputs are:
 4. objects with callable `__okf__()`;
 5. Pydantic `BaseModel` values.
 
-For objects that are both Pydantic and implement `__okf__`, the explicit hook wins.
+For objects that are both Pydantic and implement `__okf__`, the explicit hook wins. Any supported
+fallback object that explicitly exposes a non-callable `__okf__` is rejected before fallback.
 
 There is no `__dict__`, `vars()`, arbitrary dataclass reflection or recursive object-graph fallback.
 
@@ -350,12 +360,12 @@ text = dumps({"nome": "Ana", "idade": 42}, concept_type="Pessoa")
 | --- | --- |
 | native valid `OKFDocument` | returned directly |
 | plain unsupported object | `TypeError` |
-| non-callable `__okf__` on plain object | `TypeError` |
+| explicitly present but non-callable `__okf__` | `TypeError` before fallback |
 | hook returns unsupported shape | `TypeError` |
 | producer hook raises | original exception propagates |
 | bare mapping/representation has no resolvable type | `TypeError` |
-| declared type is non-string | `TypeError` |
-| resolved type is blank | `ValueError` |
+| caller or declared type is non-string | `TypeError` |
+| caller, declared or resolved type is blank | `ValueError` |
 | metadata mapping has non-string key | `TypeError` |
 | metadata contains arbitrary nested object | `TypeError` |
 | metadata contains non-finite float | `TypeError` |
@@ -368,19 +378,21 @@ The implementation must cover:
 1. native `OKFDocument` pass-through;
 2. bare mapping type requirement and explicit caller type;
 3. structural `__okf__` dispatch without inheritance;
-4. class-name type inference;
-5. metadata-declared type override;
-6. caller type override;
-7. exactly one hook invocation;
-8. Pydantic default projection;
-9. Pydantic custom YAML/body split via `__okf__`;
-10. JSON scalar normalization including bool/int/float/list/map;
-11. invalid hook results and exception propagation;
-12. invalid representation envelopes;
-13. non-string keys, arbitrary objects and non-finite floats;
-14. deterministic canonical ordering;
-15. YAML-sensitive strings and Unicode round-trip;
-16. body round-trip.
+4. one protocol attribute resolution and exactly one hook invocation;
+5. class-name type inference;
+6. metadata-declared type override;
+7. caller type override;
+8. invalid explicit hooks fail before Pydantic fallback;
+9. Pydantic default projection;
+10. Pydantic custom YAML/body split via `__okf__`;
+11. JSON scalar normalization including bool/int/float/list/map;
+12. invalid hook results and exception propagation;
+13. invalid representation envelopes;
+14. invalid caller/declared types, including malformed metadata under caller override;
+15. non-string keys, arbitrary objects and non-finite floats;
+16. deterministic canonical ordering;
+17. YAML-sensitive strings and Unicode round-trip;
+18. body round-trip.
 
 ## Alternatives considered
 
