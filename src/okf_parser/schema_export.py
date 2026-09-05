@@ -12,6 +12,7 @@ from okf_parser.declared_schema import (
     declared_schema_relative_path,
     parse_declared_schema,
 )
+from okf_parser.parser import DocumentParseError, parse_document
 from okf_parser.projection_export import compile_projections
 from okf_parser.projections import PROJECTION_TYPE, load_projections
 from okf_parser.pydantic_projection import (
@@ -33,6 +34,7 @@ from okf_parser.schema_contract import (
     render_zod,
 )
 from okf_parser.schema_references import apply_references
+from okf_parser.type_specs import SPEC_SLUG_PLACEHOLDER
 
 type RefsMode = Literal["key", "embed"]
 
@@ -84,6 +86,41 @@ def documents_by_type(
     return by_type
 
 
+def _declared_concept_types(root: str, spec_template: str | None) -> set[str]:
+    """Discover types whose authored specs have sibling declared schemas.
+
+    A declared schema is a contract even before the first concept instance
+    exists. Discovery follows the same spec template used for normal type
+    validation and reads the authored ``concept_type`` from each matching
+    ConceptSpecification rather than attempting to reverse a filesystem slug.
+    """
+    if spec_template is None or SPEC_SLUG_PLACEHOLDER not in spec_template:
+        return set()
+
+    root_path = Path(root)
+    pattern = spec_template.replace(SPEC_SLUG_PLACEHOLDER, "*")
+    concept_types: set[str] = set()
+    for spec_path in sorted(root_path.glob(pattern)):
+        if not spec_path.is_file():
+            continue
+        try:
+            parsed = parse_document(spec_path)
+        except (OSError, UnicodeError, DocumentParseError) as exc:
+            message = f"invalid specification document at {spec_path}: {exc}"
+            raise SchemaExportError(message) from exc
+
+        frontmatter = parsed.frontmatter
+        if frontmatter.get("type") != "ConceptSpecification":
+            continue
+        concept_type = frontmatter.get("concept_type")
+        if not isinstance(concept_type, str) or not concept_type:
+            continue
+        relative = declared_schema_relative_path(spec_template, concept_type)
+        if relative is not None and (root_path / relative).is_file():
+            concept_types.add(concept_type)
+    return concept_types
+
+
 def _declared_types_by_type(
     root: str,
     concept_types: Sequence[str],
@@ -132,7 +169,10 @@ def build_schema_contracts(
     relational_schema: str | None = None,
     refs: RefsMode = "key",
 ) -> tuple[TypeContract, ...]:
-    """Compile bundle observations into deterministic language-neutral contracts.
+    """Compile observations and declared schemas into deterministic contracts.
+
+    A type with a declared ``.schema.sql`` beside its authored specification is
+    exportable even before the bundle contains its first concrete document.
 
     `relational_schema` is the opt-in half: given the bundle's `okf.schema.sql`,
     every field participating in a declared foreign key compiles to a reference
@@ -147,6 +187,9 @@ def build_schema_contracts(
         for concept_type, documents in documents_by_type(path, exclude).items()
         if concept_type != PROJECTION_TYPE
     }
+    declared_types = _declared_concept_types(path, spec_template)
+    for concept_type in declared_types:
+        observed.setdefault(concept_type, [])
     declared_by_type = _declared_types_by_type(path, tuple(observed), spec_template)
     concept_contracts = compile_contracts(
         observed,
@@ -265,14 +308,11 @@ def export_json_schema(
         "schemas": schemas,
     }
     if any(_has_embedded_reference(contract.root) for contract in contracts):
-        # Every embedded `$ref` points at `#/$defs/<type>`, so a consumer needs
-        # the common pool those pointers resolve against. Projection members are
-        # embedded even when flat concept export uses the default key mode.
         payload["defs"] = schemas
     return payload
 
 
-def export_zod_schema(  # each argument is an independent public export flag.
+def export_zod_schema(
     path: str,
     exclude: Sequence[str] = (),
     *,
