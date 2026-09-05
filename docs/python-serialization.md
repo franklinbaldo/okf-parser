@@ -61,8 +61,9 @@ an object explicitly exposes `__okf__` but that attribute is not callable, seria
 
 ## Pydantic
 
-Pydantic models work without a custom hook. Their `model_dump(mode="json")` representation becomes
-frontmatter metadata, their class name becomes the default type, and the body is empty:
+Pydantic models work without a custom hook when `model_dump(mode="json")` produces a mapping. That
+mapping becomes frontmatter metadata, the model class name becomes the default type, and the body is
+empty:
 
 ```python
 from pydantic import BaseModel
@@ -74,6 +75,10 @@ class Pessoa(BaseModel):
 
 text = dumps(Pessoa(nome="Ana", idade=42))
 ```
+
+Pydantic root/scalar models are intentionally not wrapped into an invented metadata field. A
+`RootModel[list[...]]`, for example, must implement `__okf__()` and choose an explicit mapping/body
+representation.
 
 If a model wants some fields in the body instead, it implements `__okf__()` just like any other class:
 
@@ -106,8 +111,8 @@ text = dumps(
 
 JSON scalars are normalized into OKF's spelling-preserving scalar domain: booleans become `"true"` or
 `"false"`, integers and finite floats become their canonical textual spelling, strings stay strings,
-and `None` stays `None`. Nested mappings and lists recurse. Arbitrary nested Python objects and
-non-finite floats are rejected.
+and `None` stays `None`. Nested mappings and lists/tuples recurse. Mapping keys must be strings;
+arbitrary nested Python objects and non-finite floats are rejected.
 
 ## Public API
 
@@ -116,6 +121,10 @@ non-finite floats are rejected.
 - `SupportsOKF` — structural typing protocol for `__okf__()` producers;
 - `to_okf(value, concept_type=None)` — convert a supported Python value into `OKFDocument`;
 - `dumps(value, concept_type=None)` — render deterministic OKF Markdown.
+
+`OKFRepresentation` validates its envelope immediately: metadata must be a string-keyed mapping and
+body must be a string. Metadata values remain producer-facing until `to_okf()` normalizes the
+JSON-like value tree.
 
 Type resolution is: caller `concept_type=` first, then metadata `type`, then the source object's class
 name. A bare mapping or standalone `OKFRepresentation` without either an explicit type or a caller
