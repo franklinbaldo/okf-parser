@@ -131,7 +131,7 @@ def _validated_type(value: object, *, label: str) -> str:
 
 def _representation_from_hook(
     value: object,
-    hook: Callable[[], object],
+    hook: Callable[..., object],
 ) -> OKFRepresentation | OKFDocument:
     """Invoke a resolved producer hook exactly once and normalize its result envelope."""
     representation = hook()
