@@ -21,12 +21,26 @@ jobs:
         with:
           version: 0.11.21
           python-version: '3.12'
-      - name: Replace inline bodies with OKF relations
+      - name: Finish Body relation model
         shell: bash
         run: |
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
+
+          test = Path('tests/test_journalism_pack.py')
+          text = test.read_text(encoding='utf-8')
+          text = text.replace('from typing import cast\n', 'from typing import TYPE_CHECKING, cast\n', 1)
+          text = text.replace('from okf_parser.models import ConceptRecord\n', '', 1)
+          marker = 'from okf_parser.parser import parse_document_text\n\n'
+          replacement = (
+              'from okf_parser.parser import parse_document_text\n\n'
+              'if TYPE_CHECKING:\n'
+              '    from okf_parser.models import ConceptRecord\n\n'
+          )
+          assert marker in text
+          text = text.replace(marker, replacement, 1)
+          test.write_text(text, encoding='utf-8')
 
           path = Path('src/okf_parser/packs/journalism/examples/complete-profile.md')
           text = path.read_text(encoding='utf-8')
@@ -63,8 +77,9 @@ jobs:
                       Path('src/okf_parser/packs/journalism/specs') / name,
                   )
           PY
-          uv run ruff check --fix tests/test_journalism_pack.py src/okf_parser/type_packs.py
-          uv run ruff format tests/test_journalism_pack.py src/okf_parser/type_packs.py
+          uv run ruff check --fix tests/test_journalism_pack.py tests/test_type_packs.py src/okf_parser/type_packs.py
+          uv run ruff format tests/test_journalism_pack.py tests/test_type_packs.py src/okf_parser/type_packs.py
+          uv run ruff check tests/test_journalism_pack.py tests/test_type_packs.py src/okf_parser/type_packs.py
           uv run ty check src tests
           uv run pytest tests/test_journalism_pack.py tests/test_type_packs.py tests/test_spec_scaffold.py tests/test_concepts.py -q
       - name: Commit body relation model
@@ -76,7 +91,8 @@ jobs:
                   src/okf_parser/packs/journalism/specs/body.schema.sql \
                   src/okf_parser/packs/journalism/specs/newsitem.schema.sql \
                   src/okf_parser/type_packs.py \
-                  tests/test_journalism_pack.py
+                  tests/test_journalism_pack.py \
+                  tests/test_type_packs.py
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git commit -m 'refactor(packs): model ninjs bodies as linked Markdown concepts'
