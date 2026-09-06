@@ -26,7 +26,7 @@ jobs:
           set -euo pipefail
           uv sync --frozen --all-groups
           uv run okf-parser init src/okf_parser/packs/journalism \
-            --spec-template 'specs/{type}.md' \
+            --spec-template 'specs/{slug}.md' \
             --infer-schema \
             --write
           rm .github/workflows/tmp-journalism-scaffold.yml
