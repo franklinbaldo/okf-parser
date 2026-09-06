@@ -1,0 +1,41 @@
+name: Temporary journalism pack scaffold
+
+on:
+  push:
+    branches: [feat/type-packs-dogfood]
+
+permissions:
+  contents: write
+
+jobs:
+  scaffold:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/type-packs-dogfood
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+      - name: Scaffold specs and schemas from authored examples
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv sync --frozen --all-groups
+          uv run okf-parser init src/okf_parser/packs/journalism \
+            --spec-template 'specs/{type}.md' \
+            --infer-schema \
+            --write
+          rm .github/workflows/tmp-journalism-scaffold.yml
+      - name: Commit generated scaffold
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'chore(packs): scaffold journalism contract from examples'
+          git push origin HEAD:feat/type-packs-dogfood
