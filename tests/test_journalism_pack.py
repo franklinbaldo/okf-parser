@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import json
-import shutil
 from importlib.resources import files
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 from jsonschema import Draft202012Validator, FormatChecker
 from referencing import Registry, Resource
 
 from okf_parser import concept, load_bundle, resolve_relations
-from okf_parser.models import ConceptRecord
 from okf_parser.parser import parse_document_text
+
+if TYPE_CHECKING:
+    from okf_parser.models import ConceptRecord
 
 NINJS_RESOURCE = "packs/journalism/standards/ninjs-schema_3.2.json"
 GEOJSON_RESOURCE = "packs/journalism/standards/GeoJSON.json"
@@ -196,8 +197,7 @@ def _project_complete_bundle(tmp_path: Path) -> dict[str, object]:
                 target_type=cast("str", rule["targetType"]),
             )
             projected[ninjs_name] = [
-                _project_body(record, schema=root_schema, geojson=geojson)
-                for record in related
+                _project_body(record, schema=root_schema, geojson=geojson) for record in related
             ]
             continue
         if okf_name in item.frontmatter:
@@ -328,11 +328,7 @@ def test_generated_newsitem_schema_has_every_mapped_root_property() -> None:
 def test_generated_body_schema_has_every_authored_body_metadata_field() -> None:
     body_mapping = _resource_json(BODY_MAPPING_RESOURCE)
     rules = cast("dict[str, dict[str, object]]", body_mapping["properties"])
-    expected = {
-        cast("str", rule["okf"])
-        for rule in rules.values()
-        if rule["mode"] != "projected"
-    }
+    expected = {cast("str", rule["okf"]) for rule in rules.values() if rule["mode"] != "projected"}
 
     assert _sql_columns(BODY_SCHEMA_RESOURCE) == expected
 

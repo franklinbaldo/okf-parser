@@ -21,11 +21,8 @@ descriptions:
     contentType: text/plain
     value: Complete top-level ninjs 3.2 coverage fixture.
 bodies:
-  - role: main
-    contentType: text/markdown
-    charCount: 82
-    wordCount: 12
-    value: Complete body representation with role, media type, counts, and authored value.
+  - resource: examples/body-main.md
+  - resource: examples/body-background.md
 headlines:
   - role: main
     contentType: text/plain
@@ -201,5 +198,3 @@ digitalSourceType:
   uri: https://cv.iptc.org/newscodes/digitalsourcetype/digitalCapture
   literal: digitalCapture
 ---
-
-Este corpo Markdown continua sendo a forma autoral conveniente. Quando `bodies` não é informado no frontmatter, ele serve como fallback para um corpo ninjs simples; quando `bodies` é informado, a estrutura ninjs completa é preservada.
