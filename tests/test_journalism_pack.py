@@ -15,12 +15,17 @@ from okf_parser.parser import parse_document_text
 NINJS_RESOURCE = "packs/journalism/standards/ninjs-schema_3.2.json"
 GEOJSON_RESOURCE = "packs/journalism/standards/GeoJSON.json"
 MAPPING_RESOURCE = "packs/journalism/ninjs-mapping.json"
+SCHEMA_RESOURCE = "packs/journalism/specs/newsitem.schema.sql"
 COMPLETE_EXAMPLE = "packs/journalism/examples/complete-profile.md"
+MINIMAL_EXAMPLE = "packs/journalism/examples/minimal-text.md"
+
+
+def _resource_text(path: str) -> str:
+    return files("okf_parser").joinpath(*path.split("/")).read_text(encoding="utf-8")
 
 
 def _resource_json(path: str) -> dict[str, object]:
-    text = files("okf_parser").joinpath(*path.split("/")).read_text(encoding="utf-8")
-    return cast("dict[str, object]", json.loads(text))
+    return cast("dict[str, object]", json.loads(_resource_text(path)))
 
 
 def _root_properties(schema: dict[str, object]) -> dict[str, dict[str, object]]:
@@ -117,26 +122,24 @@ def _coerce(  # noqa: PLR0911
     return value
 
 
-def _project_complete_example() -> dict[str, object]:
+def _project_example(resource_path: str) -> dict[str, object]:
     root = _resource_json(NINJS_RESOURCE)
     geojson = _resource_json(GEOJSON_RESOURCE)
     mapping = _resource_json(MAPPING_RESOURCE)
-    source = files("okf_parser").joinpath(*COMPLETE_EXAMPLE.split("/")).read_text(encoding="utf-8")
-    parsed = parse_document_text(Path("complete-profile.md"), source)
+    parsed = parse_document_text(Path(resource_path).name, _resource_text(resource_path))
     properties = _root_properties(root)
     rules = cast("dict[str, dict[str, object]]", mapping["properties"])
 
     projected: dict[str, object] = {}
     for ninjs_name, rule in rules.items():
-        mode = rule["mode"]
-        if mode == "projected":
+        okf_name = cast("str", rule["okf"])
+        if rule["mode"] == "hybrid" and okf_name not in parsed.frontmatter:
             body = parsed.body.strip()
             if body:
                 projected[ninjs_name] = [
                     {"contentType": cast("str", rule["contentType"]), "value": body}
                 ]
             continue
-        okf_name = cast("str", rule["okf"])
         if okf_name in parsed.frontmatter:
             projected[ninjs_name] = _coerce(
                 parsed.frontmatter[okf_name],
@@ -147,8 +150,22 @@ def _project_complete_example() -> dict[str, object]:
     return projected
 
 
+def _validator() -> Draft202012Validator:
+    schema = _resource_json(NINJS_RESOURCE)
+    geojson = _resource_json(GEOJSON_RESOURCE)
+    registry = Registry().with_resource(
+        cast("str", geojson["$id"]), Resource.from_contents(geojson)
+    )
+    return Draft202012Validator(
+        schema,
+        registry=registry,
+        format_checker=FormatChecker(),
+    )
+
+
 def test_ninjs_mapping_covers_every_official_3_2_root_property() -> None:
     schema = _resource_json(NINJS_RESOURCE)
+    geojson = _resource_json(GEOJSON_RESOURCE)
     mapping = _resource_json(MAPPING_RESOURCE)
     properties = _root_properties(schema)
     rules = cast("dict[str, dict[str, object]]", mapping["properties"])
@@ -156,51 +173,69 @@ def test_ninjs_mapping_covers_every_official_3_2_root_property() -> None:
     assert schema["title"] == "IPTC ninjs - News in JSON - version 3.2"
     assert set(rules) == set(properties)
     assert len(rules) == 41
+    assert {rule["mode"] for rule in rules.values()} == {"direct", "renamed", "hybrid"}
     assert {name for name, rule in rules.items() if rule["mode"] == "renamed"} == {"type"}
     assert rules["type"]["okf"] == "ninjs_type"
-    assert {name for name, rule in rules.items() if rule["mode"] == "projected"} == {"bodies"}
-    assert rules["bodies"]["okf"] == "$body"
+    assert {name for name, rule in rules.items() if rule["mode"] == "hybrid"} == {"bodies"}
+    assert rules["bodies"]["okf"] == "bodies"
+    assert rules["bodies"]["fallback"] == "$body"
 
     for name, property_schema in properties.items():
-        if property_schema.get("type") in {"array", "object"} and name != "bodies":
+        resolved = _resolve_schema(property_schema, root=schema, geojson=geojson)
+        if resolved.get("type") in {"array", "object"}:
             assert rules[name].get("nested") == "shape-preserving"
 
 
-def test_complete_fixture_authors_every_non_projected_ninjs_property() -> None:
+def test_complete_fixture_authors_every_mapped_ninjs_property() -> None:
     mapping = _resource_json(MAPPING_RESOURCE)
     rules = cast("dict[str, dict[str, object]]", mapping["properties"])
-    source = files("okf_parser").joinpath(*COMPLETE_EXAMPLE.split("/")).read_text(encoding="utf-8")
-    parsed = parse_document_text(Path("complete-profile.md"), source)
+    parsed = parse_document_text(Path("complete-profile.md"), _resource_text(COMPLETE_EXAMPLE))
 
-    expected_okf = {
-        cast("str", rule["okf"]) for rule in rules.values() if rule["mode"] != "projected"
-    }
+    expected_okf = {cast("str", rule["okf"]) for rule in rules.values()}
+    assert len(expected_okf) == 41
     assert expected_okf <= set(parsed.frontmatter)
     assert set(parsed.frontmatter) == expected_okf | {"type"}
     assert parsed.concept_type == "NewsItem"
     assert parsed.body.strip()
 
 
-def test_complete_fixture_projects_to_valid_official_ninjs_3_2() -> None:
-    schema = _resource_json(NINJS_RESOURCE)
-    geojson = _resource_json(GEOJSON_RESOURCE)
-    registry = Registry().with_resource(
-        cast("str", geojson["$id"]), Resource.from_contents(geojson)
-    )
-    validator = Draft202012Validator(
-        schema,
-        registry=registry,
-        format_checker=FormatChecker(),
-    )
+def test_generated_schema_has_one_column_for_every_mapped_ninjs_root_property() -> None:
+    mapping = _resource_json(MAPPING_RESOURCE)
+    rules = cast("dict[str, dict[str, object]]", mapping["properties"])
+    expected = {cast("str", rule["okf"]) for rule in rules.values()}
+    sql = _resource_text(SCHEMA_RESOURCE)
+    columns = {
+        line.strip().split('"')[1]
+        for line in sql.splitlines()
+        if line.strip().startswith('"')
+    }
 
+    assert len(expected) == 41
+    assert columns == expected
+
+
+def test_complete_fixture_projects_to_valid_official_ninjs_3_2() -> None:
     errors = sorted(
-        validator.iter_errors(_project_complete_example()),
+        _validator().iter_errors(_project_example(COMPLETE_EXAMPLE)),
         key=lambda item: list(item.path),
     )
     assert errors == [], "\n".join(
         f"{'.'.join(str(part) for part in error.path) or '<root>'}: {error.message}"
         for error in errors
     )
+
+
+def test_markdown_body_is_a_valid_bodies_fallback() -> None:
+    projected = _project_example(MINIMAL_EXAMPLE)
+    body = cast("list[dict[str, object]]", projected["bodies"])
+
+    assert body == [
+        {
+            "contentType": "text/markdown",
+            "value": "Este é um exemplo mínimo de conteúdo textual para o pack `journalism`.",
+        }
+    ]
+    assert list(_validator().iter_errors(projected)) == []
 
 
 def test_vendored_ninjs_external_refs_are_closed_by_pack_resources() -> None:
