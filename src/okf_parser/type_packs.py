@@ -63,7 +63,7 @@ def _walk_text_files(root: Traversable, *, prefix: str = "") -> tuple[PackFile, 
     return tuple(collected)
 
 
-def _packaged_files(resource_path: str) -> tuple[PackFile, ...]:
+def _packaged_files(resource_path: str, *, destination_prefix: str = "") -> tuple[PackFile, ...]:
     """Read files under ``okf_parser/<resource_path>`` from source or an installed wheel."""
     relative = PurePosixPath(resource_path)
     if relative.is_absolute() or ".." in relative.parts:
@@ -73,7 +73,14 @@ def _packaged_files(resource_path: str) -> tuple[PackFile, ...]:
     if not root.is_dir():
         msg = f"pack resource directory is missing: {resource_path!r}"
         raise ValueError(msg)
-    return _walk_text_files(root)
+    resources = _walk_text_files(root)
+    if not destination_prefix:
+        return resources
+    prefix = PurePosixPath(destination_prefix)
+    if prefix.is_absolute() or ".." in prefix.parts:
+        msg = f"pack destination prefix must be relative: {destination_prefix!r}"
+        raise ValueError(msg)
+    return tuple(PackFile(str(prefix / item.path), item.content) for item in resources)
 
 
 def journalism_pack() -> TypePack:
@@ -83,7 +90,7 @@ def journalism_pack() -> TypePack:
         version="1",
         description="Journalism types based on the IPTC ninjs 3.2 news model.",
         types=("NewsItem",),
-        files=_packaged_files("packs/journalism/specs"),
+        files=_packaged_files("packs/journalism/specs", destination_prefix="specs"),
         standard="IPTC ninjs",
         standard_version="3.2",
         standard_schema="https://www.iptc.org/std/ninjs/ninjs-schema_3.2.json",
