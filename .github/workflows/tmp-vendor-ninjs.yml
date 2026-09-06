@@ -1,0 +1,49 @@
+name: Temporary vendor ninjs schemas
+
+on:
+  push:
+    branches: [feat/type-packs-dogfood]
+    paths:
+      - .github/workflows/tmp-vendor-ninjs.yml
+
+permissions:
+  contents: write
+
+jobs:
+  vendor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/type-packs-dogfood
+          fetch-depth: 0
+      - name: Vendor standards
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p src/okf_parser/packs/journalism/standards
+          curl --fail --silent --show-error --location \
+            https://www.iptc.org/std/ninjs/ninjs-schema_3.2.json \
+            -o src/okf_parser/packs/journalism/standards/ninjs-schema_3.2.json
+          curl --fail --silent --show-error --location \
+            https://geojson.org/schema/GeoJSON.json \
+            -o src/okf_parser/packs/journalism/standards/GeoJSON.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          ninjs = json.loads(Path('src/okf_parser/packs/journalism/standards/ninjs-schema_3.2.json').read_text())
+          assert ninjs['title'] == 'IPTC ninjs - News in JSON - version 3.2'
+          assert ninjs['$defs']['ninjsType']['required'] == ['uri']
+          geo = json.loads(Path('src/okf_parser/packs/journalism/standards/GeoJSON.json').read_text())
+          assert geo.get('$id') or geo.get('title')
+          PY
+      - name: Commit vendored references
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/tmp-vendor-ninjs.yml
+          git add src/okf_parser/packs/journalism/standards
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m 'test(packs): vendor ninjs 3.2 reference schemas'
+          git push origin HEAD:feat/type-packs-dogfood
