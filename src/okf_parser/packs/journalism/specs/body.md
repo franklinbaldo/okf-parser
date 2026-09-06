@@ -23,7 +23,15 @@ The remaining ninjs body properties are frontmatter metadata:
 
 `value` is deliberately not duplicated in frontmatter. It is the Markdown body.
 
-A `NewsItem` may link one or more `Body` concepts through its `bodies` relation. This uses the normal OKF relation shape (`resource`) and the generic `resolve_relations(..., field="bodies", target_type="Body")` API; the journalism pack does not introduce a second relation engine.
+A `NewsItem` may link one or more `Body` concepts through its `bodies` relation. The authored shape is just the ordinary OKF relation form:
+
+```yaml
+bodies:
+  - resource: content/body-main.md
+  - resource: content/body-background.md
+```
+
+Each target is a separate Markdown concept whose own document body supplies that ninjs body's `value`. This uses the normal OKF relation shape (`resource`) and the generic `resolve_relations(..., field="bodies", target_type="Body")` API; the journalism pack does not introduce a second relation engine.
 
 For a simple `NewsItem`, an absent `bodies` relation may still use the `NewsItem`'s own Markdown body as an implicit single body. Once explicit `bodies` relations are present, those linked `Body` concepts are the authoritative body set and the `NewsItem` body should be empty to avoid two competing content sources.
 
