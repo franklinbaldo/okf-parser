@@ -24,15 +24,12 @@ def _copy_resource_tree(resource_path: str, destination: Path) -> None:
             target.write_text(child.read_text(encoding="utf-8"), encoding="utf-8")
 
 
-def test_journalism_pack_is_registered_from_pyproject_metadata() -> None:
-    packs = {str(pack["name"]): pack for pack in list_type_packs()}
-
-    journalism = packs["journalism"]
-    assert journalism["types"] == ["NewsItem"]
-    assert journalism["standard"] == "IPTC ninjs"
-    assert journalism["standard_version"] == "3.2"
-    assert journalism["files"] == [
+def _journalism_files() -> list[str]:
+    return [
+        "body-mapping.json",
         "ninjs-mapping.json",
+        "specs/body.md",
+        "specs/body.schema.sql",
         "specs/newsitem.md",
         "specs/newsitem.schema.sql",
         "standards/GeoJSON.json",
@@ -40,8 +37,18 @@ def test_journalism_pack_is_registered_from_pyproject_metadata() -> None:
     ]
 
 
+def test_journalism_pack_is_registered_from_pyproject_metadata() -> None:
+    packs = {str(pack["name"]): pack for pack in list_type_packs()}
+
+    journalism = packs["journalism"]
+    assert journalism["types"] == ["Body", "NewsItem"]
+    assert journalism["standard"] == "IPTC ninjs"
+    assert journalism["standard_version"] == "3.2"
+    assert journalism["files"] == _journalism_files()
+
+
 def test_journalism_contract_is_scaffolded_from_authored_examples(tmp_path: Path) -> None:
-    """The committed starter schema must be reproducible by the parser's own init command."""
+    """The committed starter schemas must be reproducible by the parser's own init command."""
     root = tmp_path / "journalism"
     examples = root / "examples"
     examples.mkdir(parents=True)
@@ -56,13 +63,13 @@ def test_journalism_contract_is_scaffolded_from_authored_examples(tmp_path: Path
     specs = cast("dict[str, object]", result["specs"])
     schemas = cast("dict[str, object]", result["schemas"])
 
-    assert specs["created"] == ["specs/newsitem.md"]
-    assert schemas["created"] == ["specs/newsitem.schema.sql"]
-    generated = (root / "specs/newsitem.schema.sql").read_text(encoding="utf-8")
-    expected = next(
-        item.content for item in journalism_pack().files if item.path == "specs/newsitem.schema.sql"
-    )
-    assert generated == expected
+    assert specs["created"] == ["specs/body.md", "specs/newsitem.md"]
+    assert schemas["created"] == ["specs/body.schema.sql", "specs/newsitem.schema.sql"]
+
+    packaged = {item.path: item.content for item in journalism_pack().files}
+    for name in ("body.schema.sql", "newsitem.schema.sql"):
+        generated = (root / "specs" / name).read_text(encoding="utf-8")
+        assert generated == packaged[f"specs/{name}"]
 
 
 def test_install_type_pack_previews_writes_and_is_idempotent(tmp_path: Path) -> None:
@@ -70,17 +77,15 @@ def test_install_type_pack_previews_writes_and_is_idempotent(tmp_path: Path) -> 
 
     assert preview["written"] == []
     assert preview["collisions"] == []
-    assert preview["planned"] == [
-        "ninjs-mapping.json",
-        "specs/newsitem.md",
-        "specs/newsitem.schema.sql",
-        "standards/GeoJSON.json",
-        "standards/ninjs-schema_3.2.json",
-    ]
+    assert preview["planned"] == _journalism_files()
+    assert not (tmp_path / "specs/body.md").exists()
     assert not (tmp_path / "specs/newsitem.md").exists()
 
     committed = install_type_pack("journalism", tmp_path, write=True)
     assert committed["written"] == preview["planned"]
+    assert (tmp_path / "body-mapping.json").is_file()
+    assert (tmp_path / "specs/body.md").is_file()
+    assert (tmp_path / "specs/body.schema.sql").is_file()
     assert (tmp_path / "specs/newsitem.md").is_file()
     assert (tmp_path / "specs/newsitem.schema.sql").is_file()
 
@@ -100,4 +105,5 @@ def test_install_type_pack_aborts_batch_on_collision(tmp_path: Path) -> None:
 
     assert result["collisions"] == ["specs/newsitem.md"]
     assert result["written"] == []
+    assert not (specs / "body.schema.sql").exists()
     assert not (specs / "newsitem.schema.sql").exists()
