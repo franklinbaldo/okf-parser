@@ -5,9 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from importlib.metadata import EntryPoint, entry_points
 from importlib.resources import files
-from importlib.resources.abc import Traversable
 from pathlib import Path, PurePosixPath
-from typing import cast
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from importlib.resources.abc import Traversable
 
 PACK_ENTRY_POINT_GROUP = "okf_parser.packs"
 

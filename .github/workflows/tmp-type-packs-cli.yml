@@ -41,6 +41,7 @@ jobs:
               text = text.replace(command_anchor, '\n' + commands + '@app.command\ndef serve(\n', 1)
           path.write_text(text, encoding='utf-8')
           PY
+          uv run ruff check --fix src/okf_parser/cli.py src/okf_parser/type_packs.py tests/test_type_packs.py
           uv run ruff format src/okf_parser/cli.py src/okf_parser/type_packs.py tests/test_type_packs.py
           uv run ruff check src/okf_parser/cli.py src/okf_parser/type_packs.py tests/test_type_packs.py
           uv run pytest tests/test_type_packs.py
