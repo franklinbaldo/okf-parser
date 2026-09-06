@@ -2,3 +2,8 @@
 # PyPI long description. It carries no frontmatter by design, because stripping
 # it is the whole point, so it is a packaging artifact rather than a concept.
 /README.pypi.md
+
+# Embedded type-pack sources are standalone OKF bundles. Dedicated pack tests
+# validate them from their own roots so their domain specs do not leak into the
+# repository-level docs/types contract.
+/src/okf_parser/packs/

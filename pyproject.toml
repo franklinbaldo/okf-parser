@@ -1,6 +1,6 @@
 [project]
 name = "okf-parser"
-version = "0.45.8"
+version = "0.45.9"
 description = "Relational inspection and validation for Open Knowledge Format bundles"
 # Derived from README.md by scripts/pypi_readme.py. README.md is an OKF concept
 # and must open with frontmatter, which PyPI would otherwise render as a heading
@@ -58,6 +58,9 @@ Documentation = "https://github.com/franklinbaldo/okf-parser/blob/main/docs/arch
 
 [project.optional-dependencies]
 graphql = ["graphql-core>=3.2,<4"]
+
+[project.entry-points."okf_parser.packs"]
+journalism = "okf_parser.type_packs:journalism_pack"
 
 [dependency-groups]
 dev = [
