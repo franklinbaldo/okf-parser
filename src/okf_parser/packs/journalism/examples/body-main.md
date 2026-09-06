@@ -2,8 +2,8 @@
 type: Body
 role: main
 contentType: text/markdown
-charCount: 190
-wordCount: 30
+charCount: 179
+wordCount: 31
 ---
 
 ## Corpo principal
