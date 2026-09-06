@@ -31,6 +31,7 @@ jobs:
           uv run pytest tests/test_type_packs.py
           uv run okf-parser check . --require-spec 'docs/types/{slug}.md' --normative-spec
           uv run okf-parser check src/okf_parser/packs/journalism \
+            --exclude 'specs/*.md' \
             --require-spec 'specs/{slug}.md' --normative-spec
 
           rm -rf dist
