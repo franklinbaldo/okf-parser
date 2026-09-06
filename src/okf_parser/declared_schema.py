@@ -21,7 +21,7 @@ migration script, not the safety of a JSON Schema document.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 import duckdb
 
@@ -31,6 +31,9 @@ from okf_parser.type_specs import spec_relative_path
 if TYPE_CHECKING:
     from okf_parser.duckdb_types import DuckDBLogicalType
     from okf_parser.schema_lexemes import CastKind
+
+
+type StarterKind = Literal["string", "boolean", "integer", "number", "date", "datetime", "json"]
 
 
 class DeclaredSchemaError(ValueError):
@@ -127,13 +130,14 @@ def parse_declared_schema(sql_text: str, concept_type: str) -> DeclaredSchema:
     )
 
 
-_DUCKDB_TYPE_FOR_KIND: dict[CastKind, str] = {
+_DUCKDB_TYPE_FOR_KIND: dict[StarterKind, str] = {
     "string": "VARCHAR",
     "boolean": "BOOLEAN",
     "integer": "BIGINT",
     "number": "DOUBLE",
     "date": "DATE",
     "datetime": "TIMESTAMPTZ",
+    "json": "JSON",
 }
 
 # Narrowest to widest: the first type every observed value TRY_CASTs into
@@ -232,7 +236,7 @@ def infer_kinds_via_duckdb(columns: dict[str, list[str | None]]) -> dict[str, Ca
         con.close()
 
 
-def render_starter_schema_sql(concept_type: str, columns: dict[str, CastKind]) -> str | None:
+def render_starter_schema_sql(concept_type: str, columns: dict[str, StarterKind]) -> str | None:
     """Render a starter `CREATE TABLE` from inferred column kinds, or ``None`` for no columns.
 
     A one-way trip out of decision 5a's closed type set (`schema

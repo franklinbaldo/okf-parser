@@ -4,7 +4,7 @@ uri: https://example.org/news/complete-profile
 ninjs_type: text
 representationType: full
 profile: okf-journalism-ninjs-3.2
-version: "1"
+version: v1
 firstCreated: 2026-09-06T10:00:00Z
 versionCreated: 2026-09-06T10:05:00Z
 contentCreated: 2026-09-06T09:55:00Z

@@ -78,7 +78,7 @@ def _coerce_geojson(value: object) -> object:
     return value
 
 
-def _coerce(
+def _coerce(  # noqa: PLR0911
     value: object,
     schema: dict[str, object],
     *,
@@ -87,7 +87,10 @@ def _coerce(
 ) -> object:
     """Project OKF's spelling-preserving scalars into the JSON types required by ninjs."""
     reference = schema.get("$ref")
-    if isinstance(reference, str) and reference.rstrip("#") == "https://geojson.org/schema/GeoJSON.json":
+    if (
+        isinstance(reference, str)
+        and reference.rstrip("#") == "https://geojson.org/schema/GeoJSON.json"
+    ):
         return _coerce_geojson(value)
     resolved = _resolve_schema(schema, root=root, geojson=geojson)
     expected = resolved.get("type")
@@ -170,9 +173,7 @@ def test_complete_fixture_authors_every_non_projected_ninjs_property() -> None:
     parsed = parse_document_text(Path("complete-profile.md"), source)
 
     expected_okf = {
-        cast("str", rule["okf"])
-        for rule in rules.values()
-        if rule["mode"] != "projected"
+        cast("str", rule["okf"]) for rule in rules.values() if rule["mode"] != "projected"
     }
     assert expected_okf <= set(parsed.frontmatter)
     assert set(parsed.frontmatter) == expected_okf | {"type"}
@@ -192,7 +193,10 @@ def test_complete_fixture_projects_to_valid_official_ninjs_3_2() -> None:
         format_checker=FormatChecker(),
     )
 
-    errors = sorted(validator.iter_errors(_project_complete_example()), key=lambda item: list(item.path))
+    errors = sorted(
+        validator.iter_errors(_project_complete_example()),
+        key=lambda item: list(item.path),
+    )
     assert errors == [], "\n".join(
         f"{'.'.join(str(part) for part in error.path) or '<root>'}: {error.message}"
         for error in errors

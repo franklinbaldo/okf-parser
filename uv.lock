@@ -927,6 +927,7 @@ graphql = [
 [package.dev-dependencies]
 dev = [
     { name = "graphql-core" },
+    { name = "jsonschema" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
@@ -956,6 +957,7 @@ provides-extras = ["graphql"]
 [package.metadata.requires-dev]
 dev = [
     { name = "graphql-core", specifier = ">=3.2,<4" },
+    { name = "jsonschema", specifier = ">=4.26,<5" },
     { name = "pytest", specifier = ">=8,<10" },
     { name = "pytest-cov", specifier = ">=6,<7" },
     { name = "ruff", specifier = ">=0.15,<0.16" },

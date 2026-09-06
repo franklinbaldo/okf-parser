@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from okf_parser.declared_schema import (
+    StarterKind,
     declared_schema_relative_path,
     infer_kinds_via_duckdb,
     render_starter_schema_sql,
@@ -20,8 +21,6 @@ from okf_parser.type_specs import spec_relative_path
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    from okf_parser.schema_lexemes import CastKind
 
 
 def _stub_content(concept_type: str) -> str:
@@ -98,43 +97,47 @@ def scaffold_missing_specs(
     return {"created": sorted(created), "would_create": [], "collisions": [], "written": True}
 
 
-def _scalar_columns(documents: list[dict[str, object]]) -> dict[str, CastKind]:
-    """One type's top-level scalar fields, each typed by asking DuckDB's `TRY_CAST`.
+def _starter_columns(documents: list[dict[str, object]]) -> dict[str, StarterKind]:
+    """Infer conservative top-level physical columns from authored frontmatter.
 
-    A field observed as a list or map on even one document is dropped
-    entirely, not just for that document: RFC 0006's declared schema is a
-    flat table, so there is no starter DDL to propose for a shape it cannot
-    express in the first place. `type` is never a candidate column - every
-    declared table already gets its identity from the type slug itself.
+    Scalars keep the existing DuckDB TRY_CAST inference. A field whose every
+    non-null observation is a mapping or list becomes DuckDB JSON, preserving
+    arbitrary nested shape without pretending sparse examples define a complete
+    STRUCT. Mixed scalar/structured fields remain omitted.
     """
     field_names: set[str] = set()
-    structured: set[str] = set()
+    structured_seen: set[str] = set()
+    scalar_seen: set[str] = set()
     for document in documents:
         for key, value in document.items():
             if key == "type":
                 continue
             field_names.add(key)
+            if value is None:
+                continue
             if isinstance(value, (dict, list)):
-                structured.add(key)
+                structured_seen.add(key)
+            else:
+                scalar_seen.add(key)
 
     def cell(value: object) -> str | None:
         if value is None:
             return None
         return value if isinstance(value, str) else str(value)
 
-    # One row per document, aligned across every scalar field - the shape
-    # `infer_kinds_via_duckdb` needs to type every column in a single
-    # vectorized DuckDB pass, rather than one round trip per field.
     columns_by_name = {
         name: [cell(document.get(name)) for document in documents]
-        for name in sorted(field_names - structured)
+        for name in sorted(field_names - structured_seen)
     }
-    return infer_kinds_via_duckdb(columns_by_name)
+    inferred: dict[str, StarterKind] = dict(infer_kinds_via_duckdb(columns_by_name))
+    for name in sorted(structured_seen - scalar_seen):
+        inferred[name] = "json"
+    return inferred
 
 
 def _schema_plan(
     root: Path, spec_template: str, documents_by_type: dict[str, list[dict[str, object]]]
-) -> tuple[dict[str, tuple[str, dict[str, CastKind]]], dict[str, list[str]]]:
+) -> tuple[dict[str, tuple[str, dict[str, StarterKind]]], dict[str, list[str]]]:
     by_path: dict[str, list[str]] = {}
     for concept_type in documents_by_type:
         relative = declared_schema_relative_path(spec_template, concept_type)
@@ -143,12 +146,12 @@ def _schema_plan(
         by_path.setdefault(relative, []).append(concept_type)
 
     collisions = {path: types for path, types in by_path.items() if len(types) > 1}
-    to_create: dict[str, tuple[str, dict[str, CastKind]]] = {}
+    to_create: dict[str, tuple[str, dict[str, StarterKind]]] = {}
     for relative, types in by_path.items():
         if relative in collisions or (root / relative).is_file():
             continue
         concept_type = types[0]
-        columns = _scalar_columns(documents_by_type[concept_type])
+        columns = _starter_columns(documents_by_type[concept_type])
         if columns:
             to_create[concept_type] = (relative, columns)
     return to_create, collisions
