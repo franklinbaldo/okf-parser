@@ -9,6 +9,7 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from importlib.resources.abc import Traversable
 
 PACK_ENTRY_POINT_GROUP = "okf_parser.packs"
@@ -107,10 +108,11 @@ def _registered_entry_points() -> tuple[EntryPoint, ...]:
 
 def _load_entry_point(point: EntryPoint) -> TypePack:
     """Load one pack factory and require its declared identity to match metadata."""
-    factory = cast("object", point.load())
-    if not callable(factory):
+    loaded = point.load()
+    if not callable(loaded):
         msg = f"type-pack entry point {point.name!r} is not callable"
         raise TypeError(msg)
+    factory = cast("Callable[[], TypePack]", loaded)
     pack = factory()
     if not isinstance(pack, TypePack):
         msg = f"type-pack entry point {point.name!r} did not return TypePack"
