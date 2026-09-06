@@ -2,6 +2,8 @@
 type: Spec
 title: NewsItem
 description: OKF authoring profile for an IPTC ninjs 3.2 news object
+pack: journalism
+pack_version: "1"
 standard: IPTC ninjs
 standard_version: "3.2"
 standard_schema: https://www.iptc.org/std/ninjs/ninjs-schema_3.2.json
@@ -17,6 +19,10 @@ This spec was bootstrapped by authoring the examples in `../examples/` first and
 running the normal `okf-parser init --infer-schema` flow over that bundle. The
 adjacent `.schema.sql` is therefore parser-produced starter physical intent, not
 a hand-maintained duplicate of ninjs.
+
+The `pack` and `pack_version` metadata record where this starter came from. They
+are provenance only: after installation the consumer owns an ordinary OKF spec
+and may evolve it without retaining a runtime dependency on this pack.
 
 ## Mapping
 
