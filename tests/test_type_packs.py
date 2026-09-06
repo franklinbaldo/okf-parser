@@ -31,7 +31,7 @@ def test_journalism_pack_is_registered_from_pyproject_metadata() -> None:
     assert journalism["types"] == ["NewsItem"]
     assert journalism["standard"] == "IPTC ninjs"
     assert journalism["standard_version"] == "3.2"
-    assert journalism["files"] == ["newsitem.md", "newsitem.schema.sql"]
+    assert journalism["files"] == ["specs/newsitem.md", "specs/newsitem.schema.sql"]
 
 
 def test_journalism_contract_is_scaffolded_from_authored_examples(tmp_path: Path) -> None:
@@ -52,7 +52,7 @@ def test_journalism_contract_is_scaffolded_from_authored_examples(tmp_path: Path
     assert result["schemas"]["created"] == ["specs/newsitem.schema.sql"]
     generated = (root / "specs/newsitem.schema.sql").read_text(encoding="utf-8")
     expected = next(
-        item.content for item in journalism_pack().files if item.path == "newsitem.schema.sql"
+        item.content for item in journalism_pack().files if item.path == "specs/newsitem.schema.sql"
     )
     assert generated == expected
 
@@ -62,13 +62,13 @@ def test_install_type_pack_previews_writes_and_is_idempotent(tmp_path: Path) -> 
 
     assert preview["written"] == []
     assert preview["collisions"] == []
-    assert preview["planned"] == ["newsitem.md", "newsitem.schema.sql"]
-    assert not (tmp_path / "newsitem.md").exists()
+    assert preview["planned"] == ["specs/newsitem.md", "specs/newsitem.schema.sql"]
+    assert not (tmp_path / "specs/newsitem.md").exists()
 
     committed = install_type_pack("journalism", tmp_path, write=True)
     assert committed["written"] == preview["planned"]
-    assert (tmp_path / "newsitem.md").is_file()
-    assert (tmp_path / "newsitem.schema.sql").is_file()
+    assert (tmp_path / "specs/newsitem.md").is_file()
+    assert (tmp_path / "specs/newsitem.schema.sql").is_file()
 
     repeated = install_type_pack("journalism", tmp_path, write=True)
     assert repeated["planned"] == []
@@ -78,10 +78,12 @@ def test_install_type_pack_previews_writes_and_is_idempotent(tmp_path: Path) -> 
 
 
 def test_install_type_pack_aborts_batch_on_collision(tmp_path: Path) -> None:
-    (tmp_path / "newsitem.md").write_text("different\n", encoding="utf-8")
+    specs = tmp_path / "specs"
+    specs.mkdir()
+    (specs / "newsitem.md").write_text("different\n", encoding="utf-8")
 
     result = install_type_pack("journalism", tmp_path, write=True)
 
-    assert result["collisions"] == ["newsitem.md"]
+    assert result["collisions"] == ["specs/newsitem.md"]
     assert result["written"] == []
-    assert not (tmp_path / "newsitem.schema.sql").exists()
+    assert not (specs / "newsitem.schema.sql").exists()
