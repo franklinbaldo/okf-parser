@@ -1,6 +1,7 @@
 CREATE TABLE "NewsItem" (
     "altIds" JSON,
     "associations" JSON,
+    "bodies" JSON,
     "by" VARCHAR,
     "contentCreated" TIMESTAMPTZ,
     "copyrightHolder" VARCHAR,
