@@ -1,0 +1,55 @@
+name: Temporary type-packs CLI patch
+
+on:
+  push:
+    branches: [feat/type-packs-ninjs]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/type-packs-ninjs
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+      - name: Add the pack CLI surface
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/okf_parser/cli.py')
+          text = path.read_text(encoding='utf-8')
+          import_anchor = 'from okf_parser.duckdb import BundleExportError\n'
+          import_line = 'from okf_parser.type_packs import install_type_pack, list_type_packs\n'
+          if import_line not in text:
+              text = text.replace(import_anchor, import_anchor + import_line, 1)
+
+          command_anchor = '\ndef _tool_annotations(\n'
+          commands = '''\n@app.command(name="packs")\ndef packs() -> CliResult[JsonPayload]:\n    """List type packs registered by installed package metadata."""\n    return CliResult({"packs": list_type_packs()})\n\n\n@app.command(name="add-pack")\ndef add_pack(\n    name: str,\n    path: str = ".",\n    *,\n    write: bool = False,\n) -> CliResult[JsonPayload]:\n    """Preview or install an opt-in reusable type pack."""\n    payload = install_type_pack(name, path, write=write)\n    collisions = cast("list[str]", payload["collisions"])\n    return CliResult(payload, exit_code=1 if collisions else 0)\n\n\n'''
+          if '@app.command(name="packs")' not in text:
+              text = text.replace(command_anchor, '\n' + commands + 'def _tool_annotations(\n', 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          uv sync --frozen --all-groups
+          uv run ruff format src/okf_parser/cli.py
+          uv run ruff check src/okf_parser/cli.py
+          rm .github/workflows/tmp-type-packs-cli.yml
+      - name: Commit CLI bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'feat(cli): expose type-pack list and install commands'
+          git push origin HEAD:feat/type-packs-ninjs
