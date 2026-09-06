@@ -1,0 +1,124 @@
+name: Temporary finish structured pack scaffolding
+
+on:
+  push:
+    branches: [feat/type-packs-dogfood]
+    paths:
+      - .github/workflows/tmp-structured-pack-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/type-packs-dogfood
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          version: 0.11.21
+          python-version: '3.12'
+      - name: Patch structured starter inference
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          declared = Path('src/okf_parser/declared_schema.py')
+          text = declared.read_text()
+          text = text.replace('from typing import TYPE_CHECKING\n', 'from typing import TYPE_CHECKING, Literal\n', 1)
+          needle = '''if TYPE_CHECKING:\n    from okf_parser.duckdb_types import DuckDBLogicalType\n    from okf_parser.schema_lexemes import CastKind\n\n\nclass DeclaredSchemaError'''
+          replacement = '''if TYPE_CHECKING:\n    from okf_parser.duckdb_types import DuckDBLogicalType\n    from okf_parser.schema_lexemes import CastKind\n\n\ntype StarterKind = Literal[\n    "string", "boolean", "integer", "number", "date", "datetime", "json"\n]\n\n\nclass DeclaredSchemaError'''
+          assert needle in text
+          text = text.replace(needle, replacement, 1)
+          text = text.replace('_DUCKDB_TYPE_FOR_KIND: dict[CastKind, str] = {', '_DUCKDB_TYPE_FOR_KIND: dict[StarterKind, str] = {', 1)
+          text = text.replace('    "datetime": "TIMESTAMPTZ",\n}', '    "datetime": "TIMESTAMPTZ",\n    "json": "JSON",\n}', 1)
+          text = text.replace(
+              'def render_starter_schema_sql(concept_type: str, columns: dict[str, CastKind]) -> str | None:',
+              'def render_starter_schema_sql(\n    concept_type: str, columns: dict[str, StarterKind]\n) -> str | None:',
+              1,
+          )
+          declared.write_text(text)
+
+          scaffold = Path('src/okf_parser/spec_scaffold.py')
+          text = scaffold.read_text()
+          text = text.replace('    render_starter_schema_sql,\n)', '    render_starter_schema_sql,\n    StarterKind,\n)', 1)
+          text = text.replace(
+              'if TYPE_CHECKING:\n    from pathlib import Path\n\n    from okf_parser.schema_lexemes import CastKind\n',
+              'if TYPE_CHECKING:\n    from pathlib import Path\n',
+              1,
+          )
+          start = text.index('def _scalar_columns(')
+          end = text.index('\ndef _schema_plan(', start)
+          new_block = '''def _starter_columns(documents: list[dict[str, object]]) -> dict[str, StarterKind]:\n    """Infer conservative top-level physical columns from authored frontmatter.\n\n    Scalars keep the existing DuckDB TRY_CAST inference. A field whose every\n    non-null observation is a mapping or list becomes DuckDB JSON, preserving\n    arbitrary nested shape without pretending sparse examples define a complete\n    STRUCT. Mixed scalar/structured fields remain omitted.\n    """\n    field_names: set[str] = set()\n    structured_seen: set[str] = set()\n    scalar_seen: set[str] = set()\n    for document in documents:\n        for key, value in document.items():\n            if key == "type":\n                continue\n            field_names.add(key)\n            if value is None:\n                continue\n            if isinstance(value, (dict, list)):\n                structured_seen.add(key)\n            else:\n                scalar_seen.add(key)\n\n    def cell(value: object) -> str | None:\n        if value is None:\n            return None\n        return value if isinstance(value, str) else str(value)\n\n    columns_by_name = {\n        name: [cell(document.get(name)) for document in documents]\n        for name in sorted(field_names - structured_seen)\n    }\n    inferred: dict[str, StarterKind] = dict(infer_kinds_via_duckdb(columns_by_name))\n    for name in sorted(structured_seen - scalar_seen):\n        inferred[name] = "json"\n    return inferred\n\n'''
+          text = text[:start] + new_block + text[end + 1:]
+          text = text.replace('dict[str, tuple[str, dict[str, CastKind]]]', 'dict[str, tuple[str, dict[str, StarterKind]]]', 2)
+          text = text.replace('columns = _scalar_columns(documents_by_type[concept_type])', 'columns = _starter_columns(documents_by_type[concept_type])', 1)
+          scaffold.write_text(text)
+
+          tests = Path('tests/test_spec_scaffold.py')
+          text = tests.read_text()
+          insertion = '''\n\ndef test_scaffold_declared_schema_infers_consistent_structures_as_json(tmp_path: Path) -> None:\n    documents: dict[str, list[dict[str, object]]] = {\n        "Rotina": [\n            {"type": "Rotina", "tags": ["a", "b"], "metadata": {"source": "one"}},\n            {"type": "Rotina", "tags": ["c"], "metadata": {"source": "two"}},\n        ]\n    }\n\n    scaffold_missing_declared_schemas(tmp_path, TEMPLATE, documents, write=True)\n\n    content = (tmp_path / "docs/types/rotina.schema.sql").read_text(encoding="utf-8")\n    assert '\"metadata\" JSON' in content\n    assert '\"tags\" JSON' in content\n'''
+          marker = '\ndef test_scaffold_declared_schema_never_overwrites_an_existing_file'
+          assert marker in text
+          text = text.replace(marker, insertion + marker, 1)
+          tests.write_text(text)
+
+          pyproject = Path('pyproject.toml')
+          text = pyproject.read_text()
+          text = text.replace('dev = [\n  "graphql-core>=3.2,<4",', 'dev = [\n  "graphql-core>=3.2,<4",\n  "jsonschema>=4.26,<5",', 1)
+          pyproject.write_text(text)
+
+          fixture = Path('src/okf_parser/packs/journalism/examples/complete-profile.md')
+          fixture.write_text(fixture.read_text().replace('version: "1"', 'version: v1', 1))
+
+          test = Path('tests/test_journalism_pack.py')
+          text = test.read_text()
+          text = text.replace('def _coerce(\n', 'def _coerce(  # noqa: PLR0911\n', 1)
+          text = text.replace(
+              '    errors = sorted(validator.iter_errors(_project_complete_example()), key=lambda item: list(item.path))\n',
+              '    errors = sorted(\n        validator.iter_errors(_project_complete_example()),\n        key=lambda item: list(item.path),\n    )\n',
+              1,
+          )
+          test.write_text(text)
+          PY
+      - name: Refresh lock and generated starter schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv lock
+          uv sync --frozen --all-groups
+          uv run python - <<'PY'
+          import shutil
+          import tempfile
+          from pathlib import Path
+          from okf_parser.service import init_bundle
+
+          source = Path('src/okf_parser/packs/journalism/examples')
+          with tempfile.TemporaryDirectory() as temporary:
+              root = Path(temporary) / 'journalism'
+              shutil.copytree(source, root / 'examples')
+              result = init_bundle(root.as_posix(), 'specs/{slug}.md', write=True, infer_schema=True)
+              assert result['schemas']['created'] == ['specs/newsitem.schema.sql']
+              shutil.copyfile(
+                  root / 'specs/newsitem.schema.sql',
+                  'src/okf_parser/packs/journalism/specs/newsitem.schema.sql',
+              )
+          PY
+          uv run ruff check --fix src/okf_parser/declared_schema.py src/okf_parser/spec_scaffold.py tests/test_spec_scaffold.py tests/test_journalism_pack.py
+          uv run ruff format src/okf_parser/declared_schema.py src/okf_parser/spec_scaffold.py tests/test_spec_scaffold.py tests/test_journalism_pack.py
+          uv run pytest tests/test_spec_scaffold.py tests/test_type_packs.py tests/test_journalism_pack.py -q
+      - name: Commit patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/tmp-structured-pack.yml .github/workflows/tmp-structured-pack-v2.yml
+          git add pyproject.toml uv.lock src/okf_parser/declared_schema.py src/okf_parser/spec_scaffold.py tests/test_spec_scaffold.py tests/test_journalism_pack.py src/okf_parser/packs/journalism/examples/complete-profile.md src/okf_parser/packs/journalism/specs/newsitem.schema.sql
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m 'feat(packs): cover structured ninjs fields in scaffold'
+          git push origin HEAD:feat/type-packs-dogfood
