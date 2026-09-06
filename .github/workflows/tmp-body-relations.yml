@@ -1,0 +1,83 @@
+name: Temporary materialize Body relations
+
+on:
+  push:
+    branches: [feat/type-packs-dogfood]
+    paths:
+      - .github/workflows/tmp-body-relations.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/type-packs-dogfood
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          version: 0.11.21
+          python-version: '3.12'
+      - name: Replace inline bodies with OKF relations
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/okf_parser/packs/journalism/examples/complete-profile.md')
+          text = path.read_text(encoding='utf-8')
+          old = '''bodies:\n  - role: main\n    contentType: text/markdown\n    charCount: 82\n    wordCount: 12\n    value: Complete body representation with role, media type, counts, and authored value.\n'''
+          new = '''bodies:\n  - resource: examples/body-main.md\n  - resource: examples/body-background.md\n'''
+          assert old in text
+          text = text.replace(old, new, 1)
+          old_tail = '''---\n\nEste corpo Markdown continua sendo a forma autoral conveniente. Quando `bodies` não é informado no frontmatter, ele serve como fallback para um corpo ninjs simples; quando `bodies` é informado, a estrutura ninjs completa é preservada.\n'''
+          assert old_tail in text
+          text = text.replace(old_tail, '---\n', 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+      - name: Regenerate dogfood schemas and run focused gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv sync --frozen --all-groups
+          uv run python - <<'PY'
+          import shutil
+          import tempfile
+          from pathlib import Path
+          from okf_parser.service import init_bundle
+
+          source = Path('src/okf_parser/packs/journalism/examples')
+          with tempfile.TemporaryDirectory() as temporary:
+              root = Path(temporary) / 'journalism'
+              shutil.copytree(source, root / 'examples')
+              result = init_bundle(root.as_posix(), 'specs/{slug}.md', write=True, infer_schema=True)
+              created = set(result['schemas']['created'])
+              assert created == {'specs/body.schema.sql', 'specs/newsitem.schema.sql'}, created
+              for name in ('body.schema.sql', 'newsitem.schema.sql'):
+                  shutil.copyfile(
+                      root / 'specs' / name,
+                      Path('src/okf_parser/packs/journalism/specs') / name,
+                  )
+          PY
+          uv run ruff check --fix tests/test_journalism_pack.py src/okf_parser/type_packs.py
+          uv run ruff format tests/test_journalism_pack.py src/okf_parser/type_packs.py
+          uv run ty check src tests
+          uv run pytest tests/test_journalism_pack.py tests/test_type_packs.py tests/test_spec_scaffold.py tests/test_concepts.py -q
+      - name: Commit body relation model
+        shell: bash
+        run: |
+          set -euo pipefail
+          git rm .github/workflows/tmp-body-relations.yml
+          git add src/okf_parser/packs/journalism/examples/complete-profile.md \
+                  src/okf_parser/packs/journalism/specs/body.schema.sql \
+                  src/okf_parser/packs/journalism/specs/newsitem.schema.sql \
+                  src/okf_parser/type_packs.py \
+                  tests/test_journalism_pack.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m 'refactor(packs): model ninjs bodies as linked Markdown concepts'
+          git push origin HEAD:feat/type-packs-dogfood
