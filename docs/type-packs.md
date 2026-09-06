@@ -66,24 +66,31 @@ rather than guessed.
 ## Journalism
 
 `journalism` provides `NewsItem`, a complete OKF authoring profile for the root IPTC ninjs 3.2 news
-object. IPTC remains the semantic authority; the pack vendors the official ninjs 3.2 JSON Schema
-and its GeoJSON dependency as fixed conformance references.
+object. IPTC remains the semantic authority. The installed pack includes the generated spec/schema,
+the machine-readable mapping, the official ninjs 3.2 JSON Schema, and its GeoJSON dependency, so a
+consumer receives the profile contract rather than a spec that points at package-private files.
 
 A machine-readable mapping is checked against the official schema. All 41 top-level ninjs 3.2
-properties must be classified. There are only two adaptations: `ninjs.type` becomes `ninjs_type`
-because OKF owns `type`, and ninjs `bodies` is projected from the Markdown body. Every other root
-property preserves the ninjs name.
+properties must be represented. `ninjs.type` becomes `ninjs_type` because OKF owns `type`. Every
+other root property preserves its ninjs name.
+
+`bodies` is lossless: the complete ninjs array can be authored as structured frontmatter, including
+role, content type, character count, word count, and value. For the common simple-text case, when
+`bodies` is absent the Markdown document body projects to one ninjs body with
+`contentType: text/markdown`. This keeps Markdown convenient without making the profile unable to
+represent the complete standard field.
 
 Structured values such as `plannedCoverage`, `renditions`, `associations`, `infoSources`, people,
 organisations, places, events, subjects, rights and trust indicators keep their nested ninjs shape
 in frontmatter. Their starter SQL columns are `JSON`; the complete nested semantic definition is
-not duplicated into SQL because the vendored IPTC schema is the authoritative definition.
+not duplicated into SQL because the shipped IPTC schema is the authoritative definition.
 
-The conformance fixture authors every non-projected root property. Tests then project that OKF
-fixture back to a ninjs object, restore JSON scalar types according to the official schema, and
-validate the result with the official Draft 2020-12 schema. The tests also require the mapping's
-property set to equal the official `ninjsType` property set exactly, so schema drift cannot silently
-leave a ninjs root property unrepresented.
+The conformance fixture authors all 41 mapped root properties. Tests require the generated SQL to
+have exactly the same 41 mapped columns, project the fixture back to a ninjs object, restore JSON
+scalar types according to the official schema, and validate the result with the official Draft
+2020-12 schema. A separate test validates the Markdown-body fallback. The mapping's property set
+must equal the official `ninjsType` property set exactly, so a missing root property cannot silently
+pass.
 
 This distinction matters for `infoSources`: it retains the IPTC meaning of information-supplying
 people or organisations. Documentary evidence, retrieval observations, preservation state and
