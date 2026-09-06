@@ -20,7 +20,7 @@
     "edNote": {"mode": "direct", "okf": "edNote"},
     "language": {"mode": "direct", "okf": "language"},
     "descriptions": {"mode": "direct", "okf": "descriptions", "nested": "shape-preserving"},
-    "bodies": {"mode": "projected", "okf": "$body", "contentType": "text/markdown"},
+    "bodies": {"mode": "hybrid", "okf": "bodies", "fallback": "$body", "contentType": "text/markdown", "nested": "shape-preserving"},
     "headlines": {"mode": "direct", "okf": "headlines", "nested": "shape-preserving"},
     "people": {"mode": "direct", "okf": "people", "nested": "shape-preserving"},
     "organisations": {"mode": "direct", "okf": "organisations", "nested": "shape-preserving"},
