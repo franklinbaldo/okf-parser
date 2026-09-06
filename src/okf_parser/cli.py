@@ -26,6 +26,7 @@ from okf_parser.service import (
     schema_bundle,
     write_format,
 )
+from okf_parser.type_packs import install_type_pack, list_type_packs
 
 type McpTransport = Literal["stdio", "http", "sse"]
 type SchemaFormat = Literal["json", "zod", "pydantic", "graphql"]
@@ -495,6 +496,25 @@ def mcp_duckdb_export(
         exclude=exclude,
         spec_template=spec_template,
     )
+
+
+@app.command(name="packs")
+def packs() -> CliResult[JsonPayload]:
+    """List type packs registered by installed package metadata."""
+    return CliResult({"packs": list_type_packs()})
+
+
+@app.command(name="add-pack")
+def add_pack(
+    name: str,
+    path: str = ".",
+    *,
+    write: bool = False,
+) -> CliResult[JsonPayload]:
+    """Preview or install an opt-in reusable type pack."""
+    payload = install_type_pack(name, path, write=write)
+    collisions = cast("list[str]", payload["collisions"])
+    return CliResult(payload, exit_code=1 if collisions else 0)
 
 
 def _tool_annotations(
