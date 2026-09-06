@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from okf_parser.cli import add_pack, packs
 from okf_parser.type_packs import install_type_pack, journalism_pack, list_type_packs
@@ -65,7 +65,8 @@ def test_install_type_pack_aborts_batch_on_collision(tmp_path: Path) -> None:
 
 def test_packs_cli_lists_registered_package_metadata() -> None:
     result = packs()
-    registered = {pack["name"]: pack for pack in result.payload["packs"]}
+    rows = cast("list[dict[str, str]]", result.payload["packs"])
+    registered = {pack["name"]: pack for pack in rows}
 
     assert result.exit_code == 0
     assert registered["journalism"]["standard_version"] == "3.2"
