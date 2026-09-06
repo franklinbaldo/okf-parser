@@ -2,8 +2,8 @@
 type: Body
 role: background
 contentType: text/markdown
-charCount: 158
-wordCount: 24
+charCount: 159
+wordCount: 22
 ---
 
 ### Contexto
