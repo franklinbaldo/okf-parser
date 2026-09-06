@@ -75,7 +75,7 @@ jobs:
           set -euo pipefail
           uv lock
           uv sync --frozen --all-groups
-          python - <<'PY'
+          uv run python - <<'PY'
           import shutil
           import tempfile
           from pathlib import Path
