@@ -106,7 +106,9 @@ def _safe_target(root: Path, relative_path: str) -> Path:
     return target
 
 
-def install_type_pack(name: str, destination: str | Path, *, write: bool = False) -> dict[str, object]:
+def install_type_pack(
+    name: str, destination: str | Path, *, write: bool = False
+) -> dict[str, object]:
     """Preview or materialize one pack without overwriting authored files."""
     pack = get_type_pack(name)
     root = Path(destination)
