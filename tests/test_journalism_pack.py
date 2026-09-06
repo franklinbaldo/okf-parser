@@ -163,7 +163,7 @@ def test_ninjs_mapping_covers_every_official_3_2_root_property() -> None:
 
     for name, property_schema in properties.items():
         if property_schema.get("type") in {"array", "object"} and name != "bodies":
-            assert rules[name].get("nested") == "verbatim"
+            assert rules[name].get("nested") == "shape-preserving"
 
 
 def test_complete_fixture_authors_every_non_projected_ninjs_property() -> None:
