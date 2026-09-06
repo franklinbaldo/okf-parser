@@ -92,7 +92,7 @@ def journalism_pack() -> TypePack:
     profile_files = tuple(
         item
         for item in resources
-        if item.path == "ninjs-mapping.json"
+        if item.path.endswith("-mapping.json")
         or item.path.startswith("specs/")
         or item.path.startswith("standards/")
     )
@@ -100,7 +100,7 @@ def journalism_pack() -> TypePack:
         name="journalism",
         version="1",
         description="Journalism types based on the IPTC ninjs 3.2 news model.",
-        types=("NewsItem",),
+        types=("Body", "NewsItem"),
         files=profile_files,
         standard="IPTC ninjs",
         standard_version="3.2",
