@@ -59,6 +59,9 @@ Documentation = "https://github.com/franklinbaldo/okf-parser/blob/main/docs/arch
 [project.optional-dependencies]
 graphql = ["graphql-core>=3.2,<4"]
 
+[project.entry-points."okf_parser.packs"]
+journalism = "okf_parser.type_packs:journalism_pack"
+
 [dependency-groups]
 dev = [
   "graphql-core>=3.2,<4",
