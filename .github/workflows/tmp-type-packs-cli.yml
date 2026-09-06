@@ -1,0 +1,56 @@
+name: Temporary type-pack CLI patch
+
+on:
+  push:
+    branches: [feat/type-packs-dogfood]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/type-packs-dogfood
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+      - name: Add CLI surface and verify the dogfood path
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv sync --frozen --all-groups
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/okf_parser/cli.py')
+          text = path.read_text(encoding='utf-8')
+          import_line = 'from okf_parser.type_packs import install_type_pack, list_type_packs\n'
+          import_anchor = 'type McpTransport = Literal["stdio", "http", "sse"]\n'
+          if import_line not in text:
+              text = text.replace(import_anchor, import_line + '\n' + import_anchor, 1)
+
+          command_anchor = '\n@app.command\ndef serve(\n'
+          commands = '''\n@app.command\ndef packs() -> CliResult[JsonPayload]:\n    """List opt-in OKF type packs registered by installed package metadata."""\n    return CliResult({"packs": list_type_packs()})\n\n\n@app.command(name="add-pack")\ndef add_pack(\n    name: str,\n    path: str = ".",\n    *,\n    write: bool = False,\n) -> CliResult[JsonPayload]:\n    """Preview or install an opt-in type pack into an ordinary OKF bundle."""\n    payload = install_type_pack(name, path, write=write)\n    return CliResult(payload, exit_code=1 if payload["collisions"] else 0)\n\n\n'''
+          if 'def packs() -> CliResult[JsonPayload]:' not in text:
+              text = text.replace(command_anchor, '\n' + commands + '@app.command\ndef serve(\n', 1)
+          path.write_text(text, encoding='utf-8')
+          PY
+          uv run ruff format src/okf_parser/cli.py src/okf_parser/type_packs.py tests/test_type_packs.py
+          uv run ruff check src/okf_parser/cli.py src/okf_parser/type_packs.py tests/test_type_packs.py
+          uv run pytest tests/test_type_packs.py
+          rm .github/workflows/tmp-type-packs-cli.yml
+      - name: Commit verified CLI bytes
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m 'feat(cli): list and install optional type packs'
+          git push origin HEAD:feat/type-packs-dogfood
