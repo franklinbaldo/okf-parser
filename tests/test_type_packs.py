@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from importlib.resources import files
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from okf_parser.service import init_bundle
 from okf_parser.type_packs import install_type_pack, journalism_pack, list_type_packs
@@ -42,14 +42,16 @@ def test_journalism_contract_is_scaffolded_from_authored_examples(tmp_path: Path
     _copy_resource_tree("packs/journalism/examples", examples)
 
     result = init_bundle(
-        root,
+        root.as_posix(),
         "specs/{slug}.md",
         write=True,
         infer_schema=True,
     )
+    specs = cast("dict[str, object]", result["specs"])
+    schemas = cast("dict[str, object]", result["schemas"])
 
-    assert result["specs"]["created"] == ["specs/newsitem.md"]
-    assert result["schemas"]["created"] == ["specs/newsitem.schema.sql"]
+    assert specs["created"] == ["specs/newsitem.md"]
+    assert schemas["created"] == ["specs/newsitem.schema.sql"]
     generated = (root / "specs/newsitem.schema.sql").read_text(encoding="utf-8")
     expected = next(
         item.content for item in journalism_pack().files if item.path == "specs/newsitem.schema.sql"
