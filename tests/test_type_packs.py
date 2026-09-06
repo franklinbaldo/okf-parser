@@ -31,7 +31,13 @@ def test_journalism_pack_is_registered_from_pyproject_metadata() -> None:
     assert journalism["types"] == ["NewsItem"]
     assert journalism["standard"] == "IPTC ninjs"
     assert journalism["standard_version"] == "3.2"
-    assert journalism["files"] == ["specs/newsitem.md", "specs/newsitem.schema.sql"]
+    assert journalism["files"] == [
+        "ninjs-mapping.json",
+        "specs/newsitem.md",
+        "specs/newsitem.schema.sql",
+        "standards/GeoJSON.json",
+        "standards/ninjs-schema_3.2.json",
+    ]
 
 
 def test_journalism_contract_is_scaffolded_from_authored_examples(tmp_path: Path) -> None:
@@ -64,7 +70,13 @@ def test_install_type_pack_previews_writes_and_is_idempotent(tmp_path: Path) -> 
 
     assert preview["written"] == []
     assert preview["collisions"] == []
-    assert preview["planned"] == ["specs/newsitem.md", "specs/newsitem.schema.sql"]
+    assert preview["planned"] == [
+        "ninjs-mapping.json",
+        "specs/newsitem.md",
+        "specs/newsitem.schema.sql",
+        "standards/GeoJSON.json",
+        "standards/ninjs-schema_3.2.json",
+    ]
     assert not (tmp_path / "specs/newsitem.md").exists()
 
     committed = install_type_pack("journalism", tmp_path, write=True)

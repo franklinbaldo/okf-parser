@@ -88,12 +88,20 @@ def _packaged_files(resource_path: str, *, destination_prefix: str = "") -> tupl
 
 def journalism_pack() -> TypePack:
     """Return the journalism starter built by dogfooding IPTC ninjs examples through init."""
+    resources = _packaged_files("packs/journalism")
+    profile_files = tuple(
+        item
+        for item in resources
+        if item.path == "ninjs-mapping.json"
+        or item.path.startswith("specs/")
+        or item.path.startswith("standards/")
+    )
     return TypePack(
         name="journalism",
         version="1",
         description="Journalism types based on the IPTC ninjs 3.2 news model.",
         types=("NewsItem",),
-        files=_packaged_files("packs/journalism/specs", destination_prefix="specs"),
+        files=profile_files,
         standard="IPTC ninjs",
         standard_version="3.2",
         standard_schema="https://www.iptc.org/std/ninjs/ninjs-schema_3.2.json",
