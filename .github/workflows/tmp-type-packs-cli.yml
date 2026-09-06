@@ -41,6 +41,7 @@ jobs:
           path.write_text(text, encoding='utf-8')
           PY
           uv sync --frozen --all-groups
+          uv run ruff check --fix src/okf_parser/cli.py
           uv run ruff format src/okf_parser/cli.py
           uv run ruff check src/okf_parser/cli.py
           rm .github/workflows/tmp-type-packs-cli.yml
