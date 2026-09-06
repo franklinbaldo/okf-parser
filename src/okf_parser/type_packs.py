@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path, PurePosixPath
-from typing import Callable, cast
+from typing import cast
 
 PACK_ENTRY_POINT_GROUP = "okf_parser.packs"
 NINJS_SCHEMA = "https://www.iptc.org/std/ninjs/ninjs-schema_3.2.json"
