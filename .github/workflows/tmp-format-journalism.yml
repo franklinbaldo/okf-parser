@@ -1,0 +1,31 @@
+name: Temporary format journalism tests
+on:
+  push:
+    branches: [feat/type-packs-dogfood]
+    paths: [.github/workflows/tmp-format-journalism.yml]
+permissions:
+  contents: write
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feat/type-packs-dogfood
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          version: 0.11.21
+          python-version: '3.12'
+      - run: |
+          uv sync --frozen --all-groups
+          uv run ruff format tests/test_journalism_pack.py
+          uv run ruff check tests/test_journalism_pack.py
+          uv run ty check src tests
+          uv run pytest tests/test_journalism_pack.py tests/test_type_packs.py tests/test_spec_scaffold.py -q
+      - run: |
+          git rm .github/workflows/tmp-format-journalism.yml
+          git add tests/test_journalism_pack.py
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git commit -m 'style: format journalism conformance tests'
+          git push origin HEAD:feat/type-packs-dogfood
