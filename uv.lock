@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -901,7 +901,7 @@ wheels = [
 
 [[package]]
 name = "okf-parser"
-version = "0.45.8"
+version = "0.45.9"
 source = { editable = "." }
 dependencies = [
     { name = "cyclopts" },
@@ -927,6 +927,7 @@ graphql = [
 [package.dev-dependencies]
 dev = [
     { name = "graphql-core" },
+    { name = "jsonschema" },
     { name = "pytest" },
     { name = "pytest-cov" },
     { name = "ruff" },
@@ -956,6 +957,7 @@ provides-extras = ["graphql"]
 [package.metadata.requires-dev]
 dev = [
     { name = "graphql-core", specifier = ">=3.2,<4" },
+    { name = "jsonschema", specifier = ">=4.26,<5" },
     { name = "pytest", specifier = ">=8,<10" },
     { name = "pytest-cov", specifier = ">=6,<7" },
     { name = "ruff", specifier = ">=0.15,<0.16" },

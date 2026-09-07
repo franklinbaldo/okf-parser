@@ -26,6 +26,7 @@ from okf_parser.service import (
     schema_bundle,
     write_format,
 )
+from okf_parser.type_packs import install_type_pack, list_type_packs
 
 type McpTransport = Literal["stdio", "http", "sse"]
 type SchemaFormat = Literal["json", "zod", "pydantic", "graphql"]
@@ -267,6 +268,24 @@ def duckdb_command(
         spec_template=spec_template,
     )
     return CliResult(payload, exit_code=1 if "error" in payload else 0)
+
+
+@app.command
+def packs() -> CliResult[JsonPayload]:
+    """List opt-in OKF type packs registered by installed package metadata."""
+    return CliResult({"packs": list_type_packs()})
+
+
+@app.command(name="add-pack")
+def add_pack(
+    name: str,
+    path: str = ".",
+    *,
+    write: bool = False,
+) -> CliResult[JsonPayload]:
+    """Preview or install an opt-in type pack into an ordinary OKF bundle."""
+    payload = install_type_pack(name, path, write=write)
+    return CliResult(payload, exit_code=1 if payload["collisions"] else 0)
 
 
 @app.command

@@ -1,0 +1,12 @@
+{
+  "standard": "IPTC ninjs",
+  "version": "3.2",
+  "schema": "standards/ninjs-schema_3.2.json#/$defs/ninjsType/properties/bodies/items",
+  "properties": {
+    "role": {"mode": "direct", "okf": "role"},
+    "contentType": {"mode": "direct", "okf": "contentType"},
+    "charCount": {"mode": "direct", "okf": "charCount"},
+    "wordCount": {"mode": "direct", "okf": "wordCount"},
+    "value": {"mode": "projected", "okf": "$body"}
+  }
+}

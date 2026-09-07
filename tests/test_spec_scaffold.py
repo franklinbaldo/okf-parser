@@ -129,6 +129,21 @@ def test_scaffold_declared_schema_skips_a_field_that_is_structured_on_any_docume
     assert '"custo" DOUBLE' in content
 
 
+def test_scaffold_declared_schema_infers_consistent_structures_as_json(tmp_path: Path) -> None:
+    documents: dict[str, list[dict[str, object]]] = {
+        "Rotina": [
+            {"type": "Rotina", "tags": ["a", "b"], "metadata": {"source": "one"}},
+            {"type": "Rotina", "tags": ["c"], "metadata": {"source": "two"}},
+        ]
+    }
+
+    scaffold_missing_declared_schemas(tmp_path, TEMPLATE, documents, write=True)
+
+    content = (tmp_path / "docs/types/rotina.schema.sql").read_text(encoding="utf-8")
+    assert '"metadata" JSON' in content
+    assert '"tags" JSON' in content
+
+
 def test_scaffold_declared_schema_never_overwrites_an_existing_file(tmp_path: Path) -> None:
     existing = tmp_path / "docs/types/rotina.schema.sql"
     existing.parent.mkdir(parents=True)
