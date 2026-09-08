@@ -1,6 +1,13 @@
 """Relational inspection and validation for Open Knowledge Format bundles."""
 
 from okf_parser.bundle import Bundle, validate_path
+from okf_parser.concept_write import (
+    ConceptWriteError,
+    preview_concept_create,
+    preview_concept_patch,
+    write_concept_create,
+    write_concept_patch,
+)
 from okf_parser.concepts import concept, resolve_relations
 from okf_parser.edit import EditError, preview_concept_edit, write_concept_edit
 from okf_parser.engine import load_bundle
@@ -26,6 +33,7 @@ from okf_parser.typed_relations import TypedRelations
 
 __all__ = [
     "Bundle",
+    "ConceptWriteError",
     "DocumentEnvelope",
     "EditError",
     "GitCommitMessage",
@@ -50,10 +58,14 @@ __all__ = [
     "ingest_documents",
     "load_bundle",
     "parse_git_commit_message",
+    "preview_concept_create",
     "preview_concept_edit",
+    "preview_concept_patch",
     "resolve_relations",
     "to_okf",
     "validate_git_commit_message",
     "validate_path",
+    "write_concept_create",
     "write_concept_edit",
+    "write_concept_patch",
 ]
