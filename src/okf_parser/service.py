@@ -9,12 +9,12 @@ import duckdb
 import networkx as nx
 
 from okf_parser.apply import apply_bundle as _apply_bundle
-from okf_parser.bundle import load_bundle, validate_path
 from okf_parser.bundle_import import import_bundle as _import_bundle
 from okf_parser.classification import classify_path
 from okf_parser.duckdb import attach_okf
 from okf_parser.edit import preview_concept_edit as _preview_concept_edit
 from okf_parser.edit import write_concept_edit as _write_concept_edit
+from okf_parser.engine import load_bundle, validate_path
 from okf_parser.formatting import FormatReport, format_path
 from okf_parser.graphql_adapter import export_graphql_sdl
 from okf_parser.schema_export import (
