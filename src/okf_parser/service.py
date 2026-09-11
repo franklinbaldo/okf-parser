@@ -9,12 +9,12 @@ import duckdb
 import networkx as nx
 
 from okf_parser.apply import apply_bundle as _apply_bundle
-from okf_parser.bundle import load_bundle, validate_path
 from okf_parser.bundle_import import import_bundle as _import_bundle
 from okf_parser.classification import classify_path
 from okf_parser.duckdb import attach_okf
 from okf_parser.edit import preview_concept_edit as _preview_concept_edit
 from okf_parser.edit import write_concept_edit as _write_concept_edit
+from okf_parser.engine import load_bundle, validate_path
 from okf_parser.formatting import FormatReport, format_path
 from okf_parser.graphql_adapter import export_graphql_sdl
 from okf_parser.schema_export import (
@@ -86,7 +86,6 @@ def check_bundle(
     require_spec: str | None = None,
     *,
     normative_spec: bool = False,
-    classify: bool = False,
     relational_schema: str | None = None,
 ) -> dict[str, object]:
     """Validate every Markdown file below a path."""
@@ -97,205 +96,137 @@ def check_bundle(
         normative_spec=normative_spec,
         relational_schema=Path(relational_schema) if relational_schema is not None else None,
     )
-    payload: dict[str, object] = {
-        "root": str(report.root),
-        "conformant": report.is_conformant,
-        "markdown_count": report.markdown_count,
-        "concept_count": report.concept_count,
-        "reserved_count": report.reserved_count,
-        "diagnostics": [item.model_dump(mode="json") for item in report.violations],
-    }
-    if classify:
-        payload["classification"] = classify_path(Path(path), exclude)
-    return payload
+    return report.model_dump(mode="json")
 
 
-def inventory_bundle(
-    path: str, exclude: Sequence[str] = (), *, digests: bool = False
+def format_bundle(path: str, exclude: Sequence[str] = (), *, write: bool = False) -> dict[str, object]:
+    """Format every Markdown file below a path."""
+    report: FormatReport = format_path(Path(path), exclude=exclude, write=write)
+    return report.model_dump(mode="json")
+
+
+def preview_edit(
+    path: str,
+    concept: str,
+    changes: dict[str, object],
 ) -> dict[str, object]:
-    """Count concepts by their producer-defined type."""
+    """Preview one concept edit without writing."""
+    return _preview_concept_edit(path, concept, changes)
+
+
+def write_edit(
+    path: str,
+    concept: str,
+    changes: dict[str, object],
+    expected_preview_token: str,
+) -> dict[str, object]:
+    """Write one concept edit guarded by the preview token."""
+    return _write_concept_edit(path, concept, changes, expected_preview_token)
+
+
+def classify(path: str) -> dict[str, object]:
+    """Classify one document path."""
+    return classify_path(Path(path)).model_dump(mode="json")
+
+
+def inspect_bundle(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
+    """Return counts and diagnostics for one bundle."""
     bundle = load_bundle(Path(path), exclude)
-    rows = (
-        bundle.concepts.group_by("concept_type")
-        .aggregate(concept_count=lambda table: table.count())
-        .order_by("concept_type")
-        .execute()
-        .to_dict(orient="records")
-    )
-    payload: dict[str, object] = {"root": str(bundle.root), "types": rows}
-    if digests:
-        payload["digests"] = (
-            bundle.concepts.select("concept_id", "path", "source_digest", "parsed_digest")
-            .order_by("path")
-            .execute()
-            .to_dict(orient="records")
-        )
-    return payload
+    return {
+        "root": str(bundle.root),
+        "markdown_count": bundle.markdown_count,
+        "concept_count": int(bundle.concepts.count().execute()),
+        "reserved_count": int(bundle.reserved.count().execute()),
+        "violations": [diagnostic.model_dump(mode="json") for diagnostic in bundle.diagnostics],
+    }
 
 
 def graph_bundle(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
-    """Summarize the resolved concept graph."""
-    bundle = load_bundle(Path(path), exclude)
-    graph = bundle.to_networkx()
+    """Return the bundle graph as JSON-ready nodes and edges."""
+    graph = load_bundle(Path(path), exclude).graph()
     return {
-        "root": str(bundle.root),
-        "nodes": graph.number_of_nodes(),
-        "edges": graph.number_of_edges(),
-        "weakly_connected_components": nx.number_weakly_connected_components(graph),
-        "strongly_connected_components": nx.number_strongly_connected_components(graph),
-        "directed_acyclic": nx.is_directed_acyclic_graph(graph),
+        "nodes": [
+            {"id": node, **attributes}
+            for node, attributes in graph.nodes(data=True)
+        ],
+        "edges": [
+            {"source": source, "target": target, **attributes}
+            for source, target, attributes in graph.edges(data=True)
+        ],
     }
 
 
-def schema_bundle(  # service mirrors the independent public schema flags.
-    path: str,
-    fmt: str = "json",
-    exclude: Sequence[str] = (),
-    *,
-    infer_types: bool = False,
-    casts: Sequence[str] = (),
-    zod_import: ZodImport = "zod",
-    spec_template: str | None = None,
-    relational_schema: str | None = None,
-    refs: RefsMode = "key",
-) -> dict[str, object] | str:
-    """Export JSON Schema, Zod, Pydantic source, or deterministic GraphQL SDL.
-
-    `relational_schema` points at the bundle's `okf.schema.sql`; with it, a
-    field participating in a declared foreign key exports as a reference.
-    GraphQL keeps its own shape and ignores the flag for now.
-    """
-    if fmt == "graphql":
-        return export_graphql_sdl(
-            path,
-            exclude,
-            infer_types=infer_types,
-            casts=casts,
-            spec_template=spec_template,
-        )
-    if fmt == "zod":
-        return export_zod_schema(
-            path,
-            exclude,
-            relational_schema=relational_schema,
-            refs=refs,
-            infer_types=infer_types,
-            casts=casts,
-            zod_import=zod_import,
-            spec_template=spec_template,
-        )
-    if fmt == "pydantic":
-        return export_pydantic_source(
-            path,
-            exclude,
-            relational_schema=relational_schema,
-            refs=refs,
-            infer_types=infer_types,
-            casts=casts,
-            spec_template=spec_template,
-        )
-    return export_json_schema(
-        path,
-        exclude,
-        relational_schema=relational_schema,
-        refs=refs,
-        infer_types=infer_types,
-        casts=casts,
-        spec_template=spec_template,
-    )
-
-
-def _format_payload(report: FormatReport) -> dict[str, object]:
-    return {
-        "markdown_count": report.markdown_count,
-        "clean": report.clean,
-        "changed_paths": list(report.changed_paths),
-        "skipped_paths": list(report.skipped_paths),
-        "succeeded": report.succeeded,
-        "written": report.written,
-    }
-
-
-def check_format(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
-    """Check mdformat style without modifying files."""
-    return _format_payload(format_path(Path(path), exclude=exclude))
-
-
-def write_format(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
-    """Explicitly rewrite Markdown files into canonical form."""
-    return _format_payload(format_path(Path(path), write=True, exclude=exclude))
-
-
-def apply_bundle(  # each argument is an independent public CLI flag.
-    path: str,
-    *,
-    sql: str | None = None,
-    type_name: str | None = None,
-    field_name: str | None = None,
-    from_value: str | None = None,
-    to_value: str | None = None,
-    write: bool = False,
-    exclude: Sequence[str] = (),
-    spec_template: str | None = None,
-    expected_preview_token: str | None = None,
-) -> dict[str, object]:
-    """Mutate frontmatter fields across a bundle via a bounded SQL script."""
-    return _apply_bundle(
-        path,
-        sql=sql,
-        type_name=type_name,
-        field_name=field_name,
-        from_value=from_value,
-        to_value=to_value,
-        write=write,
-        exclude=exclude,
-        spec_template=spec_template,
-        expected_preview_token=expected_preview_token,
-    )
-
-
-def preview_concept_edit(
-    path: str,
-    concept_id: str,
-    body: str,
-    expected_source_digest: str,
-    exclude: Sequence[str] = (),
-) -> dict[str, object]:
-    """Preview one conflict-safe Markdown body replacement."""
-    return _preview_concept_edit(path, concept_id, body, expected_source_digest, exclude=exclude)
-
-
-def write_concept_edit(
-    path: str,
-    concept_id: str,
-    body: str,
-    expected_source_digest: str,
-    exclude: Sequence[str] = (),
-) -> dict[str, object]:
-    """Commit one conflict-safe Markdown body replacement."""
-    return _write_concept_edit(path, concept_id, body, expected_source_digest, exclude=exclude)
-
-
-def export_duckdb(
-    path: str,
-    database: str,
-    schema: str = "okf",
-    *,
-    overwrite: bool = False,
-    exclude: Sequence[str] = (),
-    spec_template: str | None = None,
-) -> dict[str, object]:
-    """Materialize an OKF bundle into a DuckDB database file."""
-    connection = duckdb.connect(database)
+def query_bundle(path: str, sql: str, exclude: Sequence[str] = ()) -> list[dict[str, object]]:
+    """Run SQL over a loaded bundle through the DuckDB bridge."""
+    connection = duckdb.connect()
     try:
-        result = attach_okf(
-            connection,
-            path,
-            schema=schema,
-            overwrite=overwrite,
-            exclude=exclude,
-            spec_template=spec_template,
-        )
+        attach_okf(connection, load_bundle(Path(path), exclude))
+        rows = connection.execute(sql).fetchdf()
+        return rows.to_dict(orient="records")
     finally:
         connection.close()
-    return {**result, "database": str(Path(database).resolve())}
+
+
+def graphql_sdl(path: str, exclude: Sequence[str] = ()) -> str:
+    """Export GraphQL SDL for the loaded bundle."""
+    return export_graphql_sdl(load_bundle(Path(path), exclude))
+
+
+def schema_json(
+    path: str,
+    exclude: Sequence[str] = (),
+    *,
+    refs: RefsMode = "inline",
+) -> dict[str, object]:
+    """Export JSON Schema for every observed concept type."""
+    return export_json_schema(path, exclude=exclude, refs=refs)
+
+
+def schema_pydantic(
+    path: str,
+    exclude: Sequence[str] = (),
+    *,
+    module_name: str = "okf_models",
+) -> str:
+    """Export Pydantic source for the bundle's observed schema."""
+    return export_pydantic_source(path, exclude=exclude, module_name=module_name)
+
+
+def schema_zod(
+    path: str,
+    exclude: Sequence[str] = (),
+    *,
+    module_name: str = "okfModels",
+    zod_import: ZodImport = "zod",
+) -> str:
+    """Export Zod source for the bundle's observed schema."""
+    return export_zod_schema(
+        path,
+        exclude=exclude,
+        module_name=module_name,
+        zod_import=zod_import,
+    )
+
+
+def apply(
+    path: str,
+    source: str,
+    concept_type: str,
+    *,
+    id_column: str | None = None,
+    write: bool = False,
+    overwrite: bool = False,
+    on_conflict: Literal["skip", "verify-identical"] = "skip",
+    expected_preview_token: str | None = None,
+) -> dict[str, object]:
+    """Apply rows from a source as concept documents."""
+    return _apply_bundle(
+        path,
+        source,
+        concept_type,
+        id_column=id_column,
+        write=write,
+        overwrite=overwrite,
+        on_conflict=on_conflict,
+        expected_preview_token=expected_preview_token,
+    )
