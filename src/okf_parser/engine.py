@@ -65,10 +65,14 @@ def validate_path(
                 normative=normative_spec,
             )
         )
+    ordered = sorted(
+        diagnostics,
+        key=lambda item: (item.path, item.severity.value, item.code, item.message),
+    )
     return ValidationReport(
         root=bundle.root,
         markdown_count=bundle.markdown_count,
         concept_count=cast("int", bundle.concepts.count().execute()),
         reserved_count=cast("int", bundle.reserved.count().execute()),
-        violations=tuple(sorted(diagnostics, key=lambda item: (item.path, item.code, item.message))),
+        violations=tuple(ordered),
     )
