@@ -8,7 +8,10 @@ from unittest.mock import Mock
 
 import pytest
 
-from okf_parser import rust_core
+import okf_parser
+import okf_parser.bundle as bundle_module
+import okf_parser.duckdb as duckdb_surface
+from okf_parser import engine, rust_core, service
 
 
 def test_native_mode_skips_all_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -55,6 +58,43 @@ def test_packaged_core_discovers_active_interpreter_scripts(
     )
 
     assert rust_core.packaged_rust_core() == executable
+
+
+def test_engine_loader_passes_resolved_core_to_native_loader(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolved = Path("/env/bin/okf-parser")
+    expected = object()
+    native = Mock(return_value=expected)
+    monkeypatch.setattr(engine, "resolve_rust_core", Mock(return_value=resolved))
+    monkeypatch.setattr(engine, "_load_bundle_native", native)
+
+    result = engine.load_bundle(Path("bundle"), ("cache/**",))
+
+    assert result is expected
+    native.assert_called_once_with(Path("bundle"), ("cache/**",), rust_core=resolved)
+
+
+def test_engine_validation_uses_same_loader(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    native_bundle = bundle_module.load_bundle(tmp_path)
+    loader = Mock(return_value=native_bundle)
+    monkeypatch.setattr(engine, "load_bundle", loader)
+
+    report = engine.validate_path(tmp_path)
+
+    loader.assert_called_once_with(tmp_path, ())
+    assert report.root == tmp_path.resolve()
+    assert report.is_conformant
+
+
+def test_high_level_surfaces_share_engine_loader() -> None:
+    assert okf_parser.load_bundle is engine.load_bundle
+    assert okf_parser.validate_path is engine.validate_path
+    assert duckdb_surface.load_bundle is engine.load_bundle
+    assert service.load_bundle is engine.load_bundle
+    assert service.validate_path is engine.validate_path
 
 
 def test_bundle_load_uses_private_engine_command(monkeypatch: pytest.MonkeyPatch) -> None:
