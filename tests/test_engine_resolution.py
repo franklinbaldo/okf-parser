@@ -84,9 +84,9 @@ def test_engine_validation_uses_same_loader(
     loader = Mock(return_value=native_bundle)
     monkeypatch.setattr(engine, "load_bundle", loader)
 
-    report = engine.validate_path(tmp_path, engine="native")
+    report = engine.validate_path(tmp_path)
 
-    loader.assert_called_once_with(tmp_path, (), engine="native", rust_core=None)
+    loader.assert_called_once_with(tmp_path, ())
     assert report.root == tmp_path.resolve()
     assert report.is_conformant
 
