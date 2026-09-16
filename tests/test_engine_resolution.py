@@ -11,9 +11,7 @@ import pytest
 import okf_parser
 import okf_parser.bundle as bundle_module
 import okf_parser.duckdb as duckdb_surface
-import okf_parser.engine as engine
-import okf_parser.service as service
-from okf_parser import rust_core
+from okf_parser import engine, rust_core, service
 
 
 def test_native_mode_skips_all_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
