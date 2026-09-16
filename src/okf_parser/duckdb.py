@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, cast
 
 import ibis
 
-from okf_parser.bundle import Bundle
 from okf_parser.engine import load_bundle
 from okf_parser.typed_tables import (
     TypedTableCollisionError,
@@ -20,6 +19,8 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     import duckdb
+
+    from okf_parser.bundle import Bundle
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _DIAGNOSTIC_SCHEMA = ibis.schema(
