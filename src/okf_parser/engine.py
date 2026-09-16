@@ -37,11 +37,9 @@ def validate_path(
     *,
     normative_spec: bool = False,
     relational_schema: Path | None = None,
-    engine: EngineMode = "auto",
-    rust_core: Path | None = None,
 ) -> ValidationReport:
     """Validate a bundle through the same automatically resolved engine as loading."""
-    bundle = load_bundle(path, exclude, engine=engine, rust_core=rust_core)
+    bundle = load_bundle(path, exclude)
     diagnostics = list(bundle.diagnostics)
     if relational_schema is not None:
         schema_path = (
