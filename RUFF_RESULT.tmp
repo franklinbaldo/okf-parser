@@ -1,0 +1,54 @@
+Using CPython 3.12.3 interpreter at: /usr/bin/python3.12
+Creating virtual environment at: .venv
+   Building okf-parser @ file:///home/runner/work/okf-parser/okf-parser
+Downloading beartype (1.3MiB)
+Downloading cryptography (4.5MiB)
+Downloading ruff (10.9MiB)
+Downloading duckdb (20.5MiB)
+Downloading pygments (1.2MiB)
+Downloading pydantic-core (2.0MiB)
+Downloading ibis-framework (2.0MiB)
+Downloading networkx (2.0MiB)
+Downloading numpy (15.9MiB)
+Downloading pandas (10.5MiB)
+Downloading pyarrow (47.8MiB)
+Downloading ty (11.8MiB)
+ Downloaded pydantic-core
+ Downloaded pygments
+ Downloaded beartype
+ Downloaded cryptography
+ Downloaded networkx
+ Downloaded ruff
+ Downloaded ty
+ Downloaded numpy
+ Downloaded duckdb
+ Downloaded pandas
+ Downloaded pyarrow
+ Downloaded ibis-framework
+      Built okf-parser @ file:///home/runner/work/okf-parser/okf-parser
+Installed 98 packages in 165ms
+PLR0402 [*] Use `from okf_parser import engine` in lieu of alias
+  --> tests/test_engine_resolution.py:14:8
+   |
+12 | import okf_parser.bundle as bundle_module
+13 | import okf_parser.duckdb as duckdb_surface
+14 | import okf_parser.engine as engine
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+15 | import okf_parser.service as service
+16 | from okf_parser import rust_core
+   |
+help: Replace with `from okf_parser import engine`
+
+PLR0402 [*] Use `from okf_parser import service` in lieu of alias
+  --> tests/test_engine_resolution.py:15:8
+   |
+13 | import okf_parser.duckdb as duckdb_surface
+14 | import okf_parser.engine as engine
+15 | import okf_parser.service as service
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+16 | from okf_parser import rust_core
+   |
+help: Replace with `from okf_parser import service`
+
+Found 2 errors.
+[*] 2 fixable with the `--fix` option.
