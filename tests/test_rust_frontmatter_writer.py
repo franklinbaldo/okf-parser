@@ -3,10 +3,14 @@
 from pathlib import Path
 from unittest.mock import Mock
 
+import pytest
+
 from okf_parser.rust_core import rust_render_frontmatter
 
 
-def test_rust_render_frontmatter_sends_typed_json_and_returns_bytes(monkeypatch) -> None:
+def test_rust_render_frontmatter_sends_typed_json_and_returns_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     completed = Mock(returncode=0, stdout=b"---\nitems:\n  - one\n---\n", stderr=b"")
     run = Mock(return_value=completed)
     monkeypatch.setattr("okf_parser.rust_core.subprocess.run", run)
