@@ -23,10 +23,11 @@ import duckdb
 from ruamel.yaml import YAML
 
 from okf_parser.parser import DocumentParseError, parse_document, parse_document_text
+from okf_parser.rust_core import resolve_rust_core, rust_render_frontmatter
 from okf_parser.type_specs import type_slug
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
 
 class BundleImportError(ValueError):
@@ -63,16 +64,45 @@ def _concept_id(row: dict[str, object], index: int, id_column: str | None) -> st
     return str(value)
 
 
-def _frontmatter_text(yaml: YAML, concept_type: str, row: dict[str, object]) -> str:
+def _json_safe(value: object) -> object:
+    """Preserve JSON-shaped DuckDB values; stringify only unsupported scalars."""
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    isoformat = getattr(value, "isoformat", None)
+    if callable(isoformat):
+        return str(isoformat())
+    return str(value)
+
+
+def _frontmatter_mapping(concept_type: str, row: dict[str, object]) -> dict[str, object]:
     data: dict[str, object] = {"type": concept_type}
     for key, value in row.items():
-        if key == "type":
-            continue
-        if value is not None:
-            data[key] = value if isinstance(value, str) else str(value)
+        if key != "type" and value is not None:
+            data[key] = _json_safe(value)
+    return data
+
+
+def _fallback_frontmatter_bytes(data: dict[str, object]) -> bytes:
+    """Source-checkout fallback mirroring the Rust writer's typed semantics."""
+    yaml = YAML()
+    yaml.preserve_quotes = True
+    yaml.width = 4096
     buffer = StringIO()
     yaml.dump(data, buffer)
-    return buffer.getvalue()
+    text = buffer.getvalue().replace("\r\n", "\n").replace("\r", "\n")
+    return f"---\n{text.rstrip(chr(10))}\n---\n".encode()
+
+
+def _frontmatter_bytes(concept_type: str, row: dict[str, object]) -> bytes:
+    data = _frontmatter_mapping(concept_type, row)
+    core = resolve_rust_core()
+    if core is not None:
+        return rust_render_frontmatter(data, core)
+    return _fallback_frontmatter_bytes(data)
 
 
 def _plan(
@@ -103,12 +133,12 @@ def _plan(
     return plan, duplicates
 
 
-def _matches_candidate(destination: Path, candidate: str) -> bool:
+def _matches_candidate(destination: Path, candidate: bytes) -> bool:
     """Compare the parser value, not incidental YAML spelling."""
     try:
         existing = parse_document(destination)
-        intended = parse_document_text(destination, candidate)
-    except DocumentParseError:
+        intended = parse_document_text(destination, candidate.decode("utf-8"))
+    except (DocumentParseError, UnicodeDecodeError):
         return False
     return existing.parsed_digest == intended.parsed_digest
 
@@ -255,17 +285,13 @@ def import_bundle(  # each argument is an independent public CLI flag.
             "written": False,
         }
 
-    yaml = YAML()
-    yaml.preserve_quotes = True
-    yaml.width = 4096
-
-    to_write: dict[str, str] = {}
+    to_write: dict[str, bytes] = {}
     skipped_existing: list[str] = []
     matched_existing: list[str] = []
     conflicting_existing: list[str] = []
     for relative, (_, row) in plan.items():
         destination = root / relative
-        candidate = "---\n" + _frontmatter_text(yaml, concept_type, row) + "---\n"
+        candidate = _frontmatter_bytes(concept_type, row)
         if destination.is_file() and not overwrite:
             if on_conflict == "skip":
                 skipped_existing.append(relative)
@@ -302,14 +328,12 @@ def import_bundle(  # each argument is an independent public CLI flag.
         }
 
     created: list[str] = []
-    for relative, text in to_write.items():
+    for relative, content in to_write.items():
         destination = root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        # Stage and rename like write_support.write_raw does for apply/edit:
-        # writing destinations directly meant one crash mid-import left a
-        # truncated concept behind, detectable only by a later OKF001.
+        # Stage and rename like write_support.write_raw does for apply/edit.
         staged = destination.with_name(f".{destination.name}.okf-write.tmp")
-        staged.write_text(text, encoding="utf-8")
+        staged.write_bytes(content)
         staged.replace(destination)
         created.append(relative)
     return {
