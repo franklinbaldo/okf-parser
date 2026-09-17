@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict
 from okf_parser.discovery import discover_markdown
 from okf_parser.exclusion import ExclusionRules
 from okf_parser.frontmatter_order import canonicalize_simple_frontmatter_block
+from okf_parser.io_support import atomic_write_lf_text
 from okf_parser.markdown_style import format_markdown, protected_block_signature
 from okf_parser.parser import _split_frontmatter_source
 
@@ -117,7 +118,7 @@ def format_path(
     # failure mid-scan cannot leave the tree half-rewritten.
     if write:
         for markdown_path, formatted in pending:
-            markdown_path.write_text(formatted, encoding="utf-8")
+            atomic_write_lf_text(markdown_path, formatted)
 
     return FormatReport(
         markdown_count=len(paths),
