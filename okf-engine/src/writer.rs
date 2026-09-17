@@ -45,7 +45,7 @@ pub fn render_mapping(mapping: &Map<String, Value>) -> Result<String, String> {
 
 pub fn render_frontmatter(mapping: &Map<String, Value>) -> Result<Vec<u8>, String> {
     let yaml = render_mapping(mapping)?;
-    Ok(format!("---\n{}---\n", yaml.trim_end_matches('\n')).into_bytes())
+    Ok(format!("---\n{}\n---\n", yaml.trim_end_matches('\n')).into_bytes())
 }
 
 #[cfg(test)]
@@ -81,7 +81,7 @@ mod tests {
         let bytes = render_frontmatter(value.as_object().unwrap()).unwrap();
 
         assert!(bytes.starts_with(b"---\n"));
-        assert!(bytes.ends_with(b"---\n"));
+        assert!(bytes.ends_with(b"\n---\n"));
         assert!(!bytes.windows(2).any(|pair| pair == b"\r\n"));
     }
 }
