@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
+from okf_parser import load_bundle
 from okf_parser.bundle_import import BundleImportError, import_bundle
 
 
@@ -43,7 +45,43 @@ def test_write_creates_one_document_per_row(tmp_path: Path) -> None:
     assert content.startswith("---\n")
     assert "type: Pessoa" in content
     assert "nome: Ana" in content
-    assert "idade: '30'" in content
+    assert "idade: 30" in content
+
+
+def test_structured_values_round_trip_and_bytes_are_lf(tmp_path: Path) -> None:
+    source = tmp_path / "source.json"
+    source.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "c-1",
+                    "pastas": ["u1", "u2"],
+                    "numero": 915,
+                    "ativo": True,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    root = tmp_path / "bundle"
+
+    result = import_bundle(str(source), str(root), "Observação", id_column="id", write=True)
+
+    assert result["created"] == ["observacao/c-1.md"]
+    document = root / "observacao" / "c-1.md"
+    raw = document.read_bytes()
+    assert b"\r\n" not in raw
+    text = raw.decode()
+    assert "numero: 915" in text
+    assert "ativo: true" in text
+    assert "pastas:" in text
+    assert "- u1" in text
+    assert "- u2" in text
+
+    bundle = load_bundle(root)
+    record = bundle.concepts.execute().iloc[0]
+    frontmatter = json.loads(record["frontmatter_json"])
+    assert frontmatter["pastas"] == ["u1", "u2"]
 
 
 def test_without_id_column_uses_a_zero_padded_row_index(tmp_path: Path) -> None:
@@ -74,49 +112,25 @@ def test_existing_destination_is_skipped_without_overwrite(tmp_path: Path) -> No
 def test_failed_write_never_leaves_a_truncated_document(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A crash mid-import must not leave a half-written concept in the bundle.
-
-    apply/edit go through write_support.write_raw, which stages to a temp file
-    and renames; import_bundle wrote destinations directly, so a crash during
-    one write_text left a truncated concept behind (silent-risk note in #171).
-    Every document that reaches disk must be byte-identical to a clean write.
-    """
+    """A crash mid-import must not leave a half-written concept in the bundle."""
     csv = tmp_path / "source.csv"
     _write_csv(csv)
     bundle = tmp_path / "bundle"
     documents = bundle / "pessoa"
 
-    real_write_text = Path.write_text
+    real_write_bytes = Path.write_bytes
     writes = {"count": 0}
     crash_message = "simulated crash mid-write"
 
-    def flaky_write_text(
-        self: Path,
-        data: str,
-        encoding: str | None = None,
-        errors: str | None = None,
-        newline: str | None = None,
-    ) -> int:
+    def flaky_write_bytes(self: Path, data: bytes) -> int:
         if self.parent == documents:
             writes["count"] += 1
             if writes["count"] == 2:
-                real_write_text(
-                    self,
-                    data[: len(data) // 2],
-                    encoding=encoding,
-                    errors=errors,
-                    newline=newline,
-                )
+                real_write_bytes(self, data[: len(data) // 2])
                 raise _SimulatedCrashError(crash_message)
-        return real_write_text(
-            self,
-            data,
-            encoding=encoding,
-            errors=errors,
-            newline=newline,
-        )
+        return real_write_bytes(self, data)
 
-    monkeypatch.setattr(Path, "write_text", flaky_write_text)
+    monkeypatch.setattr(Path, "write_bytes", flaky_write_bytes)
 
     with pytest.raises(_SimulatedCrashError, match="simulated crash mid-write"):
         import_bundle(str(csv), str(bundle), "Pessoa", id_column="id", write=True)
