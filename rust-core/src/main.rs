@@ -1,7 +1,8 @@
 mod engine;
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
-use std::io::{self, Read};
+use serde_json::Value;
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process::{Command as ProcessCommand, ExitStatus};
 #[derive(Parser)]
@@ -22,6 +23,8 @@ enum Command {
         #[arg(long, default_value_t = 32)]
         read_concurrency: usize,
     },
+    #[command(name = "__engine-render-frontmatter", hide = true)]
+    RenderFrontmatter,
 }
 #[derive(Deserialize)]
 struct Legacy {
@@ -50,6 +53,16 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 io::stdout().lock(),
                 &engine::load_bundle(&root, &exclude, read_concurrency)?,
             )?;
+        }
+        Command::RenderFrontmatter => {
+            let mut input = String::new();
+            io::stdin().read_to_string(&mut input)?;
+            let value: Value = serde_json::from_str(&input)?;
+            let mapping = value
+                .as_object()
+                .ok_or("frontmatter render request must be a JSON object")?;
+            let bytes = engine::render_frontmatter(mapping).map_err(io::Error::other)?;
+            io::stdout().lock().write_all(&bytes)?;
         }
     }
     Ok(())
@@ -100,7 +113,7 @@ fn python_cli() -> Result<ExitStatus, Box<dyn std::error::Error>> {
 fn main() {
     let internal = matches!(
         std::env::args().nth(1).as_deref(),
-        Some("__engine-facts" | "__engine-load")
+        Some("__engine-facts" | "__engine-load" | "__engine-render-frontmatter")
     );
     if internal {
         if let Err(error) = run() {

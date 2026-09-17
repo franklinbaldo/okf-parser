@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Literal, TypedDict, cast
 from okf_parser.parser import MarkdownFacts
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
 EngineMode = Literal["auto", "native"]
 
@@ -87,6 +87,20 @@ def rust_load_bundle(
     except json.JSONDecodeError as exc:
         message = f"invalid okf load response: {exc}"
         raise RustCoreError(message) from exc
+
+
+def rust_render_frontmatter(mapping: Mapping[str, object], executable: Path) -> bytes:
+    """Render one frontmatter mapping through the canonical Rust YAML writer."""
+    completed = subprocess.run(  # noqa: S603
+        [executable, "__engine-render-frontmatter"],
+        input=json.dumps(mapping, ensure_ascii=False, separators=(",", ":")).encode(),
+        capture_output=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        message = completed.stderr.decode(errors="replace").strip()
+        raise RustCoreError(message or f"okf-core exited with {completed.returncode}")
+    return completed.stdout
 
 
 class RustCoreError(RuntimeError):

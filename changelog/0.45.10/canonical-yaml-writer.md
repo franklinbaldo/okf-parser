@@ -1,0 +1,3 @@
+- add a canonical Rust frontmatter writer backed by `yaml-rust2`, with native YAML sequences/mappings/numbers/booleans and platform-independent LF bytes;
+- make `import` preserve structured source values instead of stringifying them, while keeping a source-checkout fallback with the same typed semantics;
+- make `import`, `format --write`, and `init` write UTF-8/LF bytes deterministically across operating systems.

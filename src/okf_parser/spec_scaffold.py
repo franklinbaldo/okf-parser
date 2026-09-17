@@ -17,6 +17,7 @@ from okf_parser.declared_schema import (
     infer_kinds_via_duckdb,
     render_starter_schema_sql,
 )
+from okf_parser.io_support import atomic_write_lf_text
 from okf_parser.type_specs import spec_relative_path
 
 if TYPE_CHECKING:
@@ -92,7 +93,7 @@ def scaffold_missing_specs(
     for concept_type, relative in to_create.items():
         destination = root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(_stub_content(concept_type), encoding="utf-8")
+        atomic_write_lf_text(destination, _stub_content(concept_type))
         created.append(relative)
     return {"created": sorted(created), "would_create": [], "collisions": [], "written": True}
 
@@ -197,6 +198,6 @@ def scaffold_missing_declared_schemas(
             continue
         destination = root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(content, encoding="utf-8")
+        atomic_write_lf_text(destination, content)
         created.append(relative)
     return {"created": sorted(created), "would_create": [], "collisions": [], "written": True}
