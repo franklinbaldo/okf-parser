@@ -125,6 +125,42 @@ def test_attach_okf_materializes_declared_types_per_value(tmp_path: Path) -> Non
     assert column_comment == ("Exact cost",)
 
 
+def test_typed_materialization_uses_defaults_for_absent_or_null_values(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "omitted.md").write_text(
+        "---\ntype: Rotina\n---\nOmitted\n", encoding="utf-8"
+    )
+    (tmp_path / "blank.md").write_text(
+        "---\ntype: Rotina\nstatus:\ntentativas:\n---\nBlank\n", encoding="utf-8"
+    )
+    (tmp_path / "authored.md").write_text(
+        "---\ntype: Rotina\nstatus: active\ntentativas: nope\n---\nAuthored\n",
+        encoding="utf-8",
+    )
+    types = tmp_path / "docs" / "types"
+    types.mkdir(parents=True)
+    (types / "rotina.schema.sql").write_text(
+        'CREATE TABLE "Rotina" ('
+        "status VARCHAR DEFAULT 'draft', tentativas BIGINT DEFAULT 3);",
+        encoding="utf-8",
+    )
+    connection = duckdb.connect()
+
+    attach_okf(connection, tmp_path, spec_template="docs/types/{slug}.md")
+
+    rows = connection.execute(
+        'SELECT "__okf_path", "__okf_raw_status", status, '
+        '"__okf_raw_tentativas", tentativas '
+        'FROM okf_types."Rotina" ORDER BY "__okf_path"'
+    ).fetchall()
+    assert rows == [
+        ("authored.md", "active", "active", "nope", None),
+        ("blank.md", None, "draft", None, 3),
+        ("omitted.md", None, "draft", None, 3),
+    ]
+
+
 def test_attach_okf_uses_catalog_shape_from_ctas_declaration(tmp_path: Path) -> None:
     (tmp_path / "a.md").write_text("---\ntype: Rotina\ncusto: 7.25\n---\n", encoding="utf-8")
     types = tmp_path / "docs" / "types"
