@@ -48,6 +48,7 @@ class DeclaredSchema:
     columns: dict[str, DuckDBLogicalType]
     table_comment: str | None
     column_comments: dict[str, str]
+    column_defaults: dict[str, str]
 
 
 def declared_schema_relative_path(spec_template: str, concept_type: str) -> str | None:
@@ -108,7 +109,8 @@ def parse_declared_schema(sql_text: str, concept_type: str) -> DeclaredSchema:
         database_oid, schema_oid, table_oid, table_name, table_comment = tables[0]
 
         columns = con.execute(
-            "SELECT column_name, data_type, comment, numeric_precision, numeric_scale "
+            "SELECT column_name, data_type, comment, column_default, "
+            "numeric_precision, numeric_scale "
             "FROM duckdb_columns() "
             "WHERE database_oid = ? AND schema_oid = ? AND table_oid = ? "
             "ORDER BY column_index",
@@ -121,12 +123,13 @@ def parse_declared_schema(sql_text: str, concept_type: str) -> DeclaredSchema:
         table_name=table_name,
         columns={
             row[0]: logical_type_from_catalog(
-                row[1], numeric_precision=row[3], numeric_scale=row[4]
+                row[1], numeric_precision=row[4], numeric_scale=row[5]
             )
             for row in columns
         },
         table_comment=table_comment,
         column_comments={row[0]: row[2] for row in columns if row[2] is not None},
+        column_defaults={row[0]: row[3] for row in columns if row[3] is not None},
     )
 
 
