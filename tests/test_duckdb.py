@@ -128,9 +128,7 @@ def test_attach_okf_materializes_declared_types_per_value(tmp_path: Path) -> Non
 def test_typed_materialization_uses_defaults_for_absent_or_null_values(
     tmp_path: Path,
 ) -> None:
-    (tmp_path / "omitted.md").write_text(
-        "---\ntype: Rotina\n---\nOmitted\n", encoding="utf-8"
-    )
+    (tmp_path / "omitted.md").write_text("---\ntype: Rotina\n---\nOmitted\n", encoding="utf-8")
     (tmp_path / "blank.md").write_text(
         "---\ntype: Rotina\nstatus:\ntentativas:\n---\nBlank\n", encoding="utf-8"
     )
