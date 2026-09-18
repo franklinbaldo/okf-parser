@@ -30,7 +30,8 @@ def test_write_creates_a_stub_document(tmp_path: Path) -> None:
     assert result["created"] == ["docs/types/rotina.md"]
     assert result["written"] is True
     content = (tmp_path / "docs/types/rotina.md").read_text(encoding="utf-8")
-    assert content.startswith("---\ntype: Spec\n---\n\n# Rotina\n")
+    assert content == "---\ntype: Spec\n---\n\n# Rotina\n"
+    assert "TODO" not in content
 
 
 def test_existing_document_is_never_overwritten(tmp_path: Path) -> None:
