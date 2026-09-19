@@ -80,6 +80,36 @@ frontmatter. Inline content — link targets, emphasis, text inside a paragraph 
 table cell — is deliberately outside this check, because canonical formatting
 rewrites inline whitespace.
 
+## Sparse authoring: no boilerplate
+
+An OKF concept is knowledge, not a form to be filled. The core contract requires
+only a non-empty `type`; fields such as `title`, `description`, status,
+provenance details, or domain-specific attributes exist only when their type or
+the author has something meaningful to say.
+
+When creating a concept manually or through an agent:
+
+- **omit an optional field when its value is not known**; a YAML-null field
+  (`field:`) is also accepted, but omission is preferred;
+- do not invent `unknown`, `N/A`, `TODO`, empty strings, or copied values
+  merely to satisfy a template;
+- put a stable repeated value in the type's declaration instead of copying it
+  into every concept. A sibling `.schema.sql` can declare, for example,
+  `status VARCHAR DEFAULT 'draft'`;
+- keep `type` explicit: it is the concept's identity and the only core
+  frontmatter field that cannot be omitted.
+
+The parser preserves the authored source rather than injecting defaults back
+into Markdown. Declared DuckDB defaults are applied only in the effective typed
+materialization: an omitted or YAML-null value keeps the declared default,
+while a present non-null value overrides it through the normal raw +
+`TRY_CAST` path. A malformed present value still materializes as typed
+`NULL`; it does **not** silently fall back to the default.
+
+Schema export follows the same sparse rule. It always exposes `type`, declared
+columns, and fields actually observed in the bundle, but it does not manufacture
+conventional `title` or `description` properties that no concept authored.
+
 ## Excluding paths
 
 A repository that keeps OKF knowledge next to code, a README and vendored
@@ -203,7 +233,7 @@ Add the repository as a CI check:
 ```yaml
 steps:
   - uses: actions/checkout@v7
-  - uses: franklinbaldo/okf-parser@v0.45.9
+  - uses: franklinbaldo/okf-parser@v0.45.10
     with:
       path: knowledge
 ```

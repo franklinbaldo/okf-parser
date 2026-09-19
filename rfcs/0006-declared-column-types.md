@@ -350,9 +350,12 @@ without being asked to preserve author spelling. `apply` protects every generate
 field and its `__okf_raw_` source under the existing compiler-owned `__okf_`
 boundary; user SQL does not write the generated column directly.
 
-Constraints remain out of v1. `NOT NULL`, `CHECK`, `UNIQUE`, `PRIMARY KEY`, and
-`DEFAULT` may exist in the declaration script but are not part of the contract read
-out of the catalog. v1 reads column names, normalized logical types, and comments.
+Constraints remain out of v1. `NOT NULL`, `CHECK`, `UNIQUE`, and
+`PRIMARY KEY` may exist in the declaration script but are not part of the contract
+read out of the catalog. RFC 0022 supersedes the old treatment of `DEFAULT`:
+column defaults are now retained as sparse-authoring semantics for typed
+materialization. Column names, normalized logical types, comments, and defaults
+are read from DuckDB's catalog.
 
 ### 5a. The v1 type IR preserves DuckDB identity before target-specific export
 
@@ -579,8 +582,10 @@ observed values, preserving the command's existing contract.
 
 Presence and nullability remain observational. A declared-but-unobserved column is
 exported as optional; a field present in every document is required; authored YAML
-`null` controls nullability independently. Constraints are not read from DDL, so the
-declaration supplies no competing presence rule.
+`null` controls nullability independently. A declared `DEFAULT` does not make the
+field authored or required: it supplies an effective typed value only when the raw
+authored value is absent or YAML-null. Other constraints are not read from DDL, so
+the declaration supplies no competing presence rule.
 
 Declared/effective/observed multi-mode output can still be added later if callers
 need all three views at once, but it is no longer required to answer what today's
@@ -896,8 +901,8 @@ doesn't target.
   insufficient.
 - Constraints (decision 5, excluded from v1): whether a later RFC reads
   `duckdb_constraints()` for `NOT NULL`/`CHECK`/`UNIQUE`/`PRIMARY KEY`, and
-  what evaluating each against documents means. `DEFAULT` likely never
-  belongs, being a write-time concept with no read-time claim.
+  what evaluating each against documents means. `DEFAULT` is no longer in this
+  open question; RFC 0022 gives it sparse-authoring semantics.
 - Extending decision 5a's target mappings — DuckDB can preserve additional
   physical types in the IR, but each exporter still needs an explicit truthful
   representation policy (decision 10).

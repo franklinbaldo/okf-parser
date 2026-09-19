@@ -55,6 +55,7 @@ class TypedFieldPlan:
     declared_type: DuckDBLogicalType | None = None
     raw_name: str | None = None
     comment: str | None = None
+    default_sql: str | None = None
 
     @property
     def declared(self) -> bool:
@@ -222,6 +223,7 @@ def compile_typed_table_plan(
                 declared_type=logical_type,
                 raw_name=f"__okf_raw_{name}",
                 comment=declaration.column_comments.get(name),
+                default_sql=declaration.column_defaults.get(name),
             )
         )
 
@@ -314,7 +316,8 @@ def _ddl(plan: TypedTablePlan, schema: str) -> str:
             message = f"declared field {field.name!r} has an incomplete typed-table plan"
             raise TypedTableError(message)
         columns.append(f"{_quote_ident(raw_name)} {raw_sql_type}")
-        columns.append(f"{_quote_ident(field.name)} {declared_type.sql}")
+        default_clause = f" DEFAULT {field.default_sql}" if field.default_sql is not None else ""
+        columns.append(f"{_quote_ident(field.name)} {declared_type.sql}{default_clause}")
     body = ",\n    ".join(columns)
     return f"CREATE TABLE {_quote_ident(schema)}.{_quote_ident(plan.concept_type)} (\n    {body}\n)"
 
@@ -393,10 +396,21 @@ def _populate_typed_columns(
         if declared_type is None:
             continue
         raw_name = _insert_name(field)
-        assignments.append(
-            f"{_quote_ident(field.name)} = "
-            f"TRY_CAST({_quote_ident(raw_name)} AS {declared_type.sql})"
-        )
+        cast_expression = f"TRY_CAST({_quote_ident(raw_name)} AS {declared_type.sql})"
+        if field.default_sql is None:
+            assignments.append(f"{_quote_ident(field.name)} = {cast_expression}")
+        else:
+            # The INSERT leaves the public typed column out, so DuckDB has
+            # already applied its declared DEFAULT. A missing or YAML-null
+            # authored value keeps that default; a present non-null value
+            # overrides it through the usual lossless raw -> TRY_CAST path.
+            # Crucially, a malformed *present* value still casts to NULL
+            # rather than silently falling back to the default.
+            assignments.append(
+                f"{_quote_ident(field.name)} = CASE "
+                f"WHEN {_quote_ident(raw_name)} IS NULL THEN {_quote_ident(field.name)} "
+                f"ELSE {cast_expression} END"
+            )
     if not assignments:
         return
 

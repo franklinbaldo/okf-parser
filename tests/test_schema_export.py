@@ -39,6 +39,18 @@ def test_schema_keeps_scalars_as_strings_by_default(tmp_path: Path) -> None:
     assert properties["type"]["const"] == "test_type"
 
 
+def test_schema_keeps_unobserved_optional_fields_out_of_the_contract(tmp_path: Path) -> None:
+    _write_concept(tmp_path / "minimal.md", "type: test_type\n")
+
+    schema = export_json_schema(str(tmp_path))["schemas"]["test_type"]
+
+    assert set(schema["properties"]) == {"type"}
+    assert schema["required"] == ["type"]
+    zod = export_zod_schema(str(tmp_path))
+    assert '"title"' not in zod
+    assert '"description"' not in zod
+
+
 def test_schema_infers_types_from_every_observation(tmp_path: Path) -> None:
     _write_concept(
         tmp_path / "one.md",

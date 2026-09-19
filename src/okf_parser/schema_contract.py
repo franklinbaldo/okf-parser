@@ -272,7 +272,11 @@ def _compile_object(
 ) -> ObjectNode:
     keys = {key for document in documents for key in document}
     if concept_type is not None:
-        keys.update(("type", "title", "description"))
+        # `type` is the only field OKF itself requires. Do not synthesize
+        # conventional optional fields such as title/description into a
+        # contract when authors never used them: doing so turns a sparse
+        # knowledge format into a form template and encourages boilerplate.
+        keys.add("type")
         if not parent_path:
             keys.update(options.declared_by_type.get(concept_type, {}))
 

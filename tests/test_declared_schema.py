@@ -67,6 +67,21 @@ def test_parse_declared_schema_reads_columns_and_comments() -> None:
     assert set(schema.columns) == {"id", "registrado_em", "custo"}
 
 
+def test_parse_declared_schema_reads_column_defaults() -> None:
+    schema = parse_declared_schema(
+        """CREATE TABLE "Rotina" (
+            status VARCHAR DEFAULT 'draft',
+            tentativas BIGINT DEFAULT 3,
+            observacao VARCHAR
+        );""",
+        "Rotina",
+    )
+
+    assert schema.column_defaults["status"] == "'draft'"
+    assert schema.column_defaults["tentativas"] == "3"
+    assert "observacao" not in schema.column_defaults
+
+
 def test_shared_declared_parity_fixture_matches_language_neutral_expectation() -> None:
     fixture_root = Path(__file__).parent / "fixtures"
     sql = (fixture_root / "declared_parity.schema.sql").read_text(encoding="utf-8")
