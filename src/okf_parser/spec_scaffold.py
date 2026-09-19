@@ -27,10 +27,7 @@ def _stub_content(concept_type: str) -> str:
     # A scaffold must not manufacture prose or optional metadata merely
     # to make a document look complete. The heading identifies the type; authors
     # add only semantics they actually know.
-    return (
-        "---\ntype: Spec\n---\n\n"
-        f"# {concept_type}\n"
-    )
+    return f"---\ntype: Spec\n---\n\n# {concept_type}\n"
 
 
 def _plan(
