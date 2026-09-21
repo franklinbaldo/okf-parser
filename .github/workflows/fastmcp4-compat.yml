@@ -13,6 +13,21 @@ permissions:
   contents: read
 
 jobs:
+  lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.3"
+      - name: Resolve canonical lockfile
+        run: uv lock --upgrade-package fastmcp --upgrade-package cyclopts
+      - uses: actions/upload-artifact@v6
+        with:
+          name: fastmcp4-lock
+          path: uv.lock
+          retention-days: 1
+
   mcp:
     runs-on: ubuntu-latest
     steps:
