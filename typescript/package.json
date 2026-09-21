@@ -1,6 +1,6 @@
 {
   "name": "@franklinbaldo/okf-parser",
-  "version": "0.45.9",
+  "version": "0.45.10",
   "description": "Native TypeScript parser, validator, formatter, graph inspector, schema exporter, and MCP server for Open Knowledge Format bundles",
   "type": "module",
   "license": "MIT",
