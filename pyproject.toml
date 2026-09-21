@@ -1,6 +1,6 @@
 [project]
 name = "okf-parser"
-version = "0.45.9"
+version = "0.45.10"
 description = "Relational inspection and validation for Open Knowledge Format bundles"
 # Derived from README.md by scripts/pypi_readme.py. README.md is an OKF concept
 # and must open with frontmatter, which PyPI would otherwise render as a heading
@@ -31,9 +31,9 @@ classifiers = [
   "Topic :: Text Processing :: Markup :: Markdown",
 ]
 dependencies = [
-  "cyclopts>=4.22,<5",
+  "cyclopts>=4.25.2,<5",
   "duckdb>=1.4,<2",
-  "fastmcp>=3.4,<4",
+  "fastmcp>=4.0.5,<5",
   "ibis-framework[duckdb]>=12,<13",
   "markdown-it-py>=4,<5",
   # okf_parser.markdown_style overrides mdformat's ordered-list renderer, which
