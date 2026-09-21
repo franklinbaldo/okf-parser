@@ -180,7 +180,9 @@ def required_type_spec_fields(
                 required = ()
             else:
                 spec_path = root / relative
-                required = _required_fields_from_spec(spec_path) if spec_path.is_file() else ()
+                required = (
+                    _required_fields_from_spec(spec_path) if spec_path.is_file() else ()
+                )
             required_by_type[concept_type] = required
         if not required:
             continue
