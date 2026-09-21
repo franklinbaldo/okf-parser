@@ -1,0 +1,29 @@
+name: FastMCP 4 compatibility
+
+on:
+  pull_request:
+    paths:
+      - "pyproject.toml"
+      - "src/okf_parser/cli.py"
+      - "tests/test_mcp.py"
+      - ".github/workflows/fastmcp4-compat.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  mcp:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          version: "0.12.3"
+      - name: Create isolated compatibility environment
+        run: |
+          uv venv --python 3.13 .venv-fastmcp4
+          uv pip install             --python .venv-fastmcp4/bin/python             -e .             "fastmcp==4.0.5"             "cyclopts==4.25.2"             "pytest>=8,<10"
+      - name: Exercise MCP contract on FastMCP 4
+        run: |
+          .venv-fastmcp4/bin/python -m pytest -q tests/test_mcp.py
