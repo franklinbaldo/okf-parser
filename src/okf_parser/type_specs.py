@@ -15,6 +15,7 @@ the document location computable.
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from typing import TYPE_CHECKING
@@ -22,6 +23,7 @@ from typing import TYPE_CHECKING
 from okf_parser.models import Severity, Violation
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping, Sequence
     from pathlib import Path
 
 SPEC_SLUG_PLACEHOLDER = "{slug}"
@@ -103,4 +105,110 @@ def missing_type_specs(
                 message=f'type "{concept_type}" has no specification document',
             )
         )
+    return violations
+
+
+def _required_fields_from_spec(path: Path) -> tuple[str, ...]:
+    """Read the first column of a Markdown `## Required fields` table.
+
+    Type specifications stay ordinary Markdown. This intentionally recognizes
+    only the small, explicit contract already used by OKF producer specs:
+    a level-two `Required fields` section followed by a pipe table whose first
+    column names the authored frontmatter field.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return ()
+
+    lines = text.splitlines()
+    in_required = False
+    fields: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("## "):
+            heading = stripped[3:].strip().casefold()
+            if in_required and heading != "required fields":
+                break
+            in_required = heading == "required fields"
+            continue
+        if not in_required or not stripped.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if not cells:
+            continue
+        raw = cells[0].strip()
+        if not raw or raw.casefold() == "field":
+            continue
+        if set(raw) <= {"-", ":"}:
+            continue
+        field = raw.strip("`").strip()
+        if field and field not in fields:
+            fields.append(field)
+    return tuple(fields)
+
+
+def required_type_spec_fields(
+    root: Path,
+    concepts: Sequence[Mapping[str, object]],
+    template: str,
+    *,
+    normative: bool = False,
+) -> list[Violation]:
+    """Validate authored frontmatter against required fields declared by its type spec.
+
+    The rule is advisory with `--require-spec` and normative with
+    `--normative-spec`, matching the existing missing-spec policy.
+    """
+    severity = Severity.ERROR if normative else Severity.WARNING
+    required_by_type: dict[str, tuple[str, ...]] = {}
+    violations: list[Violation] = []
+
+    for record in concepts:
+        concept_type = record.get("concept_type")
+        path = record.get("path")
+        frontmatter_json = record.get("frontmatter_json")
+        if not isinstance(concept_type, str) or not concept_type:
+            continue
+        if not isinstance(path, str) or not isinstance(frontmatter_json, str):
+            continue
+
+        required = required_by_type.get(concept_type)
+        if required is None:
+            relative = spec_relative_path(template, concept_type)
+            if relative is None:
+                required = ()
+            else:
+                spec_path = root / relative
+                required = (
+                    _required_fields_from_spec(spec_path) if spec_path.is_file() else ()
+                )
+            required_by_type[concept_type] = required
+        if not required:
+            continue
+
+        try:
+            frontmatter = json.loads(frontmatter_json)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(frontmatter, dict):
+            continue
+
+        for field in required:
+            value = frontmatter.get(field)
+            missing = field not in frontmatter or value is None or (
+                isinstance(value, str) and not value.strip()
+            )
+            if not missing:
+                continue
+            violations.append(
+                Violation(
+                    code="OKF011",
+                    severity=severity,
+                    path=path,
+                    message=(
+                        f'type "{concept_type}" requires non-empty frontmatter field "{field}"'
+                    ),
+                )
+            )
     return violations
