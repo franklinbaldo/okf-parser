@@ -1,0 +1,2 @@
+- Support the stable FastMCP 4 line (`>=4.0.5,<5`) while preserving the existing MCP tool schemas, effect annotations, read/write profile isolation, and client contract.
+- Raise the Cyclopts floor to the current stable 4.25 line; dedicated compatibility CI installs FastMCP 4.0.5 and Cyclopts 4.25.2 in a clean environment and exercises `tests/test_mcp.py`.
