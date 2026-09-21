@@ -36,7 +36,7 @@ from okf_parser.parser import (
 )
 from okf_parser.relational_schema import validate_relations
 from okf_parser.rust_core import rust_load_bundle
-from okf_parser.type_specs import missing_type_specs
+from okf_parser.type_specs import missing_type_specs, required_type_spec_fields
 from okf_parser.typed_relations import TypedRelations, compile_bundle_types
 
 if TYPE_CHECKING:
@@ -481,6 +481,14 @@ def validate_path(
             missing_type_specs(
                 bundle.root,
                 bundle.concept_types,
+                require_spec,
+                normative=normative_spec,
+            )
+        )
+        diagnostics.extend(
+            required_type_spec_fields(
+                bundle.root,
+                bundle.concepts.execute().to_dict(orient="records"),
                 require_spec,
                 normative=normative_spec,
             )
