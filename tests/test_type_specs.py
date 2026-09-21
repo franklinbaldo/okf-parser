@@ -86,3 +86,55 @@ def test_a_type_that_failed_to_parse_is_not_required_to_have_a_specification(
     (tmp_path / "broken.md").write_text("no frontmatter\n", encoding="utf-8")
     report = validate_path(tmp_path, (), TEMPLATE)
     assert [item.code for item in report.violations] == ["OKF001"]
+
+
+def test_required_fields_from_present_spec_are_reported(tmp_path: Path) -> None:
+    _concept(tmp_path, "a.md", "Rate File")
+    spec = tmp_path / ".okf/specs/rate-file.md"
+    spec.parent.mkdir(parents=True, exist_ok=True)
+    spec.write_text(
+        "---\ntype: Spec\n---\n\n"
+        "# Rate File\n\n"
+        "## Required fields\n\n"
+        "| Field | Type |\n"
+        "| --- | --- |\n"
+        "| `type` | string |\n"
+        "| `run_id` | string |\n"
+        "| `review_a` | string |\n",
+        encoding="utf-8",
+    )
+    _concept(tmp_path, ".okf/specs/spec.md", "Spec")
+
+    report = validate_path(tmp_path, (), TEMPLATE, normative_spec=True)
+
+    missing = [item for item in report.violations if item.code == "OKF011"]
+    assert [(item.path, item.message) for item in missing] == [
+        ("a.md", 'type "Rate File" requires non-empty frontmatter field "review_a"'),
+        ("a.md", 'type "Rate File" requires non-empty frontmatter field "run_id"'),
+    ]
+    assert not report.is_conformant
+
+
+def test_required_fields_accept_complete_frontmatter(tmp_path: Path) -> None:
+    path = tmp_path / "a.md"
+    path.write_text(
+        "---\ntype: Rate File\nrun_id: run-1\nreview_a: specific review\n---\n",
+        encoding="utf-8",
+    )
+    spec = tmp_path / ".okf/specs/rate-file.md"
+    spec.parent.mkdir(parents=True, exist_ok=True)
+    spec.write_text(
+        "---\ntype: Spec\n---\n\n"
+        "# Rate File\n\n"
+        "## Required fields\n\n"
+        "| Field | Type |\n"
+        "| --- | --- |\n"
+        "| `type` | string |\n"
+        "| `run_id` | string |\n"
+        "| `review_a` | string |\n",
+        encoding="utf-8",
+    )
+    _concept(tmp_path, ".okf/specs/spec.md", "Spec")
+
+    report = validate_path(tmp_path, (), TEMPLATE, normative_spec=True)
+    assert [item for item in report.violations if item.code == "OKF011"] == []
