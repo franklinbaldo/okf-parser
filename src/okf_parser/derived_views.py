@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections import defaultdict
 from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING
+from urllib.parse import quote
 
 from okf_parser.bundle import load_bundle
 
@@ -26,6 +28,11 @@ def _display_title(row: dict[str, object]) -> str:
     return str(logical_key)
 
 
+def _markdown_target(value: object) -> str:
+    """Percent-encode a bundle-relative path for a Markdown link target."""
+    return quote(str(value), safe="/-._~")
+
+
 def render_index(path: Path, exclude: Sequence[str] = ()) -> str:
     """Render a deterministic concept index grouped by producer-defined type."""
     bundle = load_bundle(path, exclude)
@@ -39,7 +46,7 @@ def render_index(path: Path, exclude: Sequence[str] = ()) -> str:
         lines.extend((f"## {concept_type}", ""))
         for row in grouped[concept_type]:
             title = _display_title(row).replace("[", "\\[").replace("]", "\\]")
-            target = str(row["path"]).replace(" ", "%20")
+            target = _markdown_target(row["path"])
             lines.append(f"- [{title}]({target})")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
@@ -78,7 +85,7 @@ def render_log(path: Path, exclude: Sequence[str] = ()) -> str:
         lines.extend((f"## {authored_date}", ""))
         for row in sorted(dated[authored_date], key=lambda item: str(item["logical_key"])):
             title = _display_title(row).replace("[", "\\[").replace("]", "\\]")
-            target = str(row["path"]).replace(" ", "%20")
+            target = _markdown_target(row["path"])
             concept_type = str(row["concept_type"])
             lines.append(f"- [{title}]({target}) — {concept_type}")
         lines.append("")
@@ -111,7 +118,7 @@ def materialize_derived_views(
     path: Path,
     exclude: Sequence[str] = (),
     *,
-    write: bool = True,
+    write: bool = False,
     update_gitignore: bool = True,
 ) -> dict[str, object]:
     """Generate index/log projections, optionally writing them to the bundle root."""
@@ -126,10 +133,23 @@ def materialize_derived_views(
         written.extend(("index.md", "log.md"))
         if update_gitignore:
             gitignore_changed = _ensure_gitignore(root)
-    return {
+    views = {
+        "index.md": {
+            "sha256": hashlib.sha256(index.encode("utf-8")).hexdigest(),
+            "bytes": len(index.encode("utf-8")),
+        },
+        "log.md": {
+            "sha256": hashlib.sha256(log.encode("utf-8")).hexdigest(),
+            "bytes": len(log.encode("utf-8")),
+        },
+    }
+    payload: dict[str, object] = {
         "root": str(root),
-        "generated": {"index.md": index, "log.md": log},
+        "views": views,
         "written": written,
         "gitignore_changed": gitignore_changed,
         "source_of_truth": "okf",
     }
+    if not write:
+        payload["generated"] = {"index.md": index, "log.md": log}
+    return payload
