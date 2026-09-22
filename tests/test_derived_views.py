@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from okf_parser.derived_views import materialize_derived_views, render_index, render_log
+from okf_parser.derived_views import (
+    materialize_derived_views,
+    render_index,
+    render_log,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -53,7 +57,9 @@ def test_materialize_writes_views_and_opinionated_gitignore(tmp_path: Path) -> N
     assert isinstance(index_view, dict)
     assert index_view["bytes"] > 0
     assert len(index_view["sha256"]) == 64
-    assert (tmp_path / "index.md").read_text(encoding="utf-8").startswith("<!-- GENERATED FILE")
+    assert (tmp_path / "index.md").read_text(encoding="utf-8").startswith(
+        "<!-- GENERATED FILE"
+    )
     assert (tmp_path / "log.md").exists()
     assert (tmp_path / ".gitignore").read_text(encoding="utf-8").splitlines()[-2:] == [
         "/index.md",
@@ -91,7 +97,9 @@ def test_materialize_is_idempotent(tmp_path: Path) -> None:
     assert second["gitignore_changed"] is False
 
 
-def test_generated_links_percent_encode_markdown_sensitive_path_characters(tmp_path: Path) -> None:
+def test_generated_links_percent_encode_markdown_sensitive_path_characters(
+    tmp_path: Path,
+) -> None:
     _write(
         tmp_path / "odd )#?.md",
         "---\ntype: Note\ntitle: Adversarial path\nupdated: '2026-09-22'\n---\n",
