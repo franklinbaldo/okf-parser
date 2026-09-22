@@ -15,7 +15,9 @@ from okf_parser.bundle import load_bundle
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-_GENERATED = "<!-- GENERATED FILE — DO NOT EDIT. Regenerate with okf-parser materialize. -->"
+_GENERATED = (
+    "<!-- GENERATED FILE — DO NOT EDIT. Regenerate with okf-parser materialize. -->"
+)
 _DATE_KEYS = ("updated", "date", "created")
 _IGNORE_LINES = ("/index.md", "/log.md")
 
@@ -36,7 +38,11 @@ def _markdown_target(value: object) -> str:
 def render_index(path: Path, exclude: Sequence[str] = ()) -> str:
     """Render a deterministic concept index grouped by producer-defined type."""
     bundle = load_bundle(path, exclude)
-    rows = bundle.concepts.order_by("concept_type", "logical_key").execute().to_dict(orient="records")
+    rows = (
+        bundle.concepts.order_by("concept_type", "logical_key")
+        .execute()
+        .to_dict(orient="records")
+    )
     grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
     for row in rows:
         grouped[str(row["concept_type"])].append(row)
@@ -83,7 +89,9 @@ def render_log(path: Path, exclude: Sequence[str] = ()) -> str:
     lines = [_GENERATED, "", "# Log", ""]
     for authored_date in sorted(dated, reverse=True):
         lines.extend((f"## {authored_date}", ""))
-        for row in sorted(dated[authored_date], key=lambda item: str(item["logical_key"])):
+        for row in sorted(
+            dated[authored_date], key=lambda item: str(item["logical_key"])
+        ):
             title = _display_title(row).replace("[", "\\[").replace("]", "\\]")
             target = _markdown_target(row["path"])
             concept_type = str(row["concept_type"])
