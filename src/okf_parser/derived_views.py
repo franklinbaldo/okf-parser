@@ -6,7 +6,6 @@ import hashlib
 import json
 from collections import defaultdict
 from datetime import date
-from pathlib import Path
 from typing import TYPE_CHECKING
 from urllib.parse import quote
 
@@ -14,6 +13,7 @@ from okf_parser.bundle import load_bundle
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from pathlib import Path
 
 _GENERATED = "<!-- GENERATED FILE — DO NOT EDIT. Regenerate with okf-parser materialize. -->"
 _DATE_KEYS = ("updated", "date", "created")
