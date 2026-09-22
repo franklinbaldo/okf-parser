@@ -54,6 +54,7 @@ uv run okf-parser check path/to/bundle --relational-schema okf.schema.sql
 uv run okf-parser inventory path/to/bundle
 uv run okf-parser graph path/to/bundle
 uv run okf-parser materialize path/to/bundle
+uv run okf-parser materialize path/to/bundle --write
 uv run okf-parser format path/to/bundle
 uv run okf-parser format path/to/bundle --write
 uv run okf-parser duckdb path/to/bundle knowledge.duckdb
@@ -98,10 +99,12 @@ them out of version control:
 uv run okf-parser materialize path/to/bundle
 ```
 
-The command writes deterministic `index.md` and `log.md` files and ensures
-root-relative `/index.md` and `/log.md` entries exist in the bundle's
-`.gitignore`. Pass `--no-update-gitignore` only when another repository-level
-ignore policy already covers the files.
+By default the command is read-only: it previews deterministic `index.md` and
+`log.md` contents without touching the filesystem. Pass `--write` to
+materialize them. A write also ensures root-relative `/index.md` and
+`/log.md` entries exist in the bundle's `.gitignore`; pass
+`--no-update-gitignore` only when another repository-level ignore policy
+already covers the files.
 
 `index.md` groups every authored concept by type and links to the concept
 document. `log.md` contains only concepts whose frontmatter explicitly carries
@@ -109,9 +112,10 @@ an ISO date, using `updated`, then `date`, then `created`. Filesystem mtimes
 and Git history are deliberately ignored: generated views must be reproducible
 from OKF alone.
 
-Use `--no-write` to preview the generated contents without touching the
-filesystem. Generated files carry a `GENERATED FILE — DO NOT EDIT` marker and
-may be deleted at any time.
+Preview output includes the generated Markdown. Write output stays compact,
+reporting paths plus deterministic SHA-256 digests and byte counts for the two
+views. Generated files carry a `GENERATED FILE — DO NOT EDIT` marker and may
+be deleted at any time.
 
 ## Excluding paths
 
