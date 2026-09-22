@@ -38,7 +38,7 @@ def render_index(path: Path, exclude: Sequence[str] = ()) -> str:
     for concept_type in sorted(grouped, key=str.casefold):
         lines.extend((f"## {concept_type}", ""))
         for row in grouped[concept_type]:
-            title = _display_title(row).replace("[", "\[").replace("]", "\]")
+            title = _display_title(row).replace("[", "\\[").replace("]", "\\]")
             target = str(row["path"]).replace(" ", "%20")
             lines.append(f"- [{title}]({target})")
         lines.append("")
@@ -77,7 +77,7 @@ def render_log(path: Path, exclude: Sequence[str] = ()) -> str:
     for authored_date in sorted(dated, reverse=True):
         lines.extend((f"## {authored_date}", ""))
         for row in sorted(dated[authored_date], key=lambda item: str(item["logical_key"])):
-            title = _display_title(row).replace("[", "\[").replace("]", "\]")
+            title = _display_title(row).replace("[", "\\[").replace("]", "\\]")
             target = str(row["path"]).replace(" ", "%20")
             concept_type = str(row["concept_type"])
             lines.append(f"- [{title}]({target}) — {concept_type}")
