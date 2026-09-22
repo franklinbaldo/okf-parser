@@ -194,8 +194,10 @@ def required_type_spec_fields(
 
         for field in required:
             value = frontmatter.get(field)
-            missing = field not in frontmatter or value is None or (
-                isinstance(value, str) and not value.strip()
+            missing = (
+                field not in frontmatter
+                or value is None
+                or (isinstance(value, str) and not value.strip())
             )
             if not missing:
                 continue
