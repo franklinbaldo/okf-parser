@@ -156,7 +156,7 @@ def graph(path: str, *, exclude: RepeatableStrings = None) -> CliResult[JsonPayl
 def materialize_command(
     path: str,
     *,
-    write: bool = True,
+    write: bool = False,
     update_gitignore: bool = True,
     exclude: RepeatableStrings = None,
 ) -> CliResult[JsonPayload]:
