@@ -1,0 +1,37 @@
+name: Format FastMCP 4 migration
+
+on:
+  push:
+    branches:
+      - feat/fastmcp-4
+
+permissions:
+  contents: write
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: feat/fastmcp-4
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+      - run: uv sync --frozen --all-groups
+      - name: Format changed Python surface
+        run: uv run ruff format src/okf_parser/type_specs.py src/okf_parser/cli.py tests/test_mcp.py
+      - name: Commit formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "already formatted"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/okf_parser/type_specs.py src/okf_parser/cli.py tests/test_mcp.py
+          git commit -m "style: apply Ruff formatting"
+          git push origin HEAD:feat/fastmcp-4
