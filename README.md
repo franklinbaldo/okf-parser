@@ -240,7 +240,7 @@ Add the repository as a CI check:
 ```yaml
 steps:
   - uses: actions/checkout@v7
-  - uses: franklinbaldo/okf-parser@v0.45.10
+  - uses: franklinbaldo/okf-parser@v0.45.11
     with:
       path: knowledge
 ```
