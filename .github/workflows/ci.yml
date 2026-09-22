@@ -173,6 +173,8 @@ jobs:
         run: uv run vulture src --min-confidence 90
 
       - name: Run tests with coverage
+        env:
+          FASTMCP_MCP_CAMELCASE_COMPAT: "false"
         run: uv run pytest --cov --cov-report=term-missing --cov-fail-under=85
 
       - name: Verify the derived PyPI description is current

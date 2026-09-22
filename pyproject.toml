@@ -33,7 +33,7 @@ classifiers = [
 dependencies = [
   "cyclopts>=4.22,<5",
   "duckdb>=1.4,<2",
-  "fastmcp>=3.4,<4",
+  "fastmcp>=4.0.5,<5",
   "ibis-framework[duckdb]>=12,<13",
   "markdown-it-py>=4,<5",
   # okf_parser.markdown_style overrides mdformat's ordered-list renderer, which
@@ -44,7 +44,7 @@ dependencies = [
   "mdformat-gfm>=1,<2",
   "networkx>=3.4,<4",
   "pyarrow>=18,<26",
-  "pydantic>=2.11,<3",
+  "pydantic>=2.12,<3",
   "pyyaml>=6,<7",
   "ruamel.yaml>=0.18,<0.20",
 ]
