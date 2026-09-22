@@ -148,6 +148,21 @@ def _required_fields_from_spec(path: Path) -> tuple[str, ...]:
     return tuple(fields)
 
 
+def _required_fields_for_type(
+    root: Path,
+    template: str,
+    concept_type: str,
+) -> tuple[str, ...]:
+    """Resolve the authored required fields for one concept type."""
+    relative = spec_relative_path(template, concept_type)
+    if relative is None:
+        return ()
+    spec_path = root / relative
+    if not spec_path.is_file():
+        return ()
+    return _required_fields_from_spec(spec_path)
+
+
 def required_type_spec_fields(
     root: Path,
     concepts: Sequence[Mapping[str, object]],
@@ -175,12 +190,7 @@ def required_type_spec_fields(
 
         required = required_by_type.get(concept_type)
         if required is None:
-            relative = spec_relative_path(template, concept_type)
-            if relative is None:
-                required = ()
-            else:
-                spec_path = root / relative
-                required = _required_fields_from_spec(spec_path) if spec_path.is_file() else ()
+            required = _required_fields_for_type(root, template, concept_type)
             required_by_type[concept_type] = required
         if not required:
             continue
