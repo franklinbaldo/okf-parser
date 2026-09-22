@@ -47,8 +47,12 @@ def test_materialize_writes_views_and_opinionated_gitignore(tmp_path: Path) -> N
 
     assert payload["written"] == ["index.md", "log.md"]
     assert "generated" not in payload
-    assert payload["views"]["index.md"]["bytes"] > 0
-    assert len(payload["views"]["index.md"]["sha256"]) == 64
+    views = payload["views"]
+    assert isinstance(views, dict)
+    index_view = views["index.md"]
+    assert isinstance(index_view, dict)
+    assert index_view["bytes"] > 0
+    assert len(index_view["sha256"]) == 64
     assert (tmp_path / "index.md").read_text(encoding="utf-8").startswith("<!-- GENERATED FILE")
     assert (tmp_path / "log.md").exists()
     assert (tmp_path / ".gitignore").read_text(encoding="utf-8").splitlines()[-2:] == [
