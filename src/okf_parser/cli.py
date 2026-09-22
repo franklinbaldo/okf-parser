@@ -525,10 +525,10 @@ def _tool_annotations(
 ) -> ToolAnnotations:
     """Build explicit MCP effect metadata without relying on protocol defaults."""
     return ToolAnnotations(
-        readOnlyHint=read_only,
-        destructiveHint=destructive,
-        idempotentHint=idempotent,
-        openWorldHint=open_world,
+        read_only_hint=read_only,
+        destructive_hint=destructive,
+        idempotent_hint=idempotent,
+        open_world_hint=open_world,
     )
 
 

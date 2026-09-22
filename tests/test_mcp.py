@@ -50,10 +50,10 @@ def _annotation_tuple(tool: Tool) -> tuple[bool | None, bool | None, bool | None
     annotations = tool.annotations
     assert annotations is not None
     return (
-        annotations.readOnlyHint,
-        annotations.destructiveHint,
-        annotations.idempotentHint,
-        annotations.openWorldHint,
+        annotations.read_only_hint,
+        annotations.destructive_hint,
+        annotations.idempotent_hint,
+        annotations.open_world_hint,
     )
 
 
@@ -90,8 +90,8 @@ def test_mcp_profiles_isolate_authority_when_writable_is_built_first() -> None:
 def test_mcp_public_schemas_keep_aliases_and_preview_write_pairs_match() -> None:
     tools = _tools(cli.build_mcp(allow_write=True))
 
-    apply_preview = tools["apply_preview"].inputSchema
-    apply_write = tools["apply_write"].inputSchema
+    apply_preview = tools["apply_preview"].input_schema
+    apply_write = tools["apply_write"].input_schema
     assert apply_preview == apply_write
     apply_properties = apply_preview["properties"]
     assert "from" in apply_properties
@@ -99,13 +99,13 @@ def test_mcp_public_schemas_keep_aliases_and_preview_write_pairs_match() -> None
     assert "spec_template" in apply_properties
     assert "write" not in apply_properties
 
-    init_preview = tools["init_preview"].inputSchema
-    init_write = tools["init_write"].inputSchema
+    init_preview = tools["init_preview"].input_schema
+    init_write = tools["init_write"].input_schema
     assert init_preview == init_write
     assert "write" not in init_preview["properties"]
 
-    import_preview = tools["import_preview"].inputSchema
-    import_write = tools["import_write"].inputSchema
+    import_preview = tools["import_preview"].input_schema
+    import_write = tools["import_write"].input_schema
     preview_properties = import_preview["properties"]
     write_properties = import_write["properties"]
     assert "expected_preview_token" not in preview_properties
@@ -121,12 +121,12 @@ def test_mcp_public_schemas_keep_aliases_and_preview_write_pairs_match() -> None
         "verify-identical",
     ]
 
-    assert "classify" in tools["check"].inputSchema["properties"]
-    assert "digests" in tools["inventory"].inputSchema["properties"]
+    assert "classify" in tools["check"].input_schema["properties"]
+    assert "digests" in tools["inventory"].input_schema["properties"]
 
-    schema_format = tools["schema"].inputSchema["properties"]["format"]
+    schema_format = tools["schema"].input_schema["properties"]["format"]
     assert schema_format["enum"] == ["json", "zod", "pydantic", "graphql"]
-    assert "spec_template" in tools["duckdb_export"].inputSchema["properties"]
+    assert "spec_template" in tools["duckdb_export"].input_schema["properties"]
 
 
 def test_mcp_effect_annotations_describe_maximum_possible_effect() -> None:
