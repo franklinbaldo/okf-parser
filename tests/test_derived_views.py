@@ -43,9 +43,12 @@ def test_log_uses_only_explicit_iso_frontmatter_dates(tmp_path: Path) -> None:
 def test_materialize_writes_views_and_opinionated_gitignore(tmp_path: Path) -> None:
     _write(tmp_path / "concept.md", "---\ntype: Note\ntitle: Concept\n---\n")
 
-    payload = materialize_derived_views(tmp_path)
+    payload = materialize_derived_views(tmp_path, write=True)
 
     assert payload["written"] == ["index.md", "log.md"]
+    assert "generated" not in payload
+    assert payload["views"]["index.md"]["bytes"] > 0
+    assert len(payload["views"]["index.md"]["sha256"]) == 64
     assert (tmp_path / "index.md").read_text(encoding="utf-8").startswith("<!-- GENERATED FILE")
     assert (tmp_path / "log.md").exists()
     assert (tmp_path / ".gitignore").read_text(encoding="utf-8").splitlines()[-2:] == [
@@ -57,9 +60,42 @@ def test_materialize_writes_views_and_opinionated_gitignore(tmp_path: Path) -> N
 def test_preview_does_not_touch_filesystem(tmp_path: Path) -> None:
     _write(tmp_path / "concept.md", "---\ntype: Note\n---\n")
 
-    payload = materialize_derived_views(tmp_path, write=False)
+    payload = materialize_derived_views(tmp_path)
 
     assert payload["written"] == []
+    assert "generated" in payload
     assert not (tmp_path / "index.md").exists()
     assert not (tmp_path / "log.md").exists()
     assert not (tmp_path / ".gitignore").exists()
+
+
+def test_materialize_is_idempotent(tmp_path: Path) -> None:
+    _write(tmp_path / "concept.md", "---\ntype: Note\ntitle: Concept\n---\n")
+
+    first = materialize_derived_views(tmp_path, write=True)
+    first_index = (tmp_path / "index.md").read_bytes()
+    first_log = (tmp_path / "log.md").read_bytes()
+    first_gitignore = (tmp_path / ".gitignore").read_bytes()
+
+    second = materialize_derived_views(tmp_path, write=True)
+
+    assert (tmp_path / "index.md").read_bytes() == first_index
+    assert (tmp_path / "log.md").read_bytes() == first_log
+    assert (tmp_path / ".gitignore").read_bytes() == first_gitignore
+    assert first["views"] == second["views"]
+    assert first["gitignore_changed"] is True
+    assert second["gitignore_changed"] is False
+
+
+def test_generated_links_percent_encode_markdown_sensitive_path_characters(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "odd )#?.md",
+        "---\ntype: Note\ntitle: Adversarial path\nupdated: '2026-09-22'\n---\n",
+    )
+
+    index = render_index(tmp_path)
+    log = render_log(tmp_path)
+
+    target = "odd%20%29%23%3F.md"
+    assert f"[Adversarial path]({target})" in index
+    assert f"[Adversarial path]({target})" in log
