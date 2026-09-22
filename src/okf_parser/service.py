@@ -306,7 +306,7 @@ def materialize_views(
     path: str,
     exclude: Sequence[str] = (),
     *,
-    write: bool = True,
+    write: bool = False,
     update_gitignore: bool = True,
 ) -> dict[str, object]:
     """Render derived index.md/log.md views from authored OKF concepts."""
