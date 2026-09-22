@@ -161,7 +161,7 @@ jobs:
         run: uv lock --check
 
       - name: Check Python formatting
-        run: uv run ruff format --diff .
+        run: uv run ruff format --check .
 
       - name: Lint Python
         run: uv run ruff check .
