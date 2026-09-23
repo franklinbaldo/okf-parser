@@ -24,11 +24,10 @@ if TYPE_CHECKING:
 
 
 def _stub_content(concept_type: str) -> str:
-    return (
-        "---\ntype: Spec\n---\n\n"
-        f"# {concept_type}\n\n"
-        "TODO: describe this type's frontmatter fields and semantics.\n"
-    )
+    # A scaffold must not manufacture prose or optional metadata merely
+    # to make a document look complete. The heading identifies the type; authors
+    # add only semantics they actually know.
+    return f"---\ntype: Spec\n---\n\n# {concept_type}\n"
 
 
 def _plan(
