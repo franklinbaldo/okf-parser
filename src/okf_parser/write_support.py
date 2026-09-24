@@ -1,9 +1,8 @@
 """Package-internal filesystem safety primitives shared by OKF write services.
 
-The public write APIs remain ``apply`` and the bounded single-concept edit
-services. This module owns the mechanics both need: coherent snapshots,
-lossless physical document reconstruction, candidate-tree staging, validation,
-and the final whole-bundle freshness check.
+The public write APIs remain bounded domain-neutral services. This module owns the
+mechanics they share: coherent snapshots, lossless physical document reconstruction,
+candidate-tree staging, validation, and the final whole-bundle freshness check.
 """
 
 from __future__ import annotations
@@ -135,6 +134,7 @@ def render_raw(raw: RawDocument, frontmatter_text: str) -> bytes:
 def write_raw(path: Path, raw: RawDocument, frontmatter_text: str) -> None:
     """Atomically replace one staged/live document preserving physical style."""
     data = render_raw(raw, frontmatter_text)
+    path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f".{path.name}.okf-write.tmp")
     tmp.write_bytes(data)
     tmp.replace(path)
@@ -251,9 +251,10 @@ def build_candidate_tree(
     candidates: CandidateDocuments,
     exclude: Sequence[str],
 ) -> None:
-    """Mirror the visible bundle into staging, substituting candidate documents."""
+    """Mirror the visible bundle into staging, substituting or adding candidate documents."""
     rules = ExclusionRules.read(root, exclude)
     prunes = not rules.has_negation
+    staged_candidates: set[str] = set()
     for directory, directory_names, filenames in root.walk(follow_symlinks=False):
         base = directory.relative_to(root)
         _prune_walk_directories(directory, directory_names, base, rules, prunes=prunes)
@@ -269,11 +270,18 @@ def build_candidate_tree(
             if candidate is not None:
                 raw, frontmatter_text, _ = candidate
                 write_raw(destination, raw, frontmatter_text)
+                staged_candidates.add(posix)
                 continue
             try:
                 os.link(source, destination)
             except OSError:
                 shutil.copy2(source, destination)
+
+    for relative, (raw, frontmatter_text, _) in candidates.items():
+        if relative in staged_candidates:
+            continue
+        destination = candidate_root / Path(relative)
+        write_raw(destination, raw, frontmatter_text)
 
 
 def stage_validate_write(  # noqa: PLR0913 -- shared write safety inputs.
@@ -282,7 +290,7 @@ def stage_validate_write(  # noqa: PLR0913 -- shared write safety inputs.
     candidates: CandidateDocuments,
     baseline_keys: set[tuple[str, str, str]],
     changed_paths: Sequence[str],
-    touched_hashes: Mapping[str, str],
+    touched_hashes: Mapping[str, str | None],
     baseline_manifest: Mapping[str, tuple[int, int]],
     *,
     conflict_error: str,
@@ -328,11 +336,15 @@ def stage_validate_write(  # noqa: PLR0913 -- shared write safety inputs.
             for relative in baseline_keys_set & current_keys_set - candidate_keys_set
             if baseline_manifest[relative] != current_manifest[relative]
         }
-        stale_touched = {
-            relative
-            for relative, (_, _, real) in candidates.items()
-            if _sha256(real) != touched_hashes[relative]
-        }
+        stale_touched: set[str] = set()
+        for relative, (_, _, real) in candidates.items():
+            expected_hash = touched_hashes[relative]
+            if expected_hash is None:
+                if real.exists():
+                    stale_touched.add(relative)
+                continue
+            if not real.is_file() or _sha256(real) != expected_hash:
+                stale_touched.add(relative)
         conflicts = added_or_removed | stale_untouched | stale_touched
         if conflicts:
             return WriteResult(
