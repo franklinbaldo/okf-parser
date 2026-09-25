@@ -7,14 +7,20 @@ import { describe, expect, test } from "vitest";
 import { loadBundle, type Bundle } from "../src/index.js";
 
 // Mirrors tests/test_upstream_conformance.py: only the keys present in
-// `expected` are asserted, and a case carrying `divergence` must still fail.
+// `expected` are asserted. A known divergence records the exact value this
+// engine produces for each divergent field; those fields are held to the
+// recorded value and every other field stays asserted against `expected`.
 const corpus = path.resolve(import.meta.dirname, "../../conformance/upstream");
 
 interface UpstreamCase {
   readonly claim: string;
   readonly category: "normative" | "policy";
   readonly expected: Readonly<Record<string, unknown>>;
-  readonly divergence?: { readonly kind: string; readonly detail: string };
+  readonly divergence?: {
+    readonly kind: string;
+    readonly detail: string;
+    readonly observed: Readonly<Record<string, Readonly<Record<string, unknown>>>>;
+  };
 }
 
 function observe(bundle: Bundle): Record<string, unknown> {
@@ -56,16 +62,17 @@ describe("upstream OKF conformance corpus", () => {
       await readFile(path.join(directory, "case.json"), "utf8"),
     ) as UpstreamCase;
     const observed = observe(await loadBundle(path.join(directory, "bundle")));
-    const mismatches = Object.keys(item.expected).filter(
-      (key) => !isDeepStrictEqual(observed[key], item.expected[key]),
+    const recorded = item.divergence?.observed.typescript ?? {};
+    const wanted: Record<string, unknown> = { ...item.expected, ...recorded };
+    const mismatches = Object.keys(wanted).filter(
+      (key) => !isDeepStrictEqual(observed[key], wanted[key]),
     );
-    if (item.divergence === undefined) {
-      expect(
-        Object.fromEntries(mismatches.map((key) => [key, observed[key]])),
-        `${item.category}-regression: ${item.claim}`,
-      ).toEqual({});
-    } else {
-      expect(mismatches, `${item.divergence.kind} was fixed; update the case`).not.toEqual([]);
-    }
+    const report = (keys: readonly string[]): Record<string, unknown> =>
+      Object.fromEntries(keys.map((key) => [key, { expected: wanted[key], observed: observed[key] }]));
+    expect(
+      report(mismatches.filter((key) => key in recorded)),
+      "divergence-changed: the recorded divergence was fixed or shifted; update the case",
+    ).toEqual({});
+    expect(report(mismatches), `${item.category}-regression: ${item.claim}`).toEqual({});
   });
 });

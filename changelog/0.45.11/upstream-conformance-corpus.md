@@ -10,9 +10,11 @@ and SHA-256 digest, registers each consumer-facing MUST and MUST NOT clause
 with its verbatim quote, and holds one fixture bundle per claim. The Python,
 Rust and TypeScript engines execute the same `case.json` expectations, and a
 failure reports an engine divergence, a normative or policy regression, or a
-known divergence from upstream.
+change to a recorded divergence.
 
-The corpus records two known divergences as strict expected failures:
+A known divergence records the exact value each affected engine produces for
+each divergent field, and every other field stays asserted, so a divergence
+never masks an unrelated regression. The corpus records two:
 
 - all engines reject `log.md` frontmatter (OKF006), which §9 does not forbid
   and upstream's own `acme_retail` example uses;

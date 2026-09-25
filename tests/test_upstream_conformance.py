@@ -3,13 +3,18 @@
 Each case under ``conformance/upstream/<version>/<name>/`` holds a ``bundle/``
 directory and a ``case.json`` stating what a consumer must observe. Only the
 keys present in ``expected`` are asserted, so a case pins exactly the claim it
-names. A failure message says which of three things broke:
+names.
 
-- ``engine-divergence``: the Python and Rust engines disagree with each other;
-- ``normative-regression`` / ``policy-regression``: the engines agree with each
-  other but no longer match the case;
-- a case carrying ``divergence`` is a known disagreement with upstream and is a
-  strict xfail, so fixing it forces the case to be updated.
+A known disagreement is recorded in ``divergence.observed`` as the exact value
+each affected engine produces for each affected field. That engine is held to
+those values instead of ``expected`` for those fields only; every other field
+stays asserted normally. A failure message says what broke:
+
+- ``engine-divergence``: the engines disagree on a field no divergence declares;
+- ``normative-regression`` / ``policy-regression``: a field no longer matches
+  the case;
+- ``divergence-changed``: an engine no longer produces the recorded divergent
+  value, because the divergence was fixed or shifted. Update the case.
 """
 
 from __future__ import annotations
@@ -29,6 +34,8 @@ _ROOT = Path(__file__).parents[1] / "conformance" / "upstream"
 _UPSTREAM = json.loads((_ROOT / "UPSTREAM.json").read_text(encoding="utf-8"))
 _CASES = sorted(path.parent for path in _ROOT.glob("*/*/case.json"))
 _EXECUTABLE = os.environ.get("OKF_CORE")
+_ENGINES = {"python", "rust", "typescript"}
+_FIELDS = {"conformant", "concepts", "reserved", "diagnostics", "links", "frontmatter"}
 
 
 def _case(case_dir: Path) -> dict[str, Any]:
@@ -72,47 +79,69 @@ def _engines(bundle_dir: Path) -> dict[str, dict[str, Any]]:
     return observed
 
 
-def _mismatches(expected: dict[str, Any], observed: dict[str, Any]) -> dict[str, object]:
-    return {
-        key: {"expected": value, "observed": observed[key]}
-        for key, value in expected.items()
-        if observed[key] != value
-    }
+def _divergent(case: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    divergence = case.get("divergence")
+    return {} if divergence is None else divergence["observed"]
 
 
 @pytest.mark.parametrize("case_dir", _CASES, ids=lambda path: f"{path.parent.name}/{path.name}")
-def test_upstream_case(case_dir: Path, request: pytest.FixtureRequest) -> None:
+def test_upstream_case(case_dir: Path) -> None:
     case = _case(case_dir)
-    divergence = case.get("divergence")
-    if divergence is not None:
-        request.applymarker(
-            pytest.mark.xfail(strict=True, reason=f"{divergence['kind']}: {divergence['detail']}")
-        )
-
+    divergent = _divergent(case)
+    divergent_fields = {field for fields in divergent.values() for field in fields}
     observed = _engines(case_dir / "bundle")
 
     reference = observed["python"]
     for engine, result in observed.items():
-        assert result == reference, f"engine-divergence: python != {engine}"
+        drift = sorted(
+            field for field in _FIELDS - divergent_fields if result[field] != reference[field]
+        )
+        assert not drift, f"engine-divergence: python != {engine} on {drift}"
 
-    mismatches = _mismatches(case["expected"], reference)
-    assert not mismatches, (
-        f"{case['category']}-regression in {case_dir.name}: {case['claim']}\n"
-        + json.dumps(mismatches, ensure_ascii=False, indent=2)
-    )
+    for engine, result in observed.items():
+        recorded = divergent.get(engine, {})
+        wanted = {**case["expected"], **recorded}
+        mismatches = {
+            field: {"expected": value, "observed": result[field]}
+            for field, value in wanted.items()
+            if result[field] != value
+        }
+        changed = sorted(field for field in mismatches if field in recorded)
+        assert not changed, (
+            f"divergence-changed in {case_dir.name} for {engine} on {changed}: "
+            "the recorded divergence was fixed or shifted; update the case\n"
+            + json.dumps(mismatches, ensure_ascii=False, indent=2)
+        )
+        assert not mismatches, (
+            f"{case['category']}-regression in {case_dir.name} for {engine}: {case['claim']}\n"
+            + json.dumps(mismatches, ensure_ascii=False, indent=2)
+        )
 
 
 def test_every_case_is_well_formed() -> None:
     clause_ids = {clause["id"] for clause in _UPSTREAM["clauses"]}
-    allowed = {"conformant", "concepts", "reserved", "diagnostics", "links", "frontmatter"}
     assert _CASES
     for case_dir in _CASES:
         case = _case(case_dir)
         assert case["category"] in {"normative", "policy"}, case_dir
         assert case["clauses"], case_dir
         assert set(case["clauses"]) <= clause_ids, case_dir
-        assert set(case["expected"]) <= allowed, case_dir
+        assert set(case["expected"]) <= _FIELDS, case_dir
         assert (case_dir / "bundle").is_dir(), case_dir
+        divergence = case.get("divergence")
+        if divergence is None:
+            continue
+        assert divergence["kind"], case_dir
+        assert divergence["detail"], case_dir
+        assert divergence["observed"], case_dir
+        assert set(divergence["observed"]) <= _ENGINES, case_dir
+        for fields in divergence["observed"].values():
+            assert fields, case_dir
+            assert set(fields) <= _FIELDS, case_dir
+            # A recorded divergence must actually differ from what the case expects.
+            assert all(case["expected"].get(key) != value for key, value in fields.items()), (
+                case_dir
+            )
 
 
 def test_every_covered_clause_has_a_case() -> None:

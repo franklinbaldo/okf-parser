@@ -18,6 +18,28 @@
   },
   "divergence": {
     "kind": "engine-divergence",
-    "detail": "Resolution agrees, but the Python and TypeScript engines record markdown-it's normalized href (a%C3%A7%C3%A3o.md) as raw_target while the Rust engine keeps the literal ação.md. raw_target should be the source text as written."
+    "detail": "Resolution agrees, but the Python and TypeScript engines record markdown-it's normalized href (a%C3%A7%C3%A3o.md) as raw_target while the Rust engine keeps the literal ação.md. raw_target should be the source text as written.",
+    "observed": {
+      "python": {
+        "links": [
+          {
+            "source": "source",
+            "raw_target": "a%C3%A7%C3%A3o.md",
+            "target": "ação",
+            "exists": true
+          }
+        ]
+      },
+      "typescript": {
+        "links": [
+          {
+            "source": "source",
+            "raw_target": "a%C3%A7%C3%A3o.md",
+            "target": "ação",
+            "exists": true
+          }
+        ]
+      }
+    }
   }
 }

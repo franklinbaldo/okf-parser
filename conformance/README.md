@@ -94,17 +94,22 @@ clause has no case.
 - `claim` — one sentence stating what the case proves;
 - `expected` — any subset of `conformant`, `concepts`, `reserved`,
   `diagnostics`, `links` and `frontmatter`. Only the keys present are asserted;
-- `divergence` — optional. A known disagreement, with a `kind` and a `detail`.
+- `divergence` — optional. A known disagreement, with a `kind`, a `detail`
+  and `observed`: for each affected engine (`python`, `rust`, `typescript`),
+  the exact value it produces for each divergent field. That engine is held to
+  the recorded value for those fields only; every other field in `expected`
+  stays asserted, so a divergence never hides an unrelated regression.
 
 ### Reading a failure
 
-- `engine-divergence` — the engines disagree with each other. The Python test
-  compares the Python and Rust engines when `OKF_CORE` names a Rust binary.
-- `normative-regression` — the engines agree, but no longer do what the
-  specification says.
-- `policy-regression` — the engines agree, but changed a documented policy.
-- A case with `divergence` is a strict expected failure. When the divergence is
-  fixed, the test fails until the case drops its `divergence` key.
+- `engine-divergence` — the engines disagree on a field no divergence
+  declares. The Python test compares the Python and Rust engines when
+  `OKF_CORE` names a Rust binary.
+- `normative-regression` — a field no longer does what the specification says.
+- `policy-regression` — a field changed a documented policy.
+- `divergence-changed` — an engine no longer produces the recorded divergent
+  value, because the divergence was fixed or shifted. Update or drop the
+  `divergence` entry for that engine.
 
 ### Known divergences
 
