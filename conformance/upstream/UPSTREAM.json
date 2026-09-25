@@ -1,0 +1,132 @@
+{
+  "repository": "https://github.com/GoogleCloudPlatform/knowledge-catalog",
+  "commit": "22efaa5402775a7c4d4c37f89e41258daaf3cb65",
+  "committed_at": "2026-09-21T11:26:58-07:00",
+  "specification": {
+    "path": "okf/SPEC.md",
+    "version": "0.2",
+    "sha256": "26aa5da029278939f914e578107242d9607d4f2dc5fe153272b82f9ed1030101",
+    "license": "Apache-2.0"
+  },
+  "examples": {
+    "acme_retail": [
+      "OKF006"
+    ],
+    "crypto_bitcoin": [],
+    "ga4": [],
+    "stackoverflow": []
+  },
+  "clauses": [
+    {
+      "id": "reserved-filenames",
+      "section": "3.1",
+      "quote": "The following filenames have defined meaning at any level of the hierarchy and MUST NOT be used for concept documents",
+      "status": "covered"
+    },
+    {
+      "id": "type-required",
+      "section": "4.1",
+      "quote": "`type` is the only always-required key; a concept carrying just `type` is fully conformant (§11).",
+      "status": "covered"
+    },
+    {
+      "id": "unknown-types-tolerated",
+      "section": "4.1",
+      "quote": "consumers MUST tolerate unknown types gracefully, typically by treating them as generic concepts.",
+      "status": "covered"
+    },
+    {
+      "id": "unknown-fields-preserved",
+      "section": "4.1",
+      "quote": "Consumers SHOULD preserve unknown keys when round-tripping and MUST NOT reject documents with unrecognized fields.",
+      "status": "covered"
+    },
+    {
+      "id": "verified-bare-mapping",
+      "section": "5.2",
+      "quote": "Consumers MUST treat a bare mapping as a one-element list",
+      "status": "not-applicable",
+      "reason": "okf-parser does not derive trust tiers; it preserves both shapes verbatim, which the verified-mapping-and-list case pins."
+    },
+    {
+      "id": "trust-families-optional",
+      "section": "5.3",
+      "quote": "A concept with no trust frontmatter is still consumable; consumers MUST NOT reject it (§11).",
+      "status": "covered"
+    },
+    {
+      "id": "human-actor-prefix",
+      "section": "7",
+      "quote": "producers MUST use it for hand-authored or human-confirmed content.",
+      "status": "not-applicable",
+      "reason": "Producer obligation; a consumer cannot tell whether content was hand-authored."
+    },
+    {
+      "id": "broken-links-tolerated",
+      "section": "6.1",
+      "quote": "Consumers MUST tolerate broken links: a link whose target does not exist in the bundle is not malformed",
+      "status": "covered"
+    },
+    {
+      "id": "link-forms",
+      "section": "6.1",
+      "quote": "Concepts MAY link to other concepts using standard markdown links. Two forms are supported:",
+      "status": "covered"
+    },
+    {
+      "id": "index-frontmatter",
+      "section": "8",
+      "quote": "Index files contain no frontmatter, with one exception: a bundle-root `index.md` MAY carry an `okf_version` key (§12).",
+      "status": "covered"
+    },
+    {
+      "id": "log-date-headings",
+      "section": "9",
+      "quote": "Date headings MUST use ISO 8601 `YYYY-MM-DD` form.",
+      "status": "covered"
+    },
+    {
+      "id": "computation-parameters-only",
+      "section": "10.3",
+      "quote": "The agent MAY only supply *values* for the declared `parameters`; it MUST NOT author or edit the computation.",
+      "status": "not-applicable",
+      "reason": "Runtime obligation on an executing agent, not on a bundle reader."
+    },
+    {
+      "id": "frontmatter-parseable",
+      "section": "11",
+      "quote": "Every non-reserved `.md` file in the tree contains a parseable YAML frontmatter block.",
+      "status": "covered"
+    },
+    {
+      "id": "type-non-empty",
+      "section": "11",
+      "quote": "Every frontmatter block contains a non-empty `type` field.",
+      "status": "covered"
+    },
+    {
+      "id": "reserved-structure",
+      "section": "11",
+      "quote": "Every reserved filename (`index.md`, `log.md`) follows the structure in §8 and §9 respectively when present.",
+      "status": "covered"
+    },
+    {
+      "id": "missing-index-tolerated",
+      "section": "11",
+      "quote": "Missing `index.md` files.",
+      "status": "covered"
+    },
+    {
+      "id": "unknown-version-best-effort",
+      "section": "12",
+      "quote": "Consumers that do not understand the declared version SHOULD attempt best-effort consumption rather than refusing the bundle.",
+      "status": "covered"
+    },
+    {
+      "id": "v01-fallbacks",
+      "section": "13",
+      "quote": "A v0.1 bundle is consumable by a v0.2 consumer under the fallbacks noted here.",
+      "status": "covered"
+    }
+  ]
+}

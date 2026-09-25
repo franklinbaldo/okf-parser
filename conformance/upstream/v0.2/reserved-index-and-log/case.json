@@ -1,0 +1,22 @@
+{
+  "clauses": [
+    "reserved-filenames",
+    "index-frontmatter",
+    "reserved-structure"
+  ],
+  "category": "normative",
+  "claim": "index.md and log.md at any level are reserved documents, never concepts; a root index.md may carry okf_version.",
+  "expected": {
+    "conformant": true,
+    "concepts": {
+      "metrics/revenue.md": "Metric"
+    },
+    "reserved": [
+      "index.md",
+      "log.md",
+      "metrics/index.md"
+    ],
+    "diagnostics": [],
+    "links": []
+  }
+}

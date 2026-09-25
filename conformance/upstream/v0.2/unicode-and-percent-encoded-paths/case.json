@@ -1,0 +1,30 @@
+{
+  "clauses": [
+    "link-forms"
+  ],
+  "category": "normative",
+  "claim": "Percent-encoded links resolve to Unicode and space-containing filenames.",
+  "expected": {
+    "conformant": true,
+    "diagnostics": [],
+    "concepts": {
+      "source.md": "Reference",
+      "ação.md": "Reference",
+      "notas/com espaço.md": "Reference"
+    },
+    "links": [
+      {
+        "source": "source",
+        "raw_target": "a%C3%A7%C3%A3o.md",
+        "target": "ação",
+        "exists": true
+      },
+      {
+        "source": "source",
+        "raw_target": "/notas/com%20espa%C3%A7o.md",
+        "target": "notas/com espaço",
+        "exists": true
+      }
+    ]
+  }
+}

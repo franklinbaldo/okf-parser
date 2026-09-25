@@ -1,0 +1,17 @@
+{
+  "clauses": [
+    "reserved-structure"
+  ],
+  "category": "policy",
+  "claim": "okf-parser reads 'the body uses one or more sections' (§8) as requiring at least one level-one heading.",
+  "expected": {
+    "conformant": false,
+    "diagnostics": [
+      {
+        "code": "OKF005",
+        "severity": "error",
+        "path": "index.md"
+      }
+    ]
+  }
+}

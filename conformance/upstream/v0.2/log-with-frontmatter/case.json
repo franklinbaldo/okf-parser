@@ -1,0 +1,17 @@
+{
+  "clauses": [
+    "reserved-structure"
+  ],
+  "category": "normative",
+  "claim": "§9 does not forbid frontmatter in log.md (§8 forbids it only for index.md), and the upstream acme_retail example bundle ships a log.md with frontmatter. A v0.2 consumer must not reject it.",
+  "expected": {
+    "conformant": true,
+    "reserved": [
+      "log.md"
+    ]
+  },
+  "divergence": {
+    "kind": "upstream-ambiguity",
+    "detail": "All engines emit OKF006 (error) for log.md frontmatter, so upstream's own acme_retail bundle is reported non-conformant. Resolve by downgrading OKF006 to a warning or by getting the upstream spec to state the rule."
+  }
+}

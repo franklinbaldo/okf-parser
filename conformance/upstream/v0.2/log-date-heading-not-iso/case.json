@@ -1,0 +1,21 @@
+{
+  "clauses": [
+    "log-date-headings",
+    "reserved-structure"
+  ],
+  "category": "normative",
+  "claim": "A log date heading that is not YYYY-MM-DD is an error.",
+  "expected": {
+    "conformant": false,
+    "reserved": [
+      "log.md"
+    ],
+    "diagnostics": [
+      {
+        "code": "OKF008",
+        "severity": "error",
+        "path": "log.md"
+      }
+    ]
+  }
+}

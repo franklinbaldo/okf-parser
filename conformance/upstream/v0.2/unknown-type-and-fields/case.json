@@ -1,0 +1,31 @@
+{
+  "clauses": [
+    "unknown-types-tolerated",
+    "unknown-fields-preserved"
+  ],
+  "category": "normative",
+  "claim": "Unknown types and producer-defined keys, including nested ones, are accepted and preserved.",
+  "expected": {
+    "conformant": true,
+    "concepts": {
+      "widget.md": "Quantum Widget"
+    },
+    "diagnostics": [],
+    "frontmatter": {
+      "widget.md": {
+        "type": "Quantum Widget",
+        "title": "Widget",
+        "x_owner": "team-blue",
+        "custom": {
+          "nested": [
+            "1",
+            "two",
+            {
+              "three": "3"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "clauses": [
+    "missing-index-tolerated"
+  ],
+  "category": "normative",
+  "claim": "A bundle without any index.md is conformant.",
+  "expected": {
+    "conformant": true,
+    "reserved": [],
+    "diagnostics": []
+  }
+}

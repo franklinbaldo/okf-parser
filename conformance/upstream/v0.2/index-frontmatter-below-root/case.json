@@ -1,0 +1,21 @@
+{
+  "clauses": [
+    "index-frontmatter",
+    "reserved-structure"
+  ],
+  "category": "normative",
+  "claim": "Only the bundle-root index.md may carry frontmatter.",
+  "expected": {
+    "conformant": false,
+    "reserved": [
+      "tables/index.md"
+    ],
+    "diagnostics": [
+      {
+        "code": "OKF004",
+        "severity": "error",
+        "path": "tables/index.md"
+      }
+    ]
+  }
+}

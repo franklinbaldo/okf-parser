@@ -1,0 +1,17 @@
+{
+  "clauses": [
+    "reserved-structure"
+  ],
+  "category": "policy",
+  "claim": "okf-parser reads 'date-grouped entries, newest first' (§9) as a structural requirement of log.md.",
+  "expected": {
+    "conformant": false,
+    "diagnostics": [
+      {
+        "code": "OKF009",
+        "severity": "error",
+        "path": "log.md"
+      }
+    ]
+  }
+}

@@ -7,3 +7,8 @@
 # validate them from their own roots so their domain specs do not leak into the
 # repository-level docs/types contract.
 /src/okf_parser/packs/
+
+# The upstream conformance corpus is a set of standalone fixture bundles, many
+# of them non-conformant on purpose. tests/test_upstream_conformance.py loads
+# each one from its own root; see docs/conformance.md.
+/conformance/upstream/

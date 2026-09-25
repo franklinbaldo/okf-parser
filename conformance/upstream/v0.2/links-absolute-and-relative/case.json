@@ -1,0 +1,31 @@
+{
+  "clauses": [
+    "link-forms"
+  ],
+  "category": "normative",
+  "claim": "Bundle-relative (/...) and relative (./, ../) links resolve to the same concept IDs; external URLs are not bundle links.",
+  "expected": {
+    "conformant": true,
+    "diagnostics": [],
+    "links": [
+      {
+        "source": "tables/orders",
+        "raw_target": "/tables/customers.md",
+        "target": "tables/customers",
+        "exists": true
+      },
+      {
+        "source": "tables/orders",
+        "raw_target": "./customers.md",
+        "target": "tables/customers",
+        "exists": true
+      },
+      {
+        "source": "tables/orders",
+        "raw_target": "../metrics/revenue.md",
+        "target": "metrics/revenue",
+        "exists": true
+      }
+    ]
+  }
+}

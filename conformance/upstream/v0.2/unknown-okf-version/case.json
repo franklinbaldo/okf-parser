@@ -1,0 +1,14 @@
+{
+  "clauses": [
+    "unknown-version-best-effort"
+  ],
+  "category": "normative",
+  "claim": "An okf_version the consumer does not know is consumed best-effort, not refused.",
+  "expected": {
+    "conformant": true,
+    "concepts": {
+      "one.md": "Reference"
+    },
+    "diagnostics": []
+  }
+}

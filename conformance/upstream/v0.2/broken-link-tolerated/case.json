@@ -1,0 +1,25 @@
+{
+  "clauses": [
+    "broken-links-tolerated"
+  ],
+  "category": "normative",
+  "claim": "A link to a missing concept is a warning, never an error.",
+  "expected": {
+    "conformant": true,
+    "diagnostics": [
+      {
+        "code": "OKF101",
+        "severity": "warning",
+        "path": "a.md"
+      }
+    ],
+    "links": [
+      {
+        "source": "a",
+        "raw_target": "/future/b.md",
+        "target": null,
+        "exists": false
+      }
+    ]
+  }
+}

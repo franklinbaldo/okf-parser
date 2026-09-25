@@ -1,0 +1,17 @@
+{
+  "clauses": [
+    "type-non-empty"
+  ],
+  "category": "normative",
+  "claim": "A frontmatter block without `type` makes the bundle non-conformant.",
+  "expected": {
+    "conformant": false,
+    "diagnostics": [
+      {
+        "code": "OKF002",
+        "severity": "error",
+        "path": "untyped.md"
+      }
+    ]
+  }
+}
