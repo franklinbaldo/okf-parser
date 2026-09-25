@@ -1,3 +1,9 @@
+---
+type: Documentation
+title: Conformance corpus
+description: The versioned, cross-language compatibility contract with the OKF spec
+---
+
 # Conformance corpus
 
 This directory is the versioned, executable compatibility contract between
