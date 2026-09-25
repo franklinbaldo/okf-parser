@@ -24,8 +24,10 @@ def test_manifest_records_a_pinned_spec_revision() -> None:
     spec = manifest["spec"]
 
     assert spec["version"], "spec.version must name the OKF version this corpus targets"
-    assert SPEC_REVISION_RE.match(spec["revision"]), (
-        f"spec.revision must be a full 40-character upstream commit SHA, got {spec['revision']!r}"
+    pin = _load(spec["pin"])
+    assert pin["specification"]["version"] == spec["version"]
+    assert SPEC_REVISION_RE.match(pin["commit"]), (
+        f"the pinned upstream commit must be a full 40-character SHA, got {pin['commit']!r}"
     )
 
 
@@ -35,7 +37,7 @@ def test_manifest_matches_the_fixture_files_on_disk() -> None:
 
     on_disk = {path.name for path in CONFORMANCE_DIR.glob("*.json") if path.name != "MANIFEST.json"}
 
-    missing_from_disk = listed - on_disk
+    missing_from_disk = {name for name in listed if not (CONFORMANCE_DIR / name).is_file()}
     missing_from_manifest = on_disk - listed
     assert not missing_from_disk, (
         f"MANIFEST.json lists files that do not exist: {missing_from_disk}"

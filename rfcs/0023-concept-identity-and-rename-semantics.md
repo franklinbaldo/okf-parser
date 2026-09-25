@@ -5,7 +5,7 @@ status: accepted
 description: Pin concept_id and logical_key as path-derived, non-authored identity for the filesystem provider, define a rename as an independent removal plus addition, and make digest equality an advisory signal a caller may compute — never one the parser infers on a concept's behalf.
 ---
 
-# RFC 0012: Concept identity and rename semantics
+# RFC 0023: Concept identity and rename semantics
 
 ## Summary
 
@@ -31,20 +31,23 @@ storage, no registry, and no coordination between writers, and two checkouts
 of the same bundle at different absolute paths already agree on every
 concept's id (`test_logical_keys_do_not_depend_on_checkout_path`). But
 "simple" was never written down as a *decision* — it is only observable by
-reading `parser.concept_id` and the tests that pin it. Meanwhile, three
-accepted or proposed RFCs already cite an "RFC 0012" that pins this contract
-by number, including verbatim language about `diff` and digest-based
-inference:
+reading `parser.concept_id` and the tests that pin it. Meanwhile, later RFCs
+cite RFC 0012 for this contract, including verbatim language about `diff` and
+digest-based inference:
 
 > A future source adapter may define another canonical identity under its
 > own RFC. `diff` consumes the provider's canonical `concept_id`; it never
 > guesses identity from title, body, or digest.
-> — quoted in RFC 0017, attributed to RFC 0012
+> — RFC 0012, quoted in RFC 0017
 
-That document never existed. This RFC is it, backfilled to match the
-behavior those later RFCs already depend on and the behavior the test suite
-already enforces, and extended to answer #276's open questions directly
-rather than leaving them to be inferred from call sites.
+RFC 0012 (relational agent surfaces,
+[#202](https://github.com/franklinbaldo/okf-parser/pull/202)) is still a
+proposal, and identity is one section of a much larger read-service design.
+This RFC extracts that section as a standalone decision, matching the
+behavior RFC 0017 depends on and the test suite already enforces, so the
+identity contract does not wait on the rest of RFC 0012. It also answers
+#276's open questions directly rather than leaving them to be inferred from
+call sites.
 
 ## Decision
 

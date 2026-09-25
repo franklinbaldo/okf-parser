@@ -1,4 +1,4 @@
-"""Pin RFC 0012 concept identity and rename semantics."""
+"""Pin RFC 0023 concept identity and rename semantics."""
 
 from __future__ import annotations
 

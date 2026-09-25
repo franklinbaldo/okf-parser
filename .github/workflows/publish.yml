@@ -34,6 +34,7 @@ jobs:
           uv run pytest -q \
             tests/test_conformance.py \
             tests/test_conformance_manifest.py \
+            tests/test_upstream_conformance.py \
             tests/test_formatting_conformance.py \
             tests/test_schema_inference_conformance.py \
             tests/test_schema_output_conformance.py \

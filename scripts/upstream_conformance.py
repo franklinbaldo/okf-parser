@@ -8,15 +8,15 @@
 """Check the pinned upstream OKF revision against a local checkout of it.
 
 Run this when bumping ``conformance/upstream/UPSTREAM.json`` to a new upstream
-commit:
+revision:
 
     git clone https://github.com/GoogleCloudPlatform/knowledge-catalog /tmp/kc
-    git -C /tmp/kc checkout <commit>
     uv run --script scripts/upstream_conformance.py /tmp/kc
 
 It reports, without changing any file:
 
-- whether the checkout is the pinned commit and the specification digest matches;
+- whether the last commit that changed the specification is the pinned one and
+  its digest matches;
 - every registered clause whose quoted text no longer appears in the
   specification, which is the reviewable semantic diff of the bump;
 - every example bundle upstream ships whose error codes differ from the pin
@@ -48,8 +48,8 @@ def _run(*command: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, capture_output=True, check=False, text=True)  # noqa: S603
 
 
-def _head(checkout: Path) -> str:
-    return _run("git", "-C", str(checkout), "rev-parse", "HEAD").stdout.strip()
+def _spec_commit(checkout: Path, spec: str) -> str:
+    return _run("git", "-C", str(checkout), "log", "-1", "--format=%H", "--", spec).stdout.strip()
 
 
 def _error_codes(bundle: Path) -> list[str]:
@@ -63,11 +63,12 @@ def check(checkout: Path) -> list[str]:
     pin = json.loads(_PIN.read_text(encoding="utf-8"))
     problems: list[str] = []
 
-    head = _head(checkout)
-    if head != pin["commit"]:
-        problems.append(f"commit: pinned {pin['commit']}, checkout is {head}")
+    spec_name = pin["specification"]["path"]
+    commit = _spec_commit(checkout, spec_name)
+    if commit != pin["commit"]:
+        problems.append(f"commit: pinned {pin['commit']}, {spec_name} last changed in {commit}")
 
-    spec_path = checkout / pin["specification"]["path"]
+    spec_path = checkout / spec_name
     spec = spec_path.read_bytes()
     digest = hashlib.sha256(spec).hexdigest()
     if digest != pin["specification"]["sha256"]:

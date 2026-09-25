@@ -1,7 +1,8 @@
 {
   "repository": "https://github.com/GoogleCloudPlatform/knowledge-catalog",
-  "commit": "22efaa5402775a7c4d4c37f89e41258daaf3cb65",
-  "committed_at": "2026-09-21T11:26:58-07:00",
+  "commit": "62432a095456147ee71e70ac6e4dc0d2dea3ac30",
+  "committed_at": "2026-08-20",
+  "commit_note": "The last upstream commit that changed okf/SPEC.md.",
   "specification": {
     "path": "okf/SPEC.md",
     "version": "0.2",

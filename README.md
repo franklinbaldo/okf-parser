@@ -25,7 +25,7 @@ layer:
 - compile a bundle into queryable relational tables;
 - project those same relations into a NetworkX graph;
 - validate OKF v0.2 conformance without rejecting extensions, against a
-  [corpus pinned to the upstream specification](docs/conformance.md);
+  [corpus pinned to the upstream specification](conformance/README.md);
 - distinguish normative errors from advisory diagnostics;
 - let projects add cross-concept rules as Ibis expressions;
 - produce stable human-readable and JSON reports for CI and agents.

@@ -10,5 +10,5 @@
 
 # The upstream conformance corpus is a set of standalone fixture bundles, many
 # of them non-conformant on purpose. tests/test_upstream_conformance.py loads
-# each one from its own root; see docs/conformance.md.
+# each one from its own root; see conformance/README.md.
 /conformance/upstream/
