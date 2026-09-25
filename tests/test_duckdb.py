@@ -217,6 +217,55 @@ def test_export_duckdb_reopens_with_typed_tables(tmp_path: Path) -> None:
         reopened.close()
 
 
+def _snapshot_database(database: Path) -> dict[str, object]:
+    """Read every table materialized from a bundle into a comparable, ordered snapshot."""
+    connection = duckdb.connect(database, read_only=True)
+    try:
+        return {
+            "concepts": connection.sql("SELECT * FROM okf.concepts ORDER BY path").fetchall(),
+            "links": connection.sql(
+                "SELECT * FROM okf.links ORDER BY source_id, raw_target"
+            ).fetchall(),
+            "reserved": connection.sql("SELECT * FROM okf.reserved ORDER BY path").fetchall(),
+            "diagnostics": connection.sql(
+                "SELECT * FROM okf.diagnostics ORDER BY code, path"
+            ).fetchall(),
+            "rotina": connection.execute(
+                'SELECT * EXCLUDE (registrado_em) FROM okf_types."Rotina" ORDER BY "__okf_path"'
+            ).fetchall(),
+        }
+    finally:
+        connection.close()
+
+
+def test_rebuild_after_deleting_duckdb_matches_original_projection(tmp_path: Path) -> None:
+    """Deleting the derived DuckDB file and re-exporting must reproduce it exactly.
+
+    The `.md` bundle is the only source of truth; the `.duckdb` file is a
+    disposable projection that must be fully reconstructible from it.
+    """
+    template = _write_declared_bundle(tmp_path)
+    source_files = sorted((tmp_path / "a.md", tmp_path / "b.md"))
+    original_source_bytes = {path: path.read_bytes() for path in source_files}
+    database = tmp_path / "knowledge.duckdb"
+
+    first_result = export_duckdb(str(tmp_path), str(database), spec_template=template)
+    assert database.exists()
+    original_snapshot = _snapshot_database(database)
+
+    database.unlink()
+    assert not database.exists()
+
+    second_result = export_duckdb(str(tmp_path), str(database), spec_template=template)
+    rebuilt_snapshot = _snapshot_database(database)
+
+    assert rebuilt_snapshot == original_snapshot
+    assert second_result["concept_count"] == first_result["concept_count"]
+    assert second_result["typed_table_count"] == first_result["typed_table_count"]
+    for path in source_files:
+        assert path.read_bytes() == original_source_bytes[path]
+
+
 def test_persistent_timestamptz_is_utc_materialized_and_session_stable(tmp_path: Path) -> None:
     (tmp_path / "a.md").write_text(
         "---\ntype: Rotina\ninstante: 2026-08-07 10:00:00\n---\nA\n",

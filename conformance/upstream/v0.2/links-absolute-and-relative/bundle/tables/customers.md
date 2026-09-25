@@ -1,0 +1,4 @@
+---
+type: BigQuery Table
+---
+# Schema

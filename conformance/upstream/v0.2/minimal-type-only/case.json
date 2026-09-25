@@ -1,0 +1,22 @@
+{
+  "clauses": [
+    "type-required",
+    "trust-families-optional"
+  ],
+  "category": "normative",
+  "claim": "A concept carrying only `type` is fully conformant.",
+  "expected": {
+    "conformant": true,
+    "concepts": {
+      "concept.md": "Playbook"
+    },
+    "reserved": [],
+    "diagnostics": [],
+    "links": [],
+    "frontmatter": {
+      "concept.md": {
+        "type": "Playbook"
+      }
+    }
+  }
+}

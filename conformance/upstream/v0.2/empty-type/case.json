@@ -1,0 +1,17 @@
+{
+  "clauses": [
+    "type-non-empty"
+  ],
+  "category": "normative",
+  "claim": "An empty `type` string is not a non-empty `type` field.",
+  "expected": {
+    "conformant": false,
+    "diagnostics": [
+      {
+        "code": "OKF002",
+        "severity": "error",
+        "path": "blank.md"
+      }
+    ]
+  }
+}

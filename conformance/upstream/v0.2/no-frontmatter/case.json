@@ -1,0 +1,18 @@
+{
+  "clauses": [
+    "frontmatter-parseable"
+  ],
+  "category": "normative",
+  "claim": "A non-reserved Markdown file without frontmatter is a non-conformant concept, not a silently ignored file.",
+  "expected": {
+    "conformant": false,
+    "concepts": {},
+    "diagnostics": [
+      {
+        "code": "OKF001",
+        "severity": "error",
+        "path": "plain.md"
+      }
+    ]
+  }
+}

@@ -1,0 +1,107 @@
+{
+  "corpus_version": 1,
+  "spec": {
+    "name": "Open Knowledge Format (OKF)",
+    "version": "0.2",
+    "source_url": "https://github.com/GoogleCloudPlatform/knowledge-catalog/blob/main/okf/SPEC.md",
+    "pin": "upstream/UPSTREAM.json",
+    "note": "The upstream revision, spec digest and clause registry are pinned once, in the pin file. Bump corpus_version whenever the pin changes."
+  },
+  "fixtures": [
+    {
+      "file": "frontmatter.json",
+      "area": "parse",
+      "description": "Frontmatter/body split across encodings and line endings.",
+      "shared_with": [
+        "python",
+        "typescript"
+      ]
+    },
+    {
+      "file": "content-digests.json",
+      "area": "hashing",
+      "description": "Canonical parsed-document digests for byte-identical cross-language hashing.",
+      "shared_with": [
+        "python",
+        "typescript"
+      ]
+    },
+    {
+      "file": "formatting.json",
+      "area": "format-round-trip",
+      "description": "Markdown formatter idempotency and normalization cases.",
+      "shared_with": [
+        "python",
+        "typescript"
+      ]
+    },
+    {
+      "file": "schema-inference.json",
+      "area": "validation",
+      "description": "Scalar classification rules used to infer declared column types.",
+      "shared_with": [
+        "python",
+        "typescript"
+      ]
+    },
+    {
+      "file": "schema-output.json",
+      "area": "validation",
+      "description": "Declared schema export shapes (JSON Schema / Zod / Pydantic).",
+      "shared_with": [
+        "python",
+        "typescript"
+      ]
+    },
+    {
+      "file": "search.json",
+      "area": "search",
+      "description": "Retrieval ranking and filter semantics.",
+      "shared_with": [
+        "python"
+      ]
+    },
+    {
+      "file": "exclusion.json",
+      "area": "bundle",
+      "description": ".okfignore matching semantics for bundle discovery.",
+      "shared_with": [
+        "python"
+      ]
+    },
+    {
+      "file": "git-commit-messages.json",
+      "area": "git",
+      "description": "RFC 0009 git-commits-as-OKF envelope parsing.",
+      "shared_with": [
+        "python"
+      ]
+    },
+    {
+      "file": "type-spec-slugs.json",
+      "area": "type-specs",
+      "description": "Type-name to spec-slug derivation rules.",
+      "shared_with": [
+        "python"
+      ]
+    },
+    {
+      "file": "regressions.json",
+      "area": "regression",
+      "description": "Permanent, append-only record of concrete bugs found in the wild. Cases are never removed or edited once merged, only added to.",
+      "shared_with": [
+        "python"
+      ]
+    },
+    {
+      "file": "upstream/UPSTREAM.json",
+      "area": "upstream-conformance",
+      "description": "Pinned upstream spec revision, clause registry and one fixture bundle per clause under upstream/<version>/.",
+      "shared_with": [
+        "python",
+        "rust",
+        "typescript"
+      ]
+    }
+  ]
+}
