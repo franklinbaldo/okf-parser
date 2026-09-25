@@ -9,7 +9,7 @@ import duckdb
 import networkx as nx
 
 from okf_parser.apply import apply_bundle as _apply_bundle
-from okf_parser.bundle import load_bundle, validate_path
+from okf_parser.engine import load_bundle, validate_path
 from okf_parser.bundle_import import import_bundle as _import_bundle
 from okf_parser.classification import classify_path
 from okf_parser.duckdb import attach_okf

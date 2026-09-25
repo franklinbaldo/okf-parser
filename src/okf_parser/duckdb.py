@@ -8,7 +8,8 @@ from typing import TYPE_CHECKING, cast
 
 import ibis
 
-from okf_parser.bundle import Bundle, load_bundle
+from okf_parser.bundle import Bundle
+from okf_parser.engine import load_bundle
 from okf_parser.typed_tables import (
     TypedTableCollisionError,
     discover_declared_schemas,
