@@ -75,6 +75,9 @@ class LinkRecord(BaseModel):
     target_id: str | None
     exists: bool
     origin: str
+    """Producing mechanism, e.g. ``"body"``. Always category ``structural``
+    (RFC 0022): a navigation link, never a semantic, epistemic, or
+    provenance assertion. Consumers must not infer such meaning from it."""
 
 
 class ParsedDocument(BaseModel):

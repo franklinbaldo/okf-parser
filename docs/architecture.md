@@ -23,6 +23,8 @@ consumer projections and adapters
 
 The core answers what an authored OKF bundle says and whether it conforms. A non-reserved Markdown concept therefore needs authored OKF frontmatter and a non-empty `type`. Core graph relations come from authored Markdown links; producer-defined frontmatter strings remain data, even when they look like paths. Utility classifiers may still recognize path- or link-shaped strings for callers, but classification alone does not grant normative relation semantics.
 
+OKF graphs mix more than one kind of edge, and they must not be conflated: a Markdown navigation link (**structural**), a producer-declared relation over typed data (**semantic**, e.g. RFC 0007/0021), a claim that one fact supports or contradicts another (**epistemic**, not yet implemented as a core mechanism), and a record of where a fact or edge came from (**provenance**, e.g. RFC 0009's Git-derived facts). RFC 0022 names these categories and requires every graph export to carry one, so a consumer never has to infer semantics from a plain link.
+
 External corpora use a separate adaptation boundary:
 
 ```text
