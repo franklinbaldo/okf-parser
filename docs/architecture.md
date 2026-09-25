@@ -44,3 +44,7 @@ An adapter may derive an effective type, rewrite a source relation into the proj
 `tests/test_parser_validator_boundary.py` pins the strict-core boundary down as regressions: `parse_document` accepts a missing or unrecognized `type` and preserves unknown frontmatter fields, while `load_bundle` is the layer that reports `OKF002` and every other normative rule by its stable code.
 
 This is primarily an internal architecture rule. Ordinary conformant bundles should not need adapter configuration, profiles or extra command hierarchy. Advanced adaptation is progressive disclosure.
+
+## Concept identity
+
+A concept's `concept_id` and `logical_key` are derived from its bundle-relative path at load time, not authored and not stored independently of that path. Moving or renaming a concept therefore produces an unrelated `concept_id` at the new path; the parser represents this as one concept disappearing and another appearing, never as a tracked move. `source_digest`/`parsed_digest` equality between such a pair is evidence a caller may compute to suspect continuity, but it is advisory only — the parser never infers or merges identity from content. A stale frontmatter reference to a pre-move path fails loudly (`KeyError`) rather than being silently repaired. See [RFC 0012](../rfcs/0012-concept-identity-and-rename-semantics.md) for the full contract and rationale, and [RFC 0017](../rfcs/0017-fact-profile.md) for how a profile-scoped provider may add move-stable identity on top of this.
