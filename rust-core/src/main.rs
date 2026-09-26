@@ -3,15 +3,25 @@ mod engine;
 mod mcp;
 mod protocol;
 mod python;
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use serde::Deserialize;
+use std::ffi::OsString;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 
 use mcp::Transport;
+/// The command line is declared here in full, so `--help` lists every public
+/// command. Commands that still need Python (DuckDB or the Python formatter,
+/// RFC 0024 phases 4-5) are declared as pass-through: their arguments, `--help`
+/// included, go to the Python CLI unparsed.
 #[derive(Parser)]
-#[command(name = "okf-parser", version = env!("CARGO_PKG_VERSION"), about = "Native OKF engine")]
+#[command(
+    name = "okf-parser",
+    version = env!("CARGO_PKG_VERSION"),
+    about = "Validate, inspect and transform Open Knowledge Format bundles",
+    arg_required_else_help = true
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -82,6 +92,27 @@ enum Command {
         #[arg(long)]
         infer_schema: bool,
     },
+    /// Materialize every row of a DuckDB-readable source (CSV, Parquet, JSON) as a concept.
+    #[command(name = "import", disable_help_flag = true)]
+    Import(Delegated),
+    /// Export JSON Schema, Zod, Pydantic source, or GraphQL SDL.
+    #[command(disable_help_flag = true)]
+    Schema(Delegated),
+    /// Check mdformat style, writing only when --write is explicit.
+    #[command(disable_help_flag = true)]
+    Format(Delegated),
+    /// Mutate frontmatter fields via a bounded ALTER TABLE + UPDATE SQL script.
+    #[command(disable_help_flag = true)]
+    Apply(Delegated),
+    /// Materialize an OKF bundle into a DuckDB database file.
+    #[command(disable_help_flag = true)]
+    Duckdb(Delegated),
+    /// List opt-in OKF type packs registered by installed package metadata.
+    #[command(disable_help_flag = true)]
+    Packs(Delegated),
+    /// Preview or install an opt-in type pack into an ordinary OKF bundle.
+    #[command(name = "add-pack", disable_help_flag = true)]
+    AddPack(Delegated),
     /// Serve effect-aware MCP tools, exposing explicit commit tools only on opt-in.
     Serve {
         #[arg(long, value_enum, default_value_t = Transport::Stdio)]
@@ -98,6 +129,12 @@ enum Command {
         #[arg(long)]
         allow_write: bool,
     },
+}
+/// The unparsed arguments of a command the Python CLI answers.
+#[derive(Args)]
+struct Delegated {
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    args: Vec<OsString>,
 }
 #[derive(Deserialize)]
 struct Legacy {
@@ -155,7 +192,14 @@ fn run() -> Outcome {
         }
         | Command::Init {
             infer_schema: true, ..
-        } => return python_cli(),
+        }
+        | Command::Import(_)
+        | Command::Schema(_)
+        | Command::Format(_)
+        | Command::Apply(_)
+        | Command::Duckdb(_)
+        | Command::Packs(_)
+        | Command::AddPack(_) => return python_cli(),
         Command::Check {
             path,
             exclude,
@@ -212,30 +256,54 @@ fn python_cli() -> Outcome {
     Ok(status.code().unwrap_or(1))
 }
 
-/// Commands this binary answers itself; everything else is the Python CLI's.
-const NATIVE: &[&str] = &[
-    "__engine-facts",
-    "__engine-load",
-    "__edit",
-    "__check",
-    "__init-specs",
-    "check",
-    "inventory",
-    "graph",
-    "init",
-    "serve",
-];
-
 fn main() {
-    let native = std::env::args()
-        .nth(1)
-        .is_some_and(|command| NATIVE.contains(&command.as_str()));
-    let outcome = if native { run() } else { python_cli() };
-    match outcome {
+    match run() {
         Ok(code) => std::process::exit(code),
         Err(error) => {
             eprintln!("okf-parser: {error}");
             std::process::exit(1);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    #[test]
+    fn help_lists_every_public_command_and_hides_the_protocol() {
+        let help = Cli::command().render_long_help().to_string();
+        for command in [
+            "check",
+            "inventory",
+            "graph",
+            "init",
+            "import",
+            "schema",
+            "format",
+            "apply",
+            "duckdb",
+            "packs",
+            "add-pack",
+            "serve",
+        ] {
+            assert!(
+                help.lines()
+                    .any(|line| line.trim_start().starts_with(command)),
+                "{command} missing from:\n{help}"
+            );
+        }
+        assert!(!help.contains("__"), "{help}");
+    }
+
+    #[test]
+    fn delegated_commands_keep_every_argument_unparsed() {
+        let cli = Cli::try_parse_from(["okf-parser", "schema", "b", "--format", "zod", "--help"])
+            .unwrap();
+        let Command::Schema(Delegated { args }) = cli.command else {
+            panic!("schema should be delegated");
+        };
+        assert_eq!(args, ["b", "--format", "zod", "--help"]);
     }
 }

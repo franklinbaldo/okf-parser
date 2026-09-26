@@ -37,3 +37,13 @@ Behavior changes:
   with no typed concepts, instead of only once a type needed it.
 - A bundle root that does not exist reports
   `bundle root is not a directory: <path> (<reason>)`.
+- `init` creates each specification stub exclusively (staged, then
+  hard-linked into place): a document another writer created after the plan
+  is left untouched instead of being overwritten.
+- `ParsedDocument.frontmatter_json` uses the same compact, UTF-16-ordered
+  spelling, so every Python record agrees with the binary.
+- `okf-parser --help` lists every public command. The binary declares the
+  whole command line and passes the Python-backed commands' arguments,
+  `--help` included, through unparsed.
+- `check --relational-schema` validates relations against the same bundle
+  snapshot the rest of the report describes.

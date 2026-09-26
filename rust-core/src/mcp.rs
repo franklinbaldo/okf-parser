@@ -1,8 +1,10 @@
 //! `okf-parser serve`: the effect-aware MCP server (RFC 0008, RFC 0024).
 //!
 //! The protocol, the tool schemas and the effect annotations live here. A tool
-//! is answered natively once its logic exists in `okf-engine` (today: `graph`);
-//! every other tool is delegated to `python -m okf_parser.mcp_bridge`, which
+//! is answered natively once its logic exists in `okf-engine`: `check`,
+//! `inventory`, `graph` and `init_*`. The tools that still need DuckDB or the
+//! Python formatter (and `check` with `relational_schema`, `init_*` with
+//! `infer_schema`) are delegated to `python -m okf_parser.mcp_bridge`, which
 //! runs the same service function the Python CLI does.
 
 use std::path::{Path, PathBuf};

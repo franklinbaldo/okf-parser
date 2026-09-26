@@ -356,6 +356,42 @@ fn stage_sibling(path: &Path, bytes: &[u8]) -> io::Result<PathBuf> {
     Ok(staged)
 }
 
+/// Create `path` with `bytes` unless it already exists; never replaces a file.
+///
+/// Returns whether this call created it. The content is staged in a sibling
+/// first and then hard-linked into place, which fails instead of clobbering
+/// if another writer created `path` in the meantime, so the file appears
+/// complete or not at all. A filesystem without hard links falls back to an
+/// exclusive `create_new`.
+pub(crate) fn create_exclusive(path: &Path, bytes: &[u8]) -> io::Result<bool> {
+    let staged = stage_sibling(path, bytes)?;
+    let linked = fs::hard_link(&staged, path);
+    let _ = fs::remove_file(&staged);
+    match linked {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Ok(false),
+        Err(_) => create_new(path, bytes),
+    }
+}
+
+pub(crate) fn create_new(path: &Path, bytes: &[u8]) -> io::Result<bool> {
+    let mut file = match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+        drop(file);
+        let _ = fs::remove_file(path);
+        return Err(error);
+    }
+    Ok(true)
+}
+
 fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let staged = stage_sibling(path, bytes)?;
     fs::rename(&staged, path).inspect_err(|_| {

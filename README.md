@@ -232,9 +232,11 @@ cargo build --release --manifest-path rust-core/Cargo.toml
 Python accepts `load_bundle(root, rust_core=Path(".../okf-parser"))`; TypeScript accepts
 `loadBundle(root, { rustCore: ".../okf-core" })`. The native process owns discovery,
 bounded parallel reads, YAML/frontmatter, Markdown facts, validation, link resolution,
-and content digests. The packaged `okf-parser` executable is the single Python command;
-its ordinary subcommands dispatch to the Python CLI while private engine operations stay
-inside the same executable. Omitting the option keeps the portable language-native fallback.
+and content digests. The packaged `okf-parser` executable is the single Python command
+and declares the whole command line: `check`, `inventory`, `graph`, `init`, `serve` and the
+private engine operations run natively, and only the commands that still need DuckDB or the
+Python formatter (`import`, `schema`, `format`, `apply`, `duckdb`, the type packs,
+`check --relational-schema` and `init --infer-schema`) are handed to the Python CLI. Omitting the option keeps the portable language-native fallback.
 
 The composite action installs a pinned uv version and executes the same
 `validate_path()` function used by the Python API, CLI, and MCP server.

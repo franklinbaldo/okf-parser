@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from okf_parser.bundle import load_bundle
+from okf_parser.parser import parse_document
 from okf_parser.rust_core import packaged_rust_core
 
 _CONFIGURED = os.environ.get("OKF_CORE")
@@ -103,13 +104,38 @@ def test_a_template_without_the_placeholder_is_a_clean_failure(tmp_path: Path) -
     assert "must contain {slug}" in completed.stderr
 
 
-def test_frontmatter_json_has_one_spelling_across_the_binary_and_python(tmp_path: Path) -> None:
-    # UTF-16 order puts U+10000 (a 0xD800 surrogate pair) before U+FFFF;
+def test_frontmatter_json_has_one_spelling_in_the_binary_and_every_python_record(
+    tmp_path: Path,
+) -> None:
+    # UTF-16 order puts U+10000 (a 0xD800 surrogate pair) before U+FF21;
     # code-point order, which Python's sort_keys used, puts it after. The
     # public spelling is the compact UTF-16 one the parsed digest is taken
     # over, in every surface.
-    _write(tmp_path / "a.md", "---\ntype: Note\n\uffff: bmp\n\U00010000: astral\n---\n")
+    _write(tmp_path / "a.md", "---\ntype: Note\n\uff21: bmp\n\U00010000: astral\n---\n")
 
-    expected = '{"type":"Note","\U00010000":"astral","\uffff":"bmp"}'
+    expected = '{"type":"Note","\U00010000":"astral","\uff21":"bmp"}'
 
     assert load_bundle(tmp_path).concepts[0].frontmatter_json == expected
+    assert parse_document(tmp_path / "a.md").frontmatter_json == expected
+
+
+def test_top_level_help_lists_native_and_delegated_commands() -> None:
+    assert _BINARY is not None
+    completed = subprocess.run(  # noqa: S603 - fixed argv to the binary under test
+        [str(_BINARY), "--help"], capture_output=True, check=True, encoding="utf-8"
+    )
+
+    listed = {line.split()[0] for line in completed.stdout.splitlines() if line.startswith("  ")}
+    native = {"check", "inventory", "graph", "init", "serve"}
+    delegated = {"import", "schema", "format", "apply", "duckdb", "packs", "add-pack"}
+    assert native | delegated <= listed
+    assert not any(name.startswith("__") for name in listed)
+
+
+def test_a_delegated_command_is_answered_by_the_python_cli(tmp_path: Path) -> None:
+    _write(tmp_path / "a.md", "---\ntype: Note\n---\n")
+
+    code, payload = _run("format", str(tmp_path))
+
+    assert code == 0
+    assert payload["markdown_count"] == 1

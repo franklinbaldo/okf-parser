@@ -9,7 +9,7 @@ import duckdb
 from pydantic import BaseModel, ConfigDict
 
 from okf_parser.apply import apply_bundle as _apply_bundle
-from okf_parser.bundle import check_report, load_bundle
+from okf_parser.bundle import check_report
 from okf_parser.bundle_import import import_bundle as _import_bundle
 from okf_parser.duckdb import attach_okf
 from okf_parser.edit import preview_concept_edit as _preview_concept_edit
@@ -140,12 +140,13 @@ def check_bundle(
         require_spec,
         normative_spec=normative_spec,
         classify=classify,
+        with_bundle=relational_schema is not None,
     )
     diagnostics = list(report.diagnostics)
     if relational_schema is not None:
         schema = Path(relational_schema)
         schema_path = schema if schema.is_absolute() else report.root / schema
-        diagnostics.extend(validate_relations(load_bundle(report.root, exclude), schema_path))
+        diagnostics.extend(validate_relations(report.loaded(), schema_path))
     diagnostics.sort(key=lambda item: (item.path, item.severity.value, item.code, item.message))
     payload: dict[str, object] = {
         "root": str(report.root),

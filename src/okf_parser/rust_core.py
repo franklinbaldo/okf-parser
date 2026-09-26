@@ -93,12 +93,11 @@ def native_binary(explicit: Path | None = None) -> Path:
     return executable
 
 
-class EngineLoad(BaseModel):
-    """``__engine-load``: one bundle's records, diagnostics and graph summary."""
+class BundleRecords(BaseModel):
+    """One bundle's records, diagnostics and graph summary, as the binary loaded them."""
 
     model_config = ConfigDict(frozen=True)
 
-    protocol: Literal[1]
     root: str
     concepts: tuple[ConceptRecord, ...]
     reserved: tuple[ReservedRecord, ...]
@@ -106,6 +105,12 @@ class EngineLoad(BaseModel):
     diagnostics: tuple[Violation, ...]
     markdown_count: int
     graph: GraphSummary
+
+
+class EngineLoad(BundleRecords):
+    """``__engine-load``: a bundle's records under protocol 1."""
+
+    protocol: Literal[1]
 
 
 def rust_load_bundle(

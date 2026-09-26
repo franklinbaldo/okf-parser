@@ -17,6 +17,9 @@ use serde_json::Value;
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::is_combining_mark;
 
+use crate::write::create_exclusive;
+#[cfg(test)]
+use crate::write::create_new;
 use crate::{Code, ConceptRecord, Diagnostic, Severity};
 
 /// The placeholder a specification template must contain.
@@ -156,6 +159,12 @@ pub fn missing_type_specs<'a>(
     diagnostics
 }
 
+/// Python's `str.casefold`: full Unicode case folding, so `Required ﬁelds`
+/// (with the `ﬁ` ligature) names the same section as `required fields`.
+fn casefold(text: &str) -> String {
+    caseless::default_case_fold_str(text)
+}
+
 /// Python's `str.splitlines`: every Unicode line boundary, `\r\n` as one.
 fn split_lines(text: &str) -> impl Iterator<Item = &str> {
     let mut rest = text;
@@ -202,7 +211,7 @@ pub fn required_fields(spec: &str) -> Vec<String> {
     for line in split_lines(spec) {
         let stripped = line.trim_matches(is_space);
         if let Some(heading) = stripped.strip_prefix("## ") {
-            let heading = heading.trim_matches(is_space).to_lowercase();
+            let heading = casefold(heading.trim_matches(is_space));
             if in_required && heading != "required fields" {
                 break;
             }
@@ -218,7 +227,7 @@ pub fn required_fields(spec: &str) -> Vec<String> {
             .next()
             .unwrap_or_default()
             .trim_matches(is_space);
-        if first.is_empty() || first.to_lowercase() == "field" {
+        if first.is_empty() || casefold(first) == "field" {
             continue;
         }
         if first.chars().all(|c| c == '-' || c == ':') {
@@ -312,17 +321,21 @@ fn stub(concept_type: &str) -> String {
     )
 }
 
-/// Create a minimal specification stub for every type in use that lacks one.
-///
-/// A derived-path collision blocks every write of the call, so a caller never
-/// gets a partial scaffold silently missing the types it could not resolve.
-/// Existing documents are never touched.
-pub fn scaffold_missing_specs<'a>(
+/// What a scaffold call would do: the documents to create, or the
+/// collisions that block every write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScaffoldPlan {
+    collisions: Vec<Collision>,
+    /// `(type, bundle-relative path)` for each missing document.
+    to_create: Vec<(String, String)>,
+}
+
+/// Plan a stub for every type in use whose derived document is missing.
+pub fn plan_scaffold<'a>(
     root: &Path,
     concept_types: impl IntoIterator<Item = &'a str>,
     template: SpecTemplate<'_>,
-    write: bool,
-) -> io::Result<Scaffold> {
+) -> ScaffoldPlan {
     let types: BTreeSet<&str> = concept_types
         .into_iter()
         .filter(|kind| !kind.is_empty())
@@ -341,38 +354,51 @@ pub fn scaffold_missing_specs<'a>(
             types: types.iter().map(|kind| (*kind).to_owned()).collect(),
         })
         .collect();
-    if !collisions.is_empty() {
+    let to_create = if collisions.is_empty() {
+        by_path
+            .into_iter()
+            .filter(|(relative, _)| !root.join(relative).is_file())
+            .map(|(relative, types)| (types[0].to_owned(), relative))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    ScaffoldPlan {
+        collisions,
+        to_create,
+    }
+}
+
+/// Carry out a plan. A collision blocks every write of the call, so a caller
+/// never gets a partial scaffold silently missing the types it could not
+/// resolve. Each document is created exclusively: one that appeared since
+/// the plan was made is left exactly as it is and is not reported created.
+pub fn commit_scaffold(root: &Path, plan: ScaffoldPlan, write: bool) -> io::Result<Scaffold> {
+    if !plan.collisions.is_empty() {
         return Ok(Scaffold {
             created: Vec::new(),
             would_create: Vec::new(),
-            collisions,
+            collisions: plan.collisions,
             written: false,
         });
     }
-    let to_create: Vec<(&str, String)> = by_path
-        .into_iter()
-        .filter(|(relative, _)| !root.join(relative).is_file())
-        .map(|(relative, types)| (types[0], relative))
-        .collect();
     if !write {
         return Ok(Scaffold {
             created: Vec::new(),
-            would_create: to_create
-                .into_iter()
-                .map(|(_, relative)| relative)
-                .collect(),
+            would_create: plan.to_create.into_iter().map(|(_, path)| path).collect(),
             collisions: Vec::new(),
             written: false,
         });
     }
-    let mut created = Vec::with_capacity(to_create.len());
-    for (kind, relative) in to_create {
+    let mut created = Vec::with_capacity(plan.to_create.len());
+    for (kind, relative) in plan.to_create {
         let destination = root.join(&relative);
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(&destination, stub(kind))?;
-        created.push(relative);
+        if create_exclusive(&destination, stub(&kind).as_bytes())? {
+            created.push(relative);
+        }
     }
     Ok(Scaffold {
         created,
@@ -380,6 +406,17 @@ pub fn scaffold_missing_specs<'a>(
         collisions: Vec::new(),
         written: true,
     })
+}
+
+/// Create a minimal specification stub for every type in use that lacks one;
+/// existing documents are never touched.
+pub fn scaffold_missing_specs<'a>(
+    root: &Path,
+    concept_types: impl IntoIterator<Item = &'a str>,
+    template: SpecTemplate<'_>,
+    write: bool,
+) -> io::Result<Scaffold> {
+    commit_scaffold(root, plan_scaffold(root, concept_types, template), write)
 }
 
 #[cfg(test)]
@@ -441,6 +478,56 @@ mod tests {
                     |---|:--|\r\n| `owner` | who |\r\n| status | s |\r\n| owner | dup |\r\n\
                     ## Optional\n| later | x |\n";
         assert_eq!(required_fields(spec), ["owner", "status"]);
+    }
+
+    #[test]
+    fn section_and_header_names_are_casefolded_like_python() {
+        // `ﬁ` (U+FB01) casefolds to "fi"; plain lowercase would keep it.
+        let spec = "## REQUIRED ﬁELDS\n| ﬁeld | x |\n|---|---|\n| `owner` | who |\n";
+        assert_eq!(required_fields(spec), ["owner"]);
+    }
+
+    fn temp_root(name: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("okf-specs-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn a_document_created_after_the_plan_is_never_overwritten() {
+        let root = temp_root("race");
+        let template = SpecTemplate::new("docs/{slug}.md").unwrap();
+        let plan = plan_scaffold(&root, ["Rotina", "Outra"], template);
+        // Another writer creates one planned document before the commit.
+        fs::create_dir_all(root.join("docs")).unwrap();
+        fs::write(root.join("docs/rotina.md"), "authored elsewhere").unwrap();
+
+        let scaffold = commit_scaffold(&root, plan, true).unwrap();
+
+        assert_eq!(scaffold.created, ["docs/outra.md"]);
+        assert_eq!(
+            fs::read_to_string(root.join("docs/rotina.md")).unwrap(),
+            "authored elsewhere"
+        );
+        let leftovers: Vec<_> = fs::read_dir(root.join("docs"))
+            .unwrap()
+            .filter_map(|entry| entry.unwrap().file_name().into_string().ok())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn exclusive_creation_reports_an_existing_file_and_leaves_it() {
+        let root = temp_root("exclusive");
+        let path = root.join("a.md");
+        assert!(create_exclusive(&path, b"first").unwrap());
+        assert!(!create_exclusive(&path, b"second").unwrap());
+        assert!(!create_new(&path, b"third").unwrap());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "first");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

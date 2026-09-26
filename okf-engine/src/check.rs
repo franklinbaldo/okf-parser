@@ -107,22 +107,29 @@ pub fn check(
 ) -> Result<CheckReport, CheckError> {
     let template = rules.require_spec.map(SpecTemplate::new).transpose()?;
     let data = load_bundle(root, exclude, READ_CONCURRENCY)?;
-    let classification = classify.then(|| classification(&data)).transpose()?;
+    Ok(check_loaded(&data, template, rules.normative, classify)?)
+}
+
+/// Check one already-loaded bundle, so a caller that needs the records too
+/// (the Python relational validation) reads the same snapshot the report
+/// describes.
+pub fn check_loaded(
+    data: &BundleData,
+    template: Option<SpecTemplate<'_>>,
+    normative: bool,
+    classify: bool,
+) -> Result<CheckReport, LoadError> {
+    let classification = classify.then(|| classification(data)).transpose()?;
     let mut diagnostics = data.diagnostics.clone();
     if let Some(template) = template {
         let bundle_root = Path::new(&data.root);
         let types = data.concepts.iter().map(|c| c.concept_type.as_str());
-        diagnostics.extend(missing_type_specs(
-            bundle_root,
-            types,
-            template,
-            rules.normative,
-        ));
+        diagnostics.extend(missing_type_specs(bundle_root, types, template, normative));
         diagnostics.extend(required_type_spec_fields(
             bundle_root,
             &data.concepts,
             template,
-            rules.normative,
+            normative,
         ));
     }
     order(&mut diagnostics);
@@ -131,7 +138,7 @@ pub fn check(
         markdown_count: data.markdown_count,
         concept_count: data.concepts.len(),
         reserved_count: data.reserved.len(),
-        root: data.root,
+        root: data.root.clone(),
         diagnostics,
         classification,
     })

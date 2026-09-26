@@ -23,7 +23,13 @@ from okf_parser.models import (
     Violation,
 )
 from okf_parser.relational_schema import validate_relations
-from okf_parser.rust_core import RustCoreError, call_native, native_binary, rust_load_bundle
+from okf_parser.rust_core import (
+    BundleRecords,
+    RustCoreError,
+    call_native,
+    native_binary,
+    rust_load_bundle,
+)
 from okf_parser.type_specs import SpecTemplateError
 from okf_parser.typed_relations import TypedRelations, compile_bundle_types
 
@@ -124,7 +130,10 @@ def load_bundle(
     if not root.is_dir():
         msg = f"bundle root is not a directory: {root}"
         raise NotADirectoryError(msg)
-    loaded = rust_load_bundle(root, native_binary(rust_core), exclude)
+    return _bundle(rust_load_bundle(root, native_binary(rust_core), exclude))
+
+
+def _bundle(loaded: BundleRecords) -> Bundle:
     return Bundle(
         root=Path(loaded.root),
         concepts=loaded.concepts,
@@ -159,6 +168,15 @@ class CheckReport(BaseModel):
     reserved_count: int
     diagnostics: tuple[Violation, ...]
     classification: Classification | None = None
+    bundle: BundleRecords | None = None
+    """The bundle the report was taken on, when the request asked for it."""
+
+    def loaded(self) -> Bundle:
+        """The bundle this report describes, as a ``Bundle``."""
+        if self.bundle is None:
+            msg = "this check report was requested without its bundle"
+            raise ValueError(msg)
+        return _bundle(self.bundle)
 
 
 class _CheckRequest(BaseModel):
@@ -171,17 +189,23 @@ class _CheckRequest(BaseModel):
     require_spec: str | None
     normative_spec: bool
     classify: bool
+    bundle: bool
 
 
-def check_report(
+def check_report(  # noqa: PLR0913 -- the independent public check options.
     path: Path,
     exclude: Sequence[str] = (),
     require_spec: str | None = None,
     *,
     normative_spec: bool = False,
     classify: bool = False,
+    with_bundle: bool = False,
 ) -> CheckReport:
-    """Check a bundle natively: diagnostics, spec rules and classification."""
+    """Check a bundle natively: diagnostics, spec rules and classification.
+
+    ``with_bundle`` also returns the loaded bundle (``CheckReport.loaded``),
+    from the same read, for checks the binary does not run itself.
+    """
     root = path.resolve()
     if not root.is_dir():
         msg = f"bundle root is not a directory: {root}"
@@ -194,6 +218,7 @@ def check_report(
             require_spec=require_spec,
             normative_spec=normative_spec,
             classify=classify,
+            bundle=with_bundle,
         ),
     )
     if response.error is not None:
@@ -220,7 +245,13 @@ def validate_path(
     ``require_spec`` adds the optional rule that every producer-defined type in
     use has a specification document at the path its template derives.
     """
-    report = check_report(path, exclude, require_spec, normative_spec=normative_spec)
+    report = check_report(
+        path,
+        exclude,
+        require_spec,
+        normative_spec=normative_spec,
+        with_bundle=relational_schema is not None,
+    )
     diagnostics = list(report.diagnostics)
     if relational_schema is not None:
         schema_path = (
@@ -228,7 +259,7 @@ def validate_path(
             if relational_schema.is_absolute()
             else report.root / relational_schema
         )
-        diagnostics.extend(validate_relations(load_bundle(report.root, exclude), schema_path))
+        diagnostics.extend(validate_relations(report.loaded(), schema_path))
     return ValidationReport(
         root=report.root,
         markdown_count=report.markdown_count,

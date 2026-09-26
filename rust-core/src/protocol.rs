@@ -9,9 +9,9 @@ use okf_engine::write::{
 };
 use std::path::PathBuf;
 
-use okf_engine::check::{CheckError, CheckReport};
-use okf_engine::specs::Scaffold;
-use okf_engine::{BundleData, ConceptGraph, GraphSummary, LoadError};
+use okf_engine::check::{CheckReport, READ_CONCURRENCY, check_loaded};
+use okf_engine::specs::{Scaffold, SpecTemplate};
+use okf_engine::{BundleData, ConceptGraph, GraphSummary, LoadError, load_bundle};
 use serde::{Deserialize, Serialize};
 
 use crate::commands::InitError;
@@ -201,23 +201,51 @@ struct CheckRequest {
     normative_spec: bool,
     #[serde(default)]
     classify: bool,
+    /// Also return the loaded bundle, so the caller's own checks (the
+    /// DuckDB relational validation) see the snapshot the report describes.
+    #[serde(default)]
+    bundle: bool,
+}
+
+/// A bundle's records and graph summary, as `__engine-load` answers them.
+#[derive(Serialize)]
+pub struct LoadedBundle {
+    #[serde(flatten)]
+    data: BundleData,
+    graph: GraphSummary,
+}
+
+/// The `__check` answer: the report, and on request the bundle it was taken on.
+#[derive(Serialize)]
+pub struct CheckAnswer {
+    #[serde(flatten)]
+    report: CheckReport,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    bundle: Option<LoadedBundle>,
+}
+
+fn check_once(request: &CheckRequest) -> Result<CheckAnswer, ProtocolError> {
+    let template = request
+        .require_spec
+        .as_deref()
+        .map(SpecTemplate::new)
+        .transpose()
+        .map_err(|error| ProtocolError::spec_template(&error))?;
+    let data = load_bundle(&request.path, &request.exclude, READ_CONCURRENCY)
+        .map_err(|error| ProtocolError::from_load(&error))?;
+    let report = check_loaded(&data, template, request.normative_spec, request.classify)
+        .map_err(|error| ProtocolError::from_load(&error))?;
+    let bundle = request.bundle.then(|| LoadedBundle {
+        graph: ConceptGraph::from_bundle(&data).summary(),
+        data,
+    });
+    Ok(CheckAnswer { report, bundle })
 }
 
 /// `__check`: the native check report, for the Python shell's `validate_path`.
-pub fn check(request: &str) -> Result<Response<CheckReport>, serde_json::Error> {
+pub fn check(request: &str) -> Result<Response<CheckAnswer>, serde_json::Error> {
     let request: CheckRequest = serde_json::from_str(request)?;
-    let outcome = crate::commands::check(
-        &request.path,
-        &request.exclude,
-        request.require_spec.as_deref(),
-        request.normative_spec,
-        request.classify,
-    )
-    .map_err(|error| match &error {
-        CheckError::SpecTemplate(_) => ProtocolError::spec_template(&error),
-        CheckError::Load(load) => ProtocolError::from_load(load),
-    });
-    Ok(outcome.into())
+    Ok(check_once(&request).into())
 }
 
 #[derive(Debug, Deserialize)]
@@ -374,6 +402,22 @@ mod tests {
         let init_request = r#"{"path": "/definitely/not/a/bundle", "spec_template": "{slug}.md"}"#;
         let value = serde_json::to_value(init_specs(init_request).unwrap()).unwrap();
         assert_eq!(value["error"]["kind"], "request");
+    }
+
+    #[test]
+    fn a_check_can_return_the_snapshot_it_describes() {
+        let root = std::env::temp_dir().join(format!("okf-protocol-check-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("a.md"), "---\ntype: Note\n---\n").unwrap();
+        let request = serde_json::json!({"path": root, "bundle": true}).to_string();
+        let value = serde_json::to_value(check(&request).unwrap()).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        let result = &value["result"];
+        assert_eq!(result["concept_count"], 1);
+        assert_eq!(result["bundle"]["concepts"][0]["concept_id"], "a");
+        assert_eq!(result["bundle"]["root"], result["root"]);
+        assert_eq!(result["bundle"]["graph"]["nodes"], 1);
     }
 
     #[test]
