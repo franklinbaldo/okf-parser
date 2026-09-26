@@ -19,6 +19,7 @@ use std::{fmt, fs};
 
 use ignore::gitignore::Gitignore;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
@@ -27,6 +28,7 @@ use crate::engine::{
     exclusions, ignored_directory, load_bundle, markdown, normalized_newlines, reserved,
     split_source,
 };
+use crate::frontmatter::edit_frontmatter;
 
 const BOM: &[u8] = b"\xef\xbb\xbf";
 const READ_CONCURRENCY: usize = 32;
@@ -183,6 +185,23 @@ impl RawDocument {
             ..self.clone()
         }
     }
+
+    pub fn with_frontmatter(&self, frontmatter: String) -> Self {
+        Self {
+            frontmatter,
+            ..self.clone()
+        }
+    }
+
+    /// The frontmatter text between the delimiters, newlines normalized.
+    pub fn frontmatter(&self) -> &str {
+        &self.frontmatter
+    }
+
+    /// The body after the closing delimiter, newlines normalized.
+    pub fn body(&self) -> &str {
+        &self.body
+    }
 }
 
 type Signature = (u64, u128);
@@ -204,6 +223,8 @@ pub struct ConceptSnapshot {
     pub path: PathBuf,
     pub relative: String,
     pub concept_id: String,
+    pub concept_type: String,
+    pub frontmatter: Map<String, Value>,
     pub source_digest: String,
     pub parsed_digest: String,
     pub content_hash: String,
@@ -269,6 +290,8 @@ fn snapshot_concept(relative: &str, path: &Path, data: &[u8]) -> Option<ConceptS
         path: path.to_owned(),
         relative: relative.to_owned(),
         concept_id: identity.concept_id,
+        concept_type: identity.concept_type,
+        frontmatter: identity.frontmatter,
         source_digest: identity.source_digest,
         parsed_digest: identity.parsed_digest,
         content_hash: sha256_hex(data),
@@ -739,6 +762,242 @@ pub fn edit_concept(request: &EditRequest) -> Result<EditReport, WriteError> {
     Ok(report(candidate, outcome))
 }
 
+/// One concept as `apply` plans against it: the fields its relational
+/// materialization reads, taken from the snapshot's own bytes.
+#[derive(Debug, Serialize)]
+pub struct PlannedConcept {
+    pub path: String,
+    pub concept_id: String,
+    pub concept_type: String,
+    pub frontmatter: Map<String, Value>,
+    pub frontmatter_text: String,
+    pub body: String,
+}
+
+/// A snapshot handed to a planner that lives outside the engine (the Python
+/// DuckDB planner, until RFC 0024 phase 4), and the digest that lets the
+/// commit prove it still describes the bundle.
+#[derive(Debug, Serialize)]
+pub struct PlanningSnapshot {
+    pub root: String,
+    pub digest: String,
+    pub concepts: Vec<PlannedConcept>,
+}
+
+/// Fingerprint what a plan read: every concept by its exact bytes, and every
+/// other visible file by its signature. A concept edited and reverted keeps
+/// its fingerprint; any real change to either kind does not.
+pub fn snapshot_digest(snapshot: &BundleSnapshot) -> String {
+    let concepts: BTreeMap<&str, &str> = snapshot
+        .concepts
+        .iter()
+        .map(|concept| (concept.relative.as_str(), concept.content_hash.as_str()))
+        .collect();
+    let mut hasher = Sha256::new();
+    for (path, (size, modified)) in &snapshot.manifest {
+        let entry = match concepts.get(path.as_str()) {
+            Some(hash) => format!("c\0{path}\0{hash}\n"),
+            None => format!("f\0{path}\0{size}\0{modified}\n"),
+        };
+        hasher.update(entry.as_bytes());
+    }
+    format!("okf-snapshot-v1-sha256:{:x}", hasher.finalize())
+}
+
+fn canonical_root(path: &Path) -> Result<PathBuf, WriteError> {
+    path.canonicalize()
+        .map_err(|source| WriteError::RootUnreadable {
+            path: path.to_owned(),
+            source,
+        })
+}
+
+/// Snapshot a bundle for an outside planner.
+pub fn planning_snapshot(path: &Path, exclude: &[String]) -> Result<PlanningSnapshot, WriteError> {
+    let root = canonical_root(path)?;
+    let snapshot = snapshot_bundle(&root, exclude)?;
+    let digest = snapshot_digest(&snapshot);
+    let root_text = BundlePath::root_text(&root)?;
+    let concepts = snapshot
+        .concepts
+        .into_iter()
+        .map(|concept| PlannedConcept {
+            frontmatter_text: concept.raw.frontmatter().to_owned(),
+            body: concept.raw.body().to_owned(),
+            path: concept.relative,
+            concept_id: concept.concept_id,
+            concept_type: concept.concept_type,
+            frontmatter: concept.frontmatter,
+        })
+        .collect();
+    Ok(PlanningSnapshot {
+        root: root_text,
+        digest,
+        concepts,
+    })
+}
+
+/// The frontmatter changes a plan made to one concept: `Some` sets a field
+/// to a string, `None` removes it.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConceptChanges {
+    pub path: String,
+    pub fields: Vec<(String, Option<String>)>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApplyRequest {
+    pub path: PathBuf,
+    #[serde(default)]
+    pub exclude: Vec<String>,
+    #[serde(default)]
+    pub spec_template: Option<String>,
+    /// The operation, as the caller will show it again for review.
+    pub sql: String,
+    /// The `PlanningSnapshot::digest` the changes were planned against.
+    pub snapshot_digest: String,
+    #[serde(default)]
+    pub changes: Vec<ConceptChanges>,
+    #[serde(default)]
+    pub expected_preview_token: Option<String>,
+    #[serde(default)]
+    pub write: bool,
+}
+
+/// How an `apply` commit ended. Refusals are outcomes; failures to attempt
+/// the write are `Err(WriteError)`.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ApplyOutcome {
+    /// The plan changes nothing.
+    Unchanged,
+    /// The bundle changed between the planning snapshot and this commit.
+    Replanned,
+    /// Some matched documents cannot be edited without other changes.
+    Lossy(Vec<String>),
+    /// The candidate is not the one the caller reviewed.
+    TokenMismatch(Vec<String>),
+    Previewed(Vec<String>),
+    Written(Vec<String>),
+    /// Refused: the candidate adds these normative diagnostics.
+    Invalid(Vec<ValidationItem>),
+    /// Refused: these paths changed while the candidate was validated.
+    Conflict(Vec<String>),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ApplyReport {
+    pub outcome: ApplyOutcome,
+    /// Fingerprint of the baseline, the operation and the candidate bytes;
+    /// absent only when no candidate could be built.
+    pub preview_token: Option<String>,
+}
+
+const PREVIEW_PREFIX: &str = "okf-apply-preview-v2-sha256:";
+
+fn preview_token(
+    request: &ApplyRequest,
+    digest: &str,
+    candidates: &BTreeMap<String, Candidate>,
+) -> String {
+    let payload = serde_json::json!({
+        "version": 2,
+        "sql": request.sql,
+        "exclude": request.exclude,
+        "spec_template": request.spec_template,
+        "snapshot": digest,
+        "candidates": candidates
+            .iter()
+            .map(|(path, candidate)| (path, sha256_hex(&candidate.raw.render())))
+            .collect::<Vec<_>>(),
+    });
+    format!(
+        "{PREVIEW_PREFIX}{}",
+        sha256_hex(payload.to_string().as_bytes())
+    )
+}
+
+/// Commit the frontmatter changes an outside planner computed.
+///
+/// The bundle is snapshotted again and must still be the one planned
+/// against. Each touched document is edited losslessly; the candidate is
+/// fingerprinted for review, and with `write` it goes through the same
+/// stage, validate, recheck and commit protocol as every other writer.
+pub fn apply_commit(request: &ApplyRequest) -> Result<ApplyReport, WriteError> {
+    let root = canonical_root(&request.path)?;
+    let snapshot = snapshot_bundle(&root, &request.exclude)?;
+    let digest = snapshot_digest(&snapshot);
+    if digest != request.snapshot_digest {
+        return Ok(ApplyReport {
+            outcome: ApplyOutcome::Replanned,
+            preview_token: None,
+        });
+    }
+    let by_path: BTreeMap<&str, &ConceptSnapshot> = snapshot
+        .concepts
+        .iter()
+        .map(|concept| (concept.relative.as_str(), concept))
+        .collect();
+    let mut candidates = BTreeMap::new();
+    let mut lossy = Vec::new();
+    for change in &request.changes {
+        let concept = by_path
+            .get(change.path.as_str())
+            .ok_or_else(|| WriteError::UnknownConcept(change.path.clone()))?;
+        match edit_frontmatter(concept.raw.frontmatter(), &change.fields) {
+            Ok(frontmatter) => {
+                candidates.insert(
+                    concept.relative.clone(),
+                    Candidate {
+                        raw: concept.raw.with_frontmatter(frontmatter),
+                        live_path: concept.path.clone(),
+                        expected_hash: concept.content_hash.clone(),
+                    },
+                );
+            }
+            Err(_) => lossy.push(concept.relative.clone()),
+        }
+    }
+    if !lossy.is_empty() {
+        lossy.sort();
+        return Ok(ApplyReport {
+            outcome: ApplyOutcome::Lossy(lossy),
+            preview_token: None,
+        });
+    }
+    let token = preview_token(request, &digest, &candidates);
+    let changed: Vec<String> = candidates.keys().cloned().collect();
+    let reviewed = request
+        .expected_preview_token
+        .as_deref()
+        .is_none_or(|expected| expected == token);
+    let outcome = if !reviewed {
+        ApplyOutcome::TokenMismatch(changed)
+    } else if changed.is_empty() {
+        ApplyOutcome::Unchanged
+    } else if !request.write {
+        ApplyOutcome::Previewed(changed)
+    } else {
+        let baseline = error_keys(&root, &request.exclude)?;
+        match stage_validate_write(
+            &root,
+            &request.exclude,
+            &candidates,
+            &baseline,
+            &snapshot.manifest,
+        )? {
+            WriteOutcome::Written => ApplyOutcome::Written(changed),
+            WriteOutcome::Invalid(items) => ApplyOutcome::Invalid(items),
+            WriteOutcome::Conflict(paths) => ApplyOutcome::Conflict(paths),
+        }
+    };
+    Ok(ApplyReport {
+        outcome,
+        preview_token: Some(token),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1007,5 +1266,147 @@ mod tests {
             ),
             "{error:?}"
         );
+    }
+
+    fn apply_request(root: &Path, digest: String, write: bool) -> ApplyRequest {
+        ApplyRequest {
+            path: root.to_owned(),
+            exclude: Vec::new(),
+            spec_template: None,
+            sql: "UPDATE t SET status = 'final'".into(),
+            snapshot_digest: digest,
+            changes: vec![ConceptChanges {
+                path: "a.md".into(),
+                fields: vec![
+                    ("status".into(), Some("final".into())),
+                    ("old".into(), None),
+                ],
+            }],
+            expected_preview_token: None,
+            write,
+        }
+    }
+
+    const APPLY_SOURCE: &str =
+        "---\r\ntype: Note # kept\r\nstatus: draft\r\nold: x\r\n---\r\n# A\r\n";
+
+    #[test]
+    fn apply_previews_then_writes_the_reviewed_candidate() {
+        let dir = bundle(&[("a.md", APPLY_SOURCE)]);
+        let planned = planning_snapshot(&dir.0, &[]).unwrap();
+        assert_eq!(
+            planned.concepts[0].frontmatter_text,
+            "type: Note # kept\nstatus: draft\nold: x"
+        );
+
+        let preview = apply_commit(&apply_request(&dir.0, planned.digest.clone(), false)).unwrap();
+        assert_eq!(
+            preview.outcome,
+            ApplyOutcome::Previewed(vec!["a.md".into()])
+        );
+        assert_eq!(
+            fs::read_to_string(dir.0.join("a.md")).unwrap(),
+            APPLY_SOURCE
+        );
+
+        let mut commit = apply_request(&dir.0, planned.digest, true);
+        commit.expected_preview_token = preview.preview_token.clone();
+        let written = apply_commit(&commit).unwrap();
+        assert_eq!(written.outcome, ApplyOutcome::Written(vec!["a.md".into()]));
+        assert_eq!(written.preview_token, preview.preview_token);
+        assert_eq!(
+            fs::read_to_string(dir.0.join("a.md")).unwrap(),
+            "---\r\ntype: Note # kept\r\nstatus: final\r\n---\r\n# A\r\n"
+        );
+    }
+
+    #[test]
+    fn apply_refuses_a_bundle_that_changed_since_it_was_planned() {
+        let dir = bundle(&[("a.md", APPLY_SOURCE)]);
+        let planned = planning_snapshot(&dir.0, &[]).unwrap();
+        fs::write(dir.0.join("b.md"), "---\ntype: Note\n---\n").unwrap();
+        let report = apply_commit(&apply_request(&dir.0, planned.digest, true)).unwrap();
+        assert_eq!(report.outcome, ApplyOutcome::Replanned);
+        assert_eq!(
+            fs::read_to_string(dir.0.join("a.md")).unwrap(),
+            APPLY_SOURCE
+        );
+    }
+
+    #[test]
+    fn a_concept_touched_and_reverted_keeps_its_snapshot_digest() {
+        let dir = bundle(&[("a.md", APPLY_SOURCE), ("notes.txt", "x")]);
+        let before = snapshot_digest(&snapshot_bundle(&dir.0, &[]).unwrap());
+        fs::write(dir.0.join("a.md"), "changed").unwrap();
+        fs::write(dir.0.join("a.md"), APPLY_SOURCE).unwrap();
+        assert_eq!(
+            snapshot_digest(&snapshot_bundle(&dir.0, &[]).unwrap()),
+            before
+        );
+        fs::write(dir.0.join("notes.txt"), "longer").unwrap();
+        assert_ne!(
+            snapshot_digest(&snapshot_bundle(&dir.0, &[]).unwrap()),
+            before
+        );
+    }
+
+    #[test]
+    fn apply_refuses_a_candidate_other_than_the_reviewed_one() {
+        let dir = bundle(&[("a.md", APPLY_SOURCE)]);
+        let planned = planning_snapshot(&dir.0, &[]).unwrap();
+        let mut commit = apply_request(&dir.0, planned.digest, true);
+        commit.expected_preview_token = Some("okf-apply-preview-v2-sha256:stale".into());
+        let report = apply_commit(&commit).unwrap();
+        assert_eq!(
+            report.outcome,
+            ApplyOutcome::TokenMismatch(vec!["a.md".into()])
+        );
+        assert_eq!(
+            fs::read_to_string(dir.0.join("a.md")).unwrap(),
+            APPLY_SOURCE
+        );
+    }
+
+    #[test]
+    fn an_empty_plan_is_unchanged_but_still_fingerprinted() {
+        let dir = bundle(&[("a.md", APPLY_SOURCE)]);
+        let planned = planning_snapshot(&dir.0, &[]).unwrap();
+        let mut request = apply_request(&dir.0, planned.digest, true);
+        request.changes.clear();
+        let report = apply_commit(&request).unwrap();
+        assert_eq!(report.outcome, ApplyOutcome::Unchanged);
+        assert!(
+            report
+                .preview_token
+                .unwrap()
+                .starts_with("okf-apply-preview-v2-sha256:")
+        );
+    }
+
+    #[test]
+    fn an_apply_that_breaks_the_bundle_is_refused_by_validation() {
+        let dir = bundle(&[("a.md", APPLY_SOURCE)]);
+        let planned = planning_snapshot(&dir.0, &[]).unwrap();
+        let mut request = apply_request(&dir.0, planned.digest, true);
+        request.changes[0].fields = vec![("type".into(), None)];
+        let report = apply_commit(&request).unwrap();
+        assert!(
+            matches!(report.outcome, ApplyOutcome::Invalid(ref items) if items[0].code == Code::Okf002),
+            "{report:?}"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.0.join("a.md")).unwrap(),
+            APPLY_SOURCE
+        );
+    }
+
+    #[test]
+    fn a_change_to_an_unknown_concept_is_a_request_error() {
+        let dir = bundle(&[("a.md", APPLY_SOURCE)]);
+        let planned = planning_snapshot(&dir.0, &[]).unwrap();
+        let mut request = apply_request(&dir.0, planned.digest, false);
+        request.changes[0].path = "missing.md".into();
+        let error = apply_commit(&request).unwrap_err();
+        assert!(matches!(error, WriteError::UnknownConcept(ref path) if path == "missing.md"));
     }
 }

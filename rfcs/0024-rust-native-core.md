@@ -105,7 +105,9 @@ Reading uses `yaml-rust2`'s event parser. Writing uses libraries too:
 `yaml-edit` (lossless, comment- and style-preserving) for edits to existing
 frontmatter, which is what ruamel.yaml does today, and a serializer
 (`serde_yaml_ng` or `saphyr`) for frontmatter of new documents. No emitter or
-format-preserving editor is written by hand.
+format-preserving editor is written by hand. (3c chose `serde_yaml_ng`:
+`yaml-edit`'s builder cannot yet emit keys that need quoting or empty
+collections correctly.)
 
 ### 5. The CLI is clap
 
@@ -205,11 +207,19 @@ DuckDB.
   `check --relational-schema` and `init --infer-schema`, which need DuckDB.
   The binary also emits the final public `frontmatter_json` spelling: the
   compact, UTF-16-ordered JSON the parsed digest is taken over.
-- **3c:** the non-SQL `apply` paths (type and field renames) and `dumps`, on
-  the write engine. ruamel.yaml leaves.
+- **3c (0.48.0):** every `apply` path computes its diff through DuckDB (the
+  `--type/--field/--from/--to` sugar is compiled to an `UPDATE` too), so
+  what moves is the half after the plan. `__apply-snapshot` hands the
+  Python planner the concepts and a snapshot digest; `__apply-commit`
+  re-snapshots, refuses if the digest changed, edits each frontmatter
+  losslessly with `yaml-edit`, fingerprints the candidate (preview token
+  v2) and stages, validates and commits it on the write engine. New
+  documents (`dumps`, `import`) are rendered by `serde_yaml_ng` through
+  `__render`, in one batch. Every edit and render is parsed back and must
+  mean exactly what was intended. `write_support.py` and ruamel.yaml leave.
 
-`import`, `init --infer-schema` and SQL `apply` read or infer through DuckDB,
-so they move in phase 4, not here. PyYAML leaves with the last Python reader.
+The DuckDB half of `apply`, `import`'s reading and `init --infer-schema` move
+in phase 4. PyYAML leaves with the last Python reader.
 
 ### Phase 4 — DuckDB in Rust
 
