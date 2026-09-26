@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+import pytest
+
+from okf_parser import bundle as bundle_module
 from okf_parser.bundle import load_bundle, validate_path
 from okf_parser.relational_schema import parse_relational_schema, validate_relations
+
+if TYPE_CHECKING:
+    from pydantic import BaseModel
+
+    from okf_parser.rust_core import NativeResponse
 
 RELATIONAL_SQL = """
 CREATE TABLE "Regra" (
@@ -100,4 +109,31 @@ def test_validate_path_applies_explicit_relational_schema(tmp_path: Path) -> Non
     report = validate_path(tmp_path, relational_schema=Path("okf.schema.sql"))
 
     assert not report.is_conformant
+    assert [item.code for item in report.violations] == ["OKF022"]
+
+
+def test_relational_validation_reads_the_bundle_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # One `__check` returns both the report and the bundle it was taken on, so
+    # the relational diagnostics describe the same snapshot as the rest.
+    _write(tmp_path / "regra.md", _concept("Regra", nome="regra-a"))
+    _write(tmp_path / "fund.md", _concept("Fundamentacao", id="f1", regra="ausente"))
+    _write(tmp_path / "okf.schema.sql", RELATIONAL_SQL)
+    commands: list[str] = []
+    real = bundle_module.call_native
+
+    def spy(command: str, request: BaseModel) -> NativeResponse:
+        commands.append(command)
+        return real(command, request)
+
+    def forbidden(*_: object, **__: object) -> None:
+        pytest.fail("the relational path must not load the bundle a second time")
+
+    monkeypatch.setattr(bundle_module, "call_native", spy)
+    monkeypatch.setattr(bundle_module, "rust_load_bundle", forbidden)
+
+    report = validate_path(tmp_path, relational_schema=Path("okf.schema.sql"))
+
+    assert commands == ["__check"]
     assert [item.code for item in report.violations] == ["OKF022"]

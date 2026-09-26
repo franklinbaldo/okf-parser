@@ -1,5 +1,9 @@
 """Find the native ``okf-parser`` binary and speak its JSON protocol.
 
+The protocol is UTF-8 on every platform: each call pins ``encoding="utf-8"``
+so the process locale (a cp1252 Windows console, say) never decides how
+Markdown crosses the pipe.
+
 The binary is the product (RFC 0024): every OKF rule lives there, and this
 package is a shell over it. Each response carries a ``protocol`` version that
 the models here pin, so a mismatched binary fails loudly instead of being
@@ -16,7 +20,7 @@ import sysconfig
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
 from okf_parser.graph import GraphSummary
 from okf_parser.models import ConceptRecord, LinkRecord, ReservedRecord, Violation
@@ -89,12 +93,11 @@ def native_binary(explicit: Path | None = None) -> Path:
     return executable
 
 
-class EngineLoad(BaseModel):
-    """``__engine-load``: one bundle's records, diagnostics and graph summary."""
+class BundleRecords(BaseModel):
+    """One bundle's records, diagnostics and graph summary, as the binary loaded them."""
 
     model_config = ConfigDict(frozen=True)
 
-    protocol: Literal[1]
     root: str
     concepts: tuple[ConceptRecord, ...]
     reserved: tuple[ReservedRecord, ...]
@@ -102,6 +105,12 @@ class EngineLoad(BaseModel):
     diagnostics: tuple[Violation, ...]
     markdown_count: int
     graph: GraphSummary
+
+
+class EngineLoad(BundleRecords):
+    """``__engine-load``: a bundle's records under protocol 1."""
+
+    protocol: Literal[1]
 
 
 def rust_load_bundle(
@@ -117,38 +126,64 @@ def rust_load_bundle(
     ]
     for pattern in exclude:
         command.extend(("--exclude", pattern))
-    completed = subprocess.run(command, capture_output=True, check=False, text=True)  # noqa: S603
+    completed = subprocess.run(  # noqa: S603
+        command, capture_output=True, check=False, encoding="utf-8", errors="strict"
+    )
     if completed.returncode != 0:
         message = completed.stderr.strip() or f"okf exited with {completed.returncode}"
         raise RustCoreError(message)
     try:
-        return EngineLoad.model_validate(_canonical_frontmatter(json.loads(completed.stdout)))
-    except (json.JSONDecodeError, ValidationError) as exc:
+        return EngineLoad.model_validate_json(completed.stdout)
+    except ValidationError as exc:
         message = f"invalid okf load response (protocol {PROTOCOL_VERSION} expected): {exc}"
         raise RustCoreError(message) from exc
 
 
-def _canonical_frontmatter(payload: object) -> object:
-    """Re-serialize each concept's ``frontmatter_json`` with sorted keys.
+class NativeError(BaseModel):
+    """Why the binary could not answer a command.
 
-    The engine emits frontmatter in document order; the public record carries
-    one canonical spelling so equal frontmatter compares equal.
+    ``request`` means the request is invalid for this bundle (the caller's
+    fault); ``spec_template`` is the request error of a specification
+    template without ``{slug}``; ``io`` means the filesystem failed
+    underneath the command.
     """
-    if not isinstance(payload, dict):
-        return payload
-    concepts = payload.get("concepts")
-    if not isinstance(concepts, list):
-        return payload
-    normalized = [_canonical_concept(concept) for concept in concepts]
-    return {**payload, "concepts": normalized}
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["request", "spec_template", "io"]
+    message: str
 
 
-def _canonical_concept(concept: object) -> object:
-    text = concept.get("frontmatter_json") if isinstance(concept, dict) else None
-    if not isinstance(concept, dict) or not isinstance(text, str):
-        return concept
-    canonical = json.dumps(json.loads(text), ensure_ascii=False, sort_keys=True)
-    return {**concept, "frontmatter_json": canonical}
+class NativeResponse(BaseModel):
+    """A command's answer under protocol 1: exactly one of ``result`` or ``error``."""
+
+    model_config = ConfigDict(frozen=True)
+
+    protocol: Literal[1]
+    result: dict[str, JsonValue] | None = None
+    error: NativeError | None = None
+
+
+def call_native(command: str, request: BaseModel, executable: Path | None = None) -> NativeResponse:
+    """Send one JSON request to a hidden binary command and validate the answer."""
+    completed = subprocess.run(  # noqa: S603 - fixed argv to the packaged binary
+        [str(native_binary(executable)), command],
+        input=request.model_dump_json(),
+        capture_output=True,
+        check=False,
+        encoding="utf-8",
+        errors="strict",
+    )
+    if completed.returncode != 0:
+        message = completed.stderr.strip() or f"okf-parser {command} exited {completed.returncode}"
+        raise RustCoreError(message)
+    try:
+        return NativeResponse.model_validate_json(completed.stdout)
+    except ValidationError as exc:
+        message = (
+            f"invalid okf-parser {command} response (protocol {PROTOCOL_VERSION} expected): {exc}"
+        )
+        raise RustCoreError(message) from exc
 
 
 class RustCoreError(RuntimeError):
@@ -174,7 +209,8 @@ def rust_markdown_facts_batch(bodies: Sequence[str], executable: Path) -> tuple[
         input=json.dumps({"documents": bodies}, ensure_ascii=False),
         capture_output=True,
         check=False,
-        text=True,
+        encoding="utf-8",
+        errors="strict",
     )
     if completed.returncode != 0:
         message = completed.stderr.strip() or f"okf-core exited with {completed.returncode}"

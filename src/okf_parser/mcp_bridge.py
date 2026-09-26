@@ -1,8 +1,11 @@
 """Run one MCP tool call on behalf of the native ``okf-parser serve``.
 
 The MCP protocol itself (transports, tool schemas, effect annotations) lives
-in the Rust binary (``rust-core/src/mcp.rs``, built on ``rmcp``). Tools whose
-logic has not been ported yet are answered here: the binary pipes
+in the Rust binary (``rust-core/src/mcp.rs``, built on ``rmcp``), which also
+answers ``check``, ``inventory``, ``graph`` and ``init_*`` natively. Tools
+whose logic still needs DuckDB or the Python formatter are answered here
+(``check`` only with ``relational_schema``, ``init_*`` only with
+``infer_schema``): the binary pipes
 ``{"tool": ..., "arguments": {...}}`` to ``python -m okf_parser.mcp_bridge``
 and relays the JSON this module prints.
 """
@@ -26,10 +29,8 @@ from okf_parser.service import (
     apply_bundle,
     check_bundle,
     check_format,
-    graph_bundle,
     import_bundle,
     init_bundle,
-    inventory_bundle,
     schema_bundle,
     write_format,
 )
@@ -47,7 +48,7 @@ def mcp_check(
     relational_schema: str | None = None,
     classify: bool = False,
 ) -> dict[str, object]:
-    """Validate every Markdown file recursively as OKF v0.2."""
+    """Validate a bundle including its declared relations (`relational_schema`)."""
     return check_bundle(
         path,
         exclude or (),
@@ -56,18 +57,6 @@ def mcp_check(
         classify=classify,
         relational_schema=relational_schema,
     )
-
-
-def mcp_inventory(
-    path: str, exclude: RepeatableStrings = None, *, digests: bool = False
-) -> dict[str, object]:
-    """Count concepts by type and optionally expose deterministic content digests."""
-    return inventory_bundle(path, exclude or (), digests=digests)
-
-
-def mcp_graph(path: str, exclude: RepeatableStrings = None) -> dict[str, object]:
-    """Summarize resolved concept relationships."""
-    return graph_bundle(path, exclude or ())
 
 
 def mcp_schema(
@@ -252,8 +241,6 @@ def mcp_duckdb_export(
 
 type ToolName = Literal[
     "check",
-    "inventory",
-    "graph",
     "schema",
     "format_check",
     "apply_preview",
@@ -268,8 +255,6 @@ type ToolName = Literal[
 
 TOOLS: dict[ToolName, Callable[..., object]] = {
     "check": mcp_check,
-    "inventory": mcp_inventory,
-    "graph": mcp_graph,
     "schema": mcp_schema,
     "format_check": mcp_format_check,
     "apply_preview": mcp_apply_preview,

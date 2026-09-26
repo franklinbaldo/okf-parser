@@ -1,7 +1,9 @@
-"""Expose okf-parser through Cyclopts.
+"""Expose the commands the native binary has not taken over yet, through Cyclopts.
 
-``okf-parser serve`` is answered by the native binary (``rust-core/src/mcp.rs``),
-which delegates unported tools to ``okf_parser.mcp_bridge``.
+The binary (``rust-core/src/main.rs``) answers ``check``, ``inventory``,
+``graph``, ``init`` and ``serve`` itself and passes every other command line
+here. ``check --relational-schema`` and ``init --infer-schema`` still need
+DuckDB, so the binary passes those here too (RFC 0024 phase 4).
 """
 
 from __future__ import annotations
@@ -20,10 +22,8 @@ from okf_parser.service import (
     check_bundle,
     check_format,
     export_duckdb,
-    graph_bundle,
     import_bundle,
     init_bundle,
-    inventory_bundle,
     schema_bundle,
     write_format,
 )
@@ -79,7 +79,7 @@ def check(
     relational_schema: str | None = None,
     classify: bool = False,
 ) -> CliResult[JsonPayload]:
-    """Validate every Markdown file recursively as OKF v0.2."""
+    """Validate a bundle including its declared relations (`--relational-schema`)."""
     payload = check_bundle(
         path,
         exclude or (),
@@ -135,20 +135,6 @@ def init(
     schemas = cast("dict[str, object]", payload["schemas"]) if infer_schema else None
     has_collisions = bool(specs["collisions"]) or bool(schemas and schemas["collisions"])
     return CliResult(payload, 1 if has_collisions else 0)
-
-
-@app.command
-def inventory(
-    path: str, *, exclude: RepeatableStrings = None, digests: bool = False
-) -> CliResult[JsonPayload]:
-    """Count concepts by type and optionally expose deterministic content digests."""
-    return CliResult(inventory_bundle(path, exclude or (), digests=digests))
-
-
-@app.command
-def graph(path: str, *, exclude: RepeatableStrings = None) -> CliResult[JsonPayload]:
-    """Summarize the resolved concept graph with NetworkX."""
-    return CliResult(graph_bundle(path, exclude or ()))
 
 
 @app.command

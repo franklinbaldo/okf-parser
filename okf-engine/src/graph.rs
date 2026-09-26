@@ -88,7 +88,7 @@ mod tests {
             raw_target: format!("{}.md", target.unwrap_or("missing")),
             target_id: target.map(Into::into),
             exists: target.is_some(),
-            origin: "body".into(),
+            origin: crate::LinkOrigin::Body,
         }
     }
 

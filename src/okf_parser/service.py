@@ -2,21 +2,23 @@
 
 from __future__ import annotations
 
-from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 import duckdb
+from pydantic import BaseModel, ConfigDict
 
 from okf_parser.apply import apply_bundle as _apply_bundle
-from okf_parser.bundle import load_bundle, validate_path
+from okf_parser.bundle import check_report
 from okf_parser.bundle_import import import_bundle as _import_bundle
-from okf_parser.classification import classify_path
 from okf_parser.duckdb import attach_okf
 from okf_parser.edit import preview_concept_edit as _preview_concept_edit
 from okf_parser.edit import write_concept_edit as _write_concept_edit
 from okf_parser.formatting import FormatReport, format_path
 from okf_parser.graphql_adapter import export_graphql_sdl
+from okf_parser.models import Severity
+from okf_parser.relational_schema import validate_relations
+from okf_parser.rust_core import RustCoreError, call_native
 from okf_parser.schema_export import (
     RefsMode,
     export_json_schema,
@@ -24,12 +26,50 @@ from okf_parser.schema_export import (
     export_zod_schema,
 )
 from okf_parser.schema_export import documents_by_type as _documents_by_type
-from okf_parser.spec_scaffold import scaffold_missing_declared_schemas, scaffold_missing_specs
+from okf_parser.spec_scaffold import scaffold_missing_declared_schemas
+from okf_parser.type_specs import SpecTemplateError
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from pydantic import JsonValue
+
     from okf_parser.schema_contract import ZodImport
+
+
+class _InitSpecsRequest(BaseModel):
+    """The ``__init-specs`` request the binary validates."""
+
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    spec_template: str
+    exclude: list[str]
+    write: bool
+
+
+def _native_init_specs(
+    path: str, spec_template: str, exclude: Sequence[str], *, write: bool
+) -> dict[str, JsonValue]:
+    response = call_native(
+        "__init-specs",
+        _InitSpecsRequest(
+            path=str(Path(path).resolve()),
+            spec_template=spec_template,
+            exclude=list(exclude),
+            write=write,
+        ),
+    )
+    if response.error is not None:
+        if response.error.kind == "spec_template":
+            raise SpecTemplateError(response.error.message)
+        if response.error.kind == "request":
+            raise ValueError(response.error.message)
+        raise RustCoreError(response.error.message)
+    if response.result is None:
+        msg = "okf-parser __init-specs answered with neither a result nor an error"
+        raise RustCoreError(msg)
+    return response.result
 
 
 def init_bundle(
@@ -42,17 +82,17 @@ def init_bundle(
 ) -> dict[str, object]:
     """Scaffold a missing specification document, and optionally a starter `.schema.sql`.
 
-    `infer_schema` runs the same `schema --infer-types` inference used
-    elsewhere to propose a starter declaration for whichever types still
-    lack a `.schema.sql`; it never touches a file that already exists.
+    The specification stubs are scaffolded natively; `infer_schema` adds the
+    DuckDB-backed `schema --infer-types` inference that proposes a starter
+    declaration for whichever types still lack a `.schema.sql`, never
+    touching a file that already exists.
     """
-    root = Path(path).resolve()
-    bundle = load_bundle(root, exclude)
-    specs = scaffold_missing_specs(bundle.root, bundle.concept_types, spec_template, write=write)
+    specs = _native_init_specs(path, spec_template, exclude, write=write)
     if not infer_schema:
         return {"specs": specs}
+    root = Path(path).resolve()
     observed = _documents_by_type(path, exclude)
-    schemas = scaffold_missing_declared_schemas(bundle.root, spec_template, observed, write=write)
+    schemas = scaffold_missing_declared_schemas(root, spec_template, observed, write=write)
     return {"specs": specs, "schemas": schemas}
 
 
@@ -89,50 +129,36 @@ def check_bundle(
     classify: bool = False,
     relational_schema: str | None = None,
 ) -> dict[str, object]:
-    """Validate every Markdown file below a path."""
-    report = validate_path(
+    """Validate a bundle with declared relations (`check --relational-schema`).
+
+    Every other check runs natively; this adds the DuckDB-backed relational
+    diagnostics to the native report until RFC 0024 phase 4.
+    """
+    report = check_report(
         Path(path),
         exclude,
         require_spec,
         normative_spec=normative_spec,
-        relational_schema=Path(relational_schema) if relational_schema is not None else None,
+        classify=classify,
+        with_bundle=relational_schema is not None,
     )
+    diagnostics = list(report.diagnostics)
+    if relational_schema is not None:
+        schema = Path(relational_schema)
+        schema_path = schema if schema.is_absolute() else report.root / schema
+        diagnostics.extend(validate_relations(report.loaded(), schema_path))
+    diagnostics.sort(key=lambda item: (item.path, item.severity.value, item.code, item.message))
     payload: dict[str, object] = {
         "root": str(report.root),
-        "conformant": report.is_conformant,
+        "conformant": not any(item.severity is Severity.ERROR for item in diagnostics),
         "markdown_count": report.markdown_count,
         "concept_count": report.concept_count,
         "reserved_count": report.reserved_count,
-        "diagnostics": [item.model_dump(mode="json") for item in report.violations],
+        "diagnostics": [item.model_dump(mode="json") for item in diagnostics],
     }
-    if classify:
-        payload["classification"] = classify_path(Path(path), exclude)
+    if report.classification is not None:
+        payload["classification"] = report.classification.model_dump(mode="json")
     return payload
-
-
-def inventory_bundle(
-    path: str, exclude: Sequence[str] = (), *, digests: bool = False
-) -> dict[str, object]:
-    """Count concepts by their producer-defined type."""
-    bundle = load_bundle(Path(path), exclude)
-    counts = Counter(concept.concept_type for concept in bundle.concepts)
-    rows = [
-        {"concept_type": concept_type, "concept_count": count}
-        for concept_type, count in sorted(counts.items())
-    ]
-    payload: dict[str, object] = {"root": str(bundle.root), "types": rows}
-    if digests:
-        payload["digests"] = [
-            concept.model_dump(include={"concept_id", "path", "source_digest", "parsed_digest"})
-            for concept in sorted(bundle.concepts, key=lambda concept: concept.path)
-        ]
-    return payload
-
-
-def graph_bundle(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
-    """Summarize the resolved concept graph."""
-    bundle = load_bundle(Path(path), exclude)
-    return {"root": str(bundle.root), **bundle.graph().summary().model_dump()}
 
 
 def schema_bundle(  # service mirrors the independent public schema flags.
@@ -248,7 +274,7 @@ def preview_concept_edit(
     body: str,
     expected_source_digest: str,
     exclude: Sequence[str] = (),
-) -> dict[str, object]:
+) -> dict[str, JsonValue]:
     """Preview one conflict-safe Markdown body replacement."""
     return _preview_concept_edit(path, concept_id, body, expected_source_digest, exclude=exclude)
 
@@ -259,7 +285,7 @@ def write_concept_edit(
     body: str,
     expected_source_digest: str,
     exclude: Sequence[str] = (),
-) -> dict[str, object]:
+) -> dict[str, JsonValue]:
     """Commit one conflict-safe Markdown body replacement."""
     return _write_concept_edit(path, concept_id, body, expected_source_digest, exclude=exclude)
 

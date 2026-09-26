@@ -41,7 +41,7 @@ If a selected Rust engine starts and fails, the request fails rather than silent
 
 ## Python packaging
 
-`okf-parser` is the only Python distribution and `okf-parser` is its only installed entry point. The platform wheel uses that executable for the ordinary CLI, `serve` MCP command, and private Rust-engine operations; there is no separate `okf-parser-native` PyPI project or runtime dependency. Maturin installs the executable into the active interpreter's scripts directory, which the loader checks directly, so virtual environments work without deployment-specific paths.
+`okf-parser` is the only Python distribution and `okf-parser` is its only installed entry point. The platform wheel uses that executable for the whole CLI: it answers `check`, `inventory`, `graph`, `init`, the `serve` MCP command and the private Rust-engine operations natively, and passes only the commands that still need DuckDB or the Python formatter to the Python CLI; there is no separate `okf-parser-native` PyPI project or runtime dependency. Maturin installs the executable into the active interpreter's scripts directory, which the loader checks directly, so virtual environments work without deployment-specific paths.
 
 A source installation builds that same executable as part of building the `okf-parser` wheel. Release automation must test both the platform wheel and source distribution as fresh consumers before publication.
 
