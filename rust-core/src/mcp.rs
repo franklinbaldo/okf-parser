@@ -159,7 +159,8 @@ pub enum ImportConflictPolicy {
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ImportPreviewArgs {
-    source: PathBuf,
+    // Anything DuckDB can scan: a local file, a URL or another source string.
+    source: String,
     path: PathBuf,
     #[serde(rename = "type")]
     type_name: String,
@@ -174,7 +175,8 @@ pub struct ImportPreviewArgs {
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ImportWriteArgs {
-    source: PathBuf,
+    // Anything DuckDB can scan: a local file, a URL or another source string.
+    source: String,
     path: PathBuf,
     #[serde(rename = "type")]
     type_name: String,
@@ -192,8 +194,9 @@ pub struct ImportWriteArgs {
 #[serde(deny_unknown_fields)]
 pub struct DuckdbExportArgs {
     path: PathBuf,
+    // A DuckDB database name: a file, `:memory:` or another DuckDB target.
     #[serde(default = "default_database")]
-    database: PathBuf,
+    database: String,
     #[serde(default = "default_schema")]
     schema: String,
     #[serde(default)]
@@ -204,7 +207,7 @@ pub struct DuckdbExportArgs {
     spec_template: Option<String>,
 }
 
-fn default_database() -> PathBuf {
+fn default_database() -> String {
     "okf.duckdb".into()
 }
 

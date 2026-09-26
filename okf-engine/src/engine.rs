@@ -198,8 +198,8 @@ pub enum LoadError {
     Exclusions(ExclusionError),
     Walk(walkdir::Error),
     ThreadPool(rayon::ThreadPoolBuildError),
-    /// A path the bundle must name is not UTF-8 (see [`BundlePath`]).
-    NonUtf8Path(PathBuf),
+    /// A path the bundle must name cannot be a [`BundlePath`].
+    Path(BundlePathError),
 }
 impl fmt::Display for LoadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -212,7 +212,7 @@ impl fmt::Display for LoadError {
             Self::Exclusions(error) => error.fmt(f),
             Self::Walk(error) => error.fmt(f),
             Self::ThreadPool(error) => error.fmt(f),
-            Self::NonUtf8Path(path) => write!(f, "path is not valid UTF-8: {}", path.display()),
+            Self::Path(error) => error.fmt(f),
         }
     }
 }
@@ -223,7 +223,8 @@ impl std::error::Error for LoadError {
             Self::Exclusions(error) => Some(error),
             Self::Walk(error) => Some(error),
             Self::ThreadPool(error) => Some(error),
-            Self::NotADirectory | Self::Concurrency(_) | Self::NonUtf8Path(_) => None,
+            Self::Path(error) => Some(error),
+            Self::NotADirectory | Self::Concurrency(_) => None,
         }
     }
 }
@@ -232,9 +233,9 @@ impl From<ExclusionError> for LoadError {
         Self::Exclusions(error)
     }
 }
-impl From<NonUtf8Path> for LoadError {
-    fn from(NonUtf8Path(path): NonUtf8Path) -> Self {
-        Self::NonUtf8Path(path)
+impl From<BundlePathError> for LoadError {
+    fn from(error: BundlePathError) -> Self {
+        Self::Path(error)
     }
 }
 
@@ -252,9 +253,28 @@ impl std::error::Error for ExclusionError {
     }
 }
 
-/// A native path that has no UTF-8 spelling, so it cannot become a bundle path.
+/// Why a native path cannot become a [`BundlePath`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct NonUtf8Path(pub PathBuf);
+pub enum BundlePathError {
+    /// The path is not under the bundle root.
+    OutsideRoot { root: PathBuf, path: PathBuf },
+    /// The path has no UTF-8 spelling.
+    NonUtf8(PathBuf),
+}
+impl fmt::Display for BundlePathError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::OutsideRoot { root, path } => write!(
+                f,
+                "path is outside the bundle root {}: {}",
+                root.display(),
+                path.display()
+            ),
+            Self::NonUtf8(path) => write!(f, "path is not valid UTF-8: {}", path.display()),
+        }
+    }
+}
+impl std::error::Error for BundlePathError {}
 
 /// A path inside a bundle as OKF names it: relative to the root, UTF-8,
 /// `/`-separated. This is the one place a native path becomes a string, and
@@ -263,12 +283,17 @@ pub struct NonUtf8Path(pub PathBuf);
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct BundlePath(String);
 impl BundlePath {
-    /// Name `path`, which must lie under `root`.
-    pub fn new(root: &Path, path: &Path) -> Result<Self, NonUtf8Path> {
-        let relative = path.strip_prefix(root).unwrap_or(path);
+    /// Name `path` relative to `root`; a path outside `root` is refused.
+    pub fn new(root: &Path, path: &Path) -> Result<Self, BundlePathError> {
+        let relative = path
+            .strip_prefix(root)
+            .map_err(|_| BundlePathError::OutsideRoot {
+                root: root.to_owned(),
+                path: path.to_owned(),
+            })?;
         let text = relative
             .to_str()
-            .ok_or_else(|| NonUtf8Path(path.to_owned()))?;
+            .ok_or_else(|| BundlePathError::NonUtf8(path.to_owned()))?;
         Ok(Self(if std::path::MAIN_SEPARATOR == '/' {
             text.to_owned()
         } else {
@@ -717,7 +742,7 @@ pub fn load_bundle(
     }
     let root_text = root
         .to_str()
-        .ok_or_else(|| LoadError::NonUtf8Path(root.clone()))?
+        .ok_or_else(|| BundlePathError::NonUtf8(root.clone()))?
         .to_owned();
     let paths = discover(&root, patterns)?;
     let relatives = paths
@@ -963,7 +988,10 @@ mod tests {
             fs::write(dir.join("a.md"), "---\ntype: Note\n---\n").unwrap();
         }
         let error = load_bundle(&bundle.0, &[], 1).err().unwrap();
-        assert!(matches!(error, LoadError::NonUtf8Path(_)), "{error:?}");
+        assert!(
+            matches!(error, LoadError::Path(BundlePathError::NonUtf8(_))),
+            "{error:?}"
+        );
     }
 
     #[test]
@@ -971,5 +999,19 @@ mod tests {
         let root = Path::new("/b");
         let path = root.join("x").join("y.md");
         assert_eq!(BundlePath::new(root, &path).unwrap().as_str(), "x/y.md");
+    }
+
+    #[test]
+    fn a_path_outside_the_root_is_refused() {
+        let root = Path::new("/b");
+        for outside in [Path::new("/elsewhere/y.md"), Path::new("relative/y.md")] {
+            assert_eq!(
+                BundlePath::new(root, outside),
+                Err(BundlePathError::OutsideRoot {
+                    root: root.to_owned(),
+                    path: outside.to_owned(),
+                })
+            );
+        }
     }
 }

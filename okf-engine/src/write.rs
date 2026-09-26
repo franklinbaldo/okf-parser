@@ -23,7 +23,7 @@ use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 use crate::engine::{
-    BundlePath, Code, ExclusionError, LoadError, NonUtf8Path, Severity, concept_identity,
+    BundlePath, BundlePathError, Code, ExclusionError, LoadError, Severity, concept_identity,
     exclusions, ignored_directory, load_bundle, markdown, normalized_newlines, reserved,
     split_source,
 };
@@ -52,8 +52,9 @@ pub enum WriteError {
     ChangedDuringRead {
         path: String,
     },
-    /// A bundle file has no UTF-8 name, so a write cannot account for it.
-    NonUtf8Path(PathBuf),
+    /// A bundle file cannot be named as a bundle path (no UTF-8 name), so a
+    /// write cannot account for it.
+    Path(BundlePathError),
     /// Loading the live or the staged bundle failed.
     Load(LoadError),
     Walk(walkdir::Error),
@@ -72,7 +73,7 @@ impl WriteError {
                 | Self::UnknownConcept(_)
                 | Self::CandidateLost(_)
                 | Self::ChangedDuringRead { .. }
-                | Self::NonUtf8Path(_)
+                | Self::Path(_)
         )
     }
 }
@@ -96,7 +97,7 @@ impl fmt::Display for WriteError {
             Self::ChangedDuringRead { path } => {
                 write!(f, "file changed while it was being read: {path}")
             }
-            Self::NonUtf8Path(path) => write!(f, "path is not valid UTF-8: {}", path.display()),
+            Self::Path(error) => error.fmt(f),
             Self::Load(error) => error.fmt(f),
             Self::Walk(error) => error.fmt(f),
             Self::Io(error) => error.fmt(f),
@@ -112,10 +113,10 @@ impl std::error::Error for WriteError {
             Self::Load(error) => Some(error),
             Self::Walk(error) => Some(error),
             Self::Io(error) => Some(error),
-            Self::UnknownConcept(_)
-            | Self::CandidateLost(_)
-            | Self::ChangedDuringRead { .. }
-            | Self::NonUtf8Path(_) => None,
+            Self::Path(error) => Some(error),
+            Self::UnknownConcept(_) | Self::CandidateLost(_) | Self::ChangedDuringRead { .. } => {
+                None
+            }
         }
     }
 }
@@ -126,9 +127,9 @@ impl From<io::Error> for WriteError {
     }
 }
 
-impl From<NonUtf8Path> for WriteError {
-    fn from(NonUtf8Path(path): NonUtf8Path) -> Self {
-        Self::NonUtf8Path(path)
+impl From<BundlePathError> for WriteError {
+    fn from(error: BundlePathError) -> Self {
+        Self::Path(error)
     }
 }
 
@@ -964,7 +965,10 @@ mod tests {
         fs::write(dir.0.join(name), b"x").unwrap();
         let error = snapshot_bundle(&dir.0, &[]).err().unwrap();
         assert!(
-            matches!(&error, WriteError::NonUtf8Path(path) if path.file_name() == Some(name)),
+            matches!(
+                &error,
+                WriteError::Path(BundlePathError::NonUtf8(path)) if path.file_name() == Some(name)
+            ),
             "{error:?}"
         );
     }
