@@ -191,9 +191,7 @@ def test_frontmatter_json_preserves_scalar_strings(tmp_path: Path) -> None:
 
     parsed = parse_document(path)
 
-    assert parsed.frontmatter_json == (
-        '{"created": "2026-01-01", "number": "0012", "type": "Reference"}'
-    )
+    assert parsed.frontmatter_json == '{"created":"2026-01-01","number":"0012","type":"Reference"}'
 
 
 def test_malformed_url_target_does_not_raise() -> None:

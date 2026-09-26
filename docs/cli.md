@@ -291,7 +291,10 @@ Tool arguments are validated at the server: an unknown key is a tool error,
 and defaulted flags keep concrete, non-nullable schemas (`digests` defaults to
 `false`, `database` to `okf.duckdb`). The legacy
 `sse` transport is gone: the MCP specification deprecated it in favor of
-Streamable HTTP. `graph` is answered natively; every other tool is delegated to
+Streamable HTTP. `check`, `inventory`, `graph`, `init_preview` and `init_write` are
+answered natively by `okf-engine`. The tools that still need DuckDB or the Python
+formatter (`schema`, `format_*`, `apply_*`, `import_*`, `duckdb_export`, plus `check`
+with `relational_schema` and `init_*` with `infer_schema`) are delegated to
 `python -m okf_parser.mcp_bridge`, which runs the CLI's own service function.
 The interpreter is the one installed next to the binary; set `OKF_PYTHON` to
 point a binary outside any Python environment at one. The default

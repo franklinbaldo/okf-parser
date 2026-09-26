@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-import json
 from enum import StrEnum
 from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter
+
+from okf_parser.digests import canonical_json
 
 type YamlValue = str | None | list[YamlValue] | dict[str, YamlValue]
 """OKF frontmatter with mapping/list structure and scalar spelling preserved."""
@@ -109,8 +110,12 @@ class ParsedDocument(BaseModel):
 
     @property
     def frontmatter_json(self) -> str:
-        """Deterministic JSON for the preserved frontmatter."""
-        return json.dumps(self.frontmatter, ensure_ascii=False, sort_keys=True)
+        """The frontmatter's one public JSON spelling: compact, UTF-16 key order.
+
+        The same JCS bytes the parsed digest is taken over, and what the binary
+        emits for ``ConceptRecord.frontmatter_json``.
+        """
+        return canonical_json(self.frontmatter)
 
     def _string_field(self, field: str) -> str | None:
         value = self.frontmatter.get(field)

@@ -33,6 +33,14 @@ if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
 
 
+# The native engine's advisory commit lock (``okf-engine/src/write.rs``).
+LOCK_FILE = ".okf-write.lock"
+
+
+def _is_lock_file(base: Path, name: str) -> bool:
+    return base == Path() and name == LOCK_FILE
+
+
 class WriteSupportError(ValueError):
     """Raised when a coherent write snapshot cannot be constructed."""
 
@@ -205,7 +213,7 @@ def snapshot_bundle(root: Path, exclude: Sequence[str]) -> BundleSnapshot:
         _prune_walk_directories(directory, directory_names, base, rules, prunes=prunes)
         for name in filenames:
             source = directory / name
-            if source.is_symlink():
+            if source.is_symlink() or _is_lock_file(base, name):
                 continue
             posix = (base / name).as_posix()
             is_concept_candidate = (
@@ -239,7 +247,7 @@ def snapshot_manifest(root: Path, exclude: Sequence[str]) -> dict[str, tuple[int
         _prune_walk_directories(directory, directory_names, base, rules, prunes=prunes)
         for name in filenames:
             source = directory / name
-            if source.is_symlink():
+            if source.is_symlink() or _is_lock_file(base, name):
                 continue
             manifest[(base / name).as_posix()] = _file_signature(source)
     return manifest
@@ -259,7 +267,7 @@ def build_candidate_tree(
         _prune_walk_directories(directory, directory_names, base, rules, prunes=prunes)
         for name in filenames:
             source = directory / name
-            if source.is_symlink():
+            if source.is_symlink() or _is_lock_file(base, name):
                 continue
             relative = base / name
             destination = candidate_root / relative

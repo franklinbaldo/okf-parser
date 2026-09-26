@@ -104,3 +104,28 @@ def test_markdown_facts_use_same_private_entrypoint(monkeypatch: pytest.MonkeyPa
     rust_core.rust_markdown_facts_batch(("# Note",), Path("/env/bin/okf-parser"))
 
     assert run.call_args.args[0] == [Path("/env/bin/okf-parser"), "__engine-facts"]
+
+
+def test_every_protocol_call_pins_utf8_regardless_of_locale(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_run(*_args: object, **kwargs: object) -> rust_core.subprocess.CompletedProcess[str]:
+        calls.append(kwargs)
+        return rust_core.subprocess.CompletedProcess([], 1, "", "stop")
+
+    monkeypatch.setattr(rust_core.subprocess, "run", fake_run)
+    binary = tmp_path / "okf-parser"
+    for call in (
+        lambda: rust_core.rust_load_bundle(tmp_path, binary),
+        lambda: rust_core.rust_markdown_facts_batch(("# é",), binary),
+        lambda: rust_core.call_native(
+            "__edit", rust_core.NativeError(kind="io", message="x"), binary
+        ),
+    ):
+        with pytest.raises(rust_core.RustCoreError):
+            call()
+
+    assert [(call["encoding"], call["errors"]) for call in calls] == [("utf-8", "strict")] * 3
+    assert all("text" not in call for call in calls)

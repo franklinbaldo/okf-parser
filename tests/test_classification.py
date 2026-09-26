@@ -4,11 +4,18 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from okf_parser.classification import classify_path
+from okf_parser.bundle import check_report
 from okf_parser.service import check_bundle
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
+
+
+def classify_path(path: Path, exclude: Sequence[str] = ()) -> dict[str, list[str]]:
+    report = check_report(path, exclude, classify=True)
+    assert report.classification is not None
+    return report.classification.model_dump(mode="json")
 
 
 def _write(path: Path, text: str) -> None:
@@ -51,6 +58,13 @@ def test_classification_honors_one_off_exclusions_without_reclassifying_core(
     assert classification["concepts"] == ["keep.md"]
     assert classification["ignored"] == ["skip.md"]
     assert classification["invalid_or_untyped"] == []
+
+
+def test_node_modules_is_never_a_candidate(tmp_path: Path) -> None:
+    _write(tmp_path / "a.md", "---\ntype: Note\n---\n")
+    _write(tmp_path / "node_modules" / "pkg" / "README.md", "# Vendored\n")
+
+    assert classify_path(tmp_path)["ignored"] == []
 
 
 def test_check_classification_is_opt_in_and_does_not_change_conformance(tmp_path: Path) -> None:

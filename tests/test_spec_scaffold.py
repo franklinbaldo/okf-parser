@@ -2,14 +2,27 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
-from okf_parser.spec_scaffold import scaffold_missing_declared_schemas, scaffold_missing_specs
+from okf_parser.service import init_bundle
+from okf_parser.spec_scaffold import scaffold_missing_declared_schemas
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
     from pathlib import Path
 
 TEMPLATE = "docs/types/{slug}.md"
+
+
+def scaffold_missing_specs(
+    root: Path, concept_types: Iterable[str], template: str, *, write: bool = False
+) -> dict[str, object]:
+    """Scaffold through the native ``init`` for a bundle using `concept_types`."""
+    for index, concept_type in enumerate(sorted(concept_types)):
+        (root / f"concept-{index}.md").write_text(
+            f"---\ntype: {concept_type}\n---\n", encoding="utf-8"
+        )
+    return cast("dict[str, object]", init_bundle(str(root), template, write=write)["specs"])
 
 
 def test_dry_run_reports_would_create_and_writes_nothing(tmp_path: Path) -> None:
@@ -40,7 +53,14 @@ def test_existing_document_is_never_overwritten(tmp_path: Path) -> None:
 
     result = scaffold_missing_specs(tmp_path, {"Rotina"}, TEMPLATE, write=True)
 
-    assert result == {"created": [], "would_create": [], "collisions": [], "written": True}
+    # The existing document is itself a `Spec` concept, so only that type's
+    # document is created; the `Rotina` document is left exactly as authored.
+    assert result == {
+        "created": ["docs/types/spec.md"],
+        "would_create": [],
+        "collisions": [],
+        "written": True,
+    }
     assert spec.read_text(encoding="utf-8") == "---\ntype: Spec\n---\n\n# Custom\n"
 
 

@@ -199,14 +199,35 @@ def _bundle(root: Path) -> Path:
 
 
 @native
-def test_native_graph_tool_matches_the_python_service(tmp_path: Path) -> None:
+def test_native_graph_tool_summarizes_the_bundle(tmp_path: Path) -> None:
     bundle = _bundle(tmp_path)
 
     with McpSession() as session:
         result = session.call("graph", {"path": str(bundle)})
 
     assert result["isError"] is False
-    assert result["structuredContent"] == mcp_bridge.mcp_graph(str(bundle))
+    assert result["structuredContent"] == {
+        "root": str(bundle.resolve()),
+        "nodes": 2,
+        "edges": 1,
+        "weakly_connected_components": 1,
+        "strongly_connected_components": 2,
+        "directed_acyclic": True,
+    }
+
+
+@native
+def test_native_inventory_tool_counts_types(tmp_path: Path) -> None:
+    bundle = _bundle(tmp_path)
+
+    with McpSession() as session:
+        result = session.call("inventory", {"path": str(bundle)})
+
+    assert result["isError"] is False
+    assert result["structuredContent"] == {
+        "root": str(bundle.resolve()),
+        "types": [{"concept_type": "Node", "concept_count": 2}],
+    }
 
 
 @native
@@ -214,10 +235,10 @@ def test_delegated_tool_answers_through_the_python_bridge(tmp_path: Path) -> Non
     bundle = _bundle(tmp_path)
 
     with McpSession() as session:
-        result = session.call("inventory", {"path": str(bundle)})
+        result = session.call("format_check", {"path": str(bundle)})
 
     assert result["isError"] is False
-    assert result["structuredContent"] == mcp_bridge.mcp_inventory(str(bundle))
+    assert result["structuredContent"] == mcp_bridge.mcp_format_check(str(bundle))
 
 
 @native
@@ -363,12 +384,13 @@ def test_bridge_accepts_wire_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_bridge_rejects_arguments_a_tool_does_not_take() -> None:
     with pytest.raises(ValueError, match="unexpected_keyword_argument"):
         mcp_bridge.run_tool_call(
-            mcp_bridge.ToolCall(tool="graph", arguments={"path": ".", "write": True})
+            mcp_bridge.ToolCall(tool="check", arguments={"path": ".", "write": True})
         )
 
 
-def test_bridge_serves_every_tool_the_native_server_declares() -> None:
-    assert set(mcp_bridge.TOOLS) == DEFAULT_TOOLS | WRITE_TOOLS
+def test_bridge_serves_every_tool_the_native_server_may_delegate() -> None:
+    # `inventory` and `graph` are answered natively and never delegated.
+    assert set(mcp_bridge.TOOLS) == (DEFAULT_TOOLS | WRITE_TOOLS) - {"inventory", "graph"}
     assert set(get_args(mcp_bridge.ToolName.__value__)) == set(mcp_bridge.TOOLS)
 
 

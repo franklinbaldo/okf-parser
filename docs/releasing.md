@@ -89,7 +89,7 @@ uv run --script scripts/changelog_notes.py "$(uv run --script scripts/project_ve
 
 The root project uses Maturin as its PEP 517 backend with `bindings = "bin"`. The Python import package and PyPI distribution remain `okf_parser` and `okf-parser`; the sole installed binary target is `okf-parser`.
 
-A platform wheel therefore installs the ordinary Python package behind one `okf-parser` command. That executable forwards public CLI and MCP commands to the packaged Python module and handles private native-engine operations itself. Applications do not depend on, import or locate a second Python distribution. `resolve_rust_core()` discovers the same executable from the interpreter scripts directory before consulting explicit environment overrides or `PATH`.
+A platform wheel therefore installs the ordinary Python package behind one `okf-parser` command. That executable declares the whole CLI and MCP surface and answers `check`, `inventory`, `graph`, `init` and the private native-engine operations itself; only the commands that still need DuckDB or the Python formatter are forwarded to the packaged Python module (RFC 0024). Applications do not depend on, import or locate a second Python distribution. `resolve_rust_core()` discovers the same executable from the interpreter scripts directory before consulting explicit environment overrides or `PATH`.
 
 The source distribution contains the Rust sources required to build that same wheel. Publishing a pure-Python selector wheel is deliberately not part of the Python release model.
 
