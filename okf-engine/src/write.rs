@@ -10,6 +10,7 @@
 //! cooperating writers cannot both pass the recheck and overwrite each other.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -22,7 +23,7 @@ use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 use crate::engine::{
-    IGNORED, exclusions, load_bundle, markdown, normalized_newlines, parse_concept, reserved,
+    IGNORED, concept_identity, exclusions, load_bundle, markdown, normalized_newlines, reserved,
     split_source,
 };
 
@@ -37,6 +38,8 @@ const LOCK_FILE: &str = ".okf-write.lock";
 pub enum WriteError {
     /// The request itself is invalid for this bundle.
     Request(String),
+    /// A file changed while the snapshot was reading it; retrying may succeed.
+    ChangedDuringRead { path: String },
     /// The filesystem failed underneath the write.
     Io(String),
 }
@@ -58,16 +61,21 @@ pub struct RawDocument {
 
 impl RawDocument {
     pub fn parse(data: &[u8]) -> Option<Self> {
-        let bom = data.starts_with(BOM);
-        let text = std::str::from_utf8(if bom { &data[BOM.len()..] } else { data }).ok()?;
+        let text = std::str::from_utf8(data).ok()?;
         let normalized = normalized_newlines(text);
         let (frontmatter, body) = split_source(&normalized)?;
-        Some(Self {
-            bom,
+        Some(Self::from_split(text, frontmatter, body))
+    }
+
+    /// Keep the physical style of `text`, whose normalized source split into
+    /// `frontmatter` and `body`.
+    fn from_split(text: &str, frontmatter: &str, body: &str) -> Self {
+        Self {
+            bom: text.starts_with('\u{feff}'),
             crlf: text.contains("\r\n"),
             frontmatter: frontmatter.to_owned(),
             body: body.to_owned(),
-        })
+        }
     }
 
     /// The exact bytes a write commits, keeping the BOM and line endings.
@@ -174,20 +182,20 @@ fn exclusion_rules(root: &Path, exclude: &[String]) -> Result<Gitignore, WriteEr
     exclusions(root, exclude).map_err(WriteError::Request)
 }
 
+/// One parse of the bytes: split once, identify from the split, keep the split.
 fn snapshot_concept(relative: &str, path: &Path, data: &[u8]) -> Option<ConceptSnapshot> {
     let text = std::str::from_utf8(data).ok()?;
-    let parsed = parse_concept(relative.to_owned(), text.to_owned()).ok()?;
-    if parsed.record.concept_type.is_empty() {
-        return None;
-    }
+    let normalized = normalized_newlines(text);
+    let (frontmatter, body) = split_source(&normalized)?;
+    let identity = concept_identity(relative, text, frontmatter, body)?;
     Some(ConceptSnapshot {
         path: path.to_owned(),
         relative: relative.to_owned(),
-        concept_id: parsed.record.concept_id,
-        source_digest: parsed.record.source_digest,
-        parsed_digest: parsed.record.parsed_digest,
+        concept_id: identity.concept_id,
+        source_digest: identity.source_digest,
+        parsed_digest: identity.parsed_digest,
         content_hash: sha256_hex(data),
-        raw: RawDocument::parse(data)?,
+        raw: RawDocument::from_split(text, frontmatter, body),
     })
 }
 
@@ -210,9 +218,7 @@ pub fn snapshot_bundle(root: &Path, exclude: &[String]) -> Result<BundleSnapshot
         let data = fs::read(&path)?;
         let after = signature(&path)?;
         if before != after {
-            return Err(WriteError::Request(format!(
-                "file changed while it was being read: {relative}"
-            )));
+            return Err(WriteError::ChangedDuringRead { path: relative });
         }
         manifest.insert(relative.clone(), after);
         concepts.extend(snapshot_concept(&relative, &path, &data));
@@ -257,10 +263,10 @@ fn unique_suffix() -> String {
 /// `create_new` fails instead of reusing a file, so two writers staging the
 /// same document can never overwrite each other's staged bytes.
 fn stage_sibling(path: &Path, bytes: &[u8]) -> io::Result<PathBuf> {
-    let name = path
-        .file_name()
-        .map_or_else(Default::default, |name| name.to_string_lossy());
-    let staged = path.with_file_name(format!(".{name}.okf-write.{}.tmp", unique_suffix()));
+    let mut name = OsString::from(".");
+    name.push(path.file_name().unwrap_or_default());
+    name.push(format!(".okf-write.{}.tmp", unique_suffix()));
+    let staged = path.with_file_name(name);
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -403,13 +409,15 @@ fn new_errors(
         .collect()
 }
 
-/// How a staged-and-validated write ended.
+/// How a write the engine could attempt ended; failures to attempt it are
+/// `Err(WriteError)`.
 #[derive(Debug, PartialEq, Eq)]
 pub enum WriteOutcome {
     Written,
+    /// Refused: the candidate adds these normative diagnostics.
     Invalid(Vec<ValidationItem>),
+    /// Refused: these paths changed since the snapshot.
     Conflict(Vec<String>),
-    StagingFailed(String),
 }
 
 /// Take the bundle's exclusive write lock; it is released when the file drops.
@@ -437,12 +445,7 @@ pub fn stage_validate_write(
     let staging = StagingDir::new("okf-write-")?;
     let candidate_root = staging.0.join("bundle");
     fs::create_dir(&candidate_root)?;
-    if let Err(error) = build_candidate_tree(root, &candidate_root, candidates, exclude) {
-        let message = match error {
-            WriteError::Io(message) | WriteError::Request(message) => message,
-        };
-        return Ok(WriteOutcome::StagingFailed(message));
-    }
+    build_candidate_tree(root, &candidate_root, candidates, exclude)?;
     let invalid = new_errors(&error_keys(&candidate_root, exclude)?, baseline_errors);
     if !invalid.is_empty() {
         return Ok(WriteOutcome::Invalid(invalid));
@@ -492,64 +495,51 @@ pub struct EditRequest {
     pub write: bool,
 }
 
-/// The JSON shape `preview_concept_edit` / `write_concept_edit` have always returned.
-#[derive(Debug, Serialize, PartialEq, Eq)]
-pub struct EditResult {
+/// A concept's source and parsed digests.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Digests {
+    pub source: String,
+    pub parsed: String,
+}
+
+/// How an edit ended. Only `Previewed` and `Written` mean the new body is (or
+/// would be) the concept's; `Unchanged` means there was nothing to write.
+#[derive(Debug, PartialEq, Eq)]
+pub enum EditOutcome {
+    /// The body is already the requested one.
+    Unchanged,
+    /// The concept changed since the caller read `expected_source_digest`.
+    Stale,
+    /// Staged and validated, not committed (a preview).
+    Previewed,
+    Written,
+    /// Refused: the candidate adds these normative diagnostics.
+    Invalid(Vec<ValidationItem>),
+    /// Refused: these paths changed while the edit was being validated.
+    Conflict(Vec<String>),
+}
+
+/// The edited concept, its candidate's digests, and how the edit ended.
+#[derive(Debug, PartialEq, Eq)]
+pub struct EditReport {
     pub concept_id: String,
     pub path: String,
     pub source_digest: String,
-    pub candidate_source_digest: String,
-    pub candidate_parsed_digest: String,
-    pub changed: bool,
-    pub succeeded: bool,
-    pub written: bool,
-    pub validation: Vec<ValidationItem>,
-    pub conflict_paths: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-impl EditResult {
-    fn unchanged(concept: &ConceptSnapshot) -> Self {
-        Self {
-            concept_id: concept.concept_id.clone(),
-            path: concept.relative.clone(),
-            source_digest: concept.source_digest.clone(),
-            candidate_source_digest: concept.source_digest.clone(),
-            candidate_parsed_digest: concept.parsed_digest.clone(),
-            changed: false,
-            succeeded: true,
-            written: false,
-            validation: Vec::new(),
-            conflict_paths: Vec::new(),
-            error: None,
-        }
-    }
-
-    fn failed(self, error: &str) -> Self {
-        Self {
-            succeeded: false,
-            error: Some(error.to_owned()),
-            ..self
-        }
-    }
+    /// The digests the concept has after this edit (or would have, if refused).
+    /// For `Unchanged` and `Stale` they are the live concept's.
+    pub candidate: Digests,
+    pub outcome: EditOutcome,
 }
 
 /// Replace one concept's Markdown body, previewing or committing it.
-pub fn edit_concept(request: &EditRequest) -> Result<EditResult, WriteError> {
+pub fn edit_concept(request: &EditRequest) -> Result<EditReport, WriteError> {
     let root = request.path.canonicalize().map_err(|error| {
         WriteError::Request(format!(
             "bundle root is not readable: {}: {error}",
             request.path.display()
         ))
     })?;
-    let snapshot = snapshot_bundle(&root, &request.exclude).map_err(|error| match error {
-        WriteError::Request(message) => WriteError::Request(message.replace(
-            "file changed while it was being read",
-            "file changed while edit was reading it",
-        )),
-        other => other,
-    })?;
+    let snapshot = snapshot_bundle(&root, &request.exclude)?;
     let mut matches = snapshot
         .concepts
         .iter()
@@ -561,21 +551,24 @@ pub fn edit_concept(request: &EditRequest) -> Result<EditResult, WriteError> {
         )));
     };
 
-    let unchanged = EditResult::unchanged(concept);
+    let report = |candidate: Digests, outcome| EditReport {
+        concept_id: concept.concept_id.clone(),
+        path: concept.relative.clone(),
+        source_digest: concept.source_digest.clone(),
+        candidate,
+        outcome,
+    };
+    let live = Digests {
+        source: concept.source_digest.clone(),
+        parsed: concept.parsed_digest.clone(),
+    };
     if concept.source_digest != request.expected_source_digest {
-        return Ok(EditResult {
-            conflict_paths: vec![concept.relative.clone()],
-            ..unchanged.failed("concept source changed since it was read")
-        });
+        return Ok(report(live, EditOutcome::Stale));
     }
     let body = normalized_newlines(&request.body).into_owned();
     if body == concept.raw.body {
-        return Ok(unchanged);
+        return Ok(report(live, EditOutcome::Unchanged));
     }
-    let changed = EditResult {
-        changed: true,
-        ..unchanged
-    };
 
     let baseline_errors = error_keys(&root, &request.exclude)?;
     let candidates = BTreeMap::from([(
@@ -592,15 +585,10 @@ pub fn edit_concept(request: &EditRequest) -> Result<EditResult, WriteError> {
     let staging = StagingDir::new("okf-edit-")?;
     let candidate_root = staging.0.join("bundle");
     fs::create_dir(&candidate_root)?;
-    if let Err(error) = build_candidate_tree(&root, &candidate_root, &candidates, &request.exclude)
-    {
-        let message = match error {
-            WriteError::Io(message) | WriteError::Request(message) => message,
-        };
-        return Ok(changed.failed(&format!("could not stage the candidate bundle: {message}")));
-    }
+    build_candidate_tree(&root, &candidate_root, &candidates, &request.exclude)?;
     let staged =
         load_bundle(&candidate_root, &request.exclude, READ_CONCURRENCY).map_err(WriteError::Io)?;
+    drop(staging);
     let mut staged_matches = staged
         .concepts
         .iter()
@@ -611,55 +599,36 @@ pub fn edit_concept(request: &EditRequest) -> Result<EditResult, WriteError> {
             request.concept_id
         )));
     };
+    let candidate = Digests {
+        source: record.source_digest.clone(),
+        parsed: record.parsed_digest.clone(),
+    };
     let candidate_errors: BTreeSet<DiagnosticKey> = staged
         .diagnostics
         .iter()
         .filter(|item| item.severity == "error")
         .map(|item| (item.code.clone(), item.path.clone(), item.message.clone()))
         .collect();
-    let previewed = EditResult {
-        candidate_source_digest: record.source_digest.clone(),
-        candidate_parsed_digest: record.parsed_digest.clone(),
-        ..changed
-    };
-    drop(staging);
 
     let invalid = new_errors(&candidate_errors, &baseline_errors);
     if !invalid.is_empty() {
-        return Ok(EditResult {
-            validation: invalid,
-            ..previewed.failed("candidate bundle introduces new normative diagnostics")
-        });
+        return Ok(report(candidate, EditOutcome::Invalid(invalid)));
     }
     if !request.write {
-        return Ok(previewed);
+        return Ok(report(candidate, EditOutcome::Previewed));
     }
-
-    Ok(
-        match stage_validate_write(
-            &root,
-            &request.exclude,
-            &candidates,
-            &baseline_errors,
-            &snapshot.manifest,
-        )? {
-            WriteOutcome::Written => EditResult {
-                written: true,
-                ..previewed
-            },
-            WriteOutcome::Invalid(validation) => EditResult {
-                validation,
-                ..previewed.failed("candidate bundle introduces new normative diagnostics")
-            },
-            WriteOutcome::Conflict(conflict_paths) => EditResult {
-                conflict_paths,
-                ..previewed.failed("the bundle changed since edit validated it")
-            },
-            WriteOutcome::StagingFailed(message) => {
-                previewed.failed(&format!("could not stage the candidate bundle: {message}"))
-            }
-        },
-    )
+    let outcome = match stage_validate_write(
+        &root,
+        &request.exclude,
+        &candidates,
+        &baseline_errors,
+        &snapshot.manifest,
+    )? {
+        WriteOutcome::Written => EditOutcome::Written,
+        WriteOutcome::Invalid(items) => EditOutcome::Invalid(items),
+        WriteOutcome::Conflict(paths) => EditOutcome::Conflict(paths),
+    };
+    Ok(report(candidate, outcome))
 }
 
 #[cfg(test)]
@@ -710,8 +679,8 @@ mod tests {
         let dir = bundle(&[("a.md", "---\ntype: Note\n---\n# A\n")]);
         let expected = digest(&dir.0, "a");
         let result = edit_concept(&request(&dir.0, "# B\n", expected.clone(), false)).unwrap();
-        assert!(result.changed && result.succeeded && !result.written);
-        assert_ne!(result.candidate_source_digest, expected);
+        assert_eq!(result.outcome, EditOutcome::Previewed);
+        assert_ne!(result.candidate.source, expected);
         assert_eq!(
             fs::read_to_string(dir.0.join("a.md")).unwrap(),
             "---\ntype: Note\n---\n# A\n"
@@ -723,7 +692,7 @@ mod tests {
         let dir = bundle(&[("a.md", "---\ntype:   Note  # kept\n---\n# A\n")]);
         let expected = digest(&dir.0, "a");
         let result = edit_concept(&request(&dir.0, "# B\n", expected, true)).unwrap();
-        assert!(result.written, "{result:?}");
+        assert_eq!(result.outcome, EditOutcome::Written, "{result:?}");
         assert_eq!(
             fs::read_to_string(dir.0.join("a.md")).unwrap(),
             "---\ntype:   Note  # kept\n---\n# B\n"
@@ -734,8 +703,8 @@ mod tests {
     fn stale_digest_fails_closed() {
         let dir = bundle(&[("a.md", "---\ntype: Note\n---\n# A\n")]);
         let result = edit_concept(&request(&dir.0, "# B\n", "stale".into(), true)).unwrap();
-        assert!(!result.succeeded);
-        assert_eq!(result.conflict_paths, ["a.md"]);
+        assert_eq!(result.outcome, EditOutcome::Stale);
+        assert_eq!(result.path, "a.md");
         assert_eq!(
             fs::read_to_string(dir.0.join("a.md")).unwrap(),
             "---\ntype: Note\n---\n# A\n"

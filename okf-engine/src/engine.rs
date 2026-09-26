@@ -78,8 +78,8 @@ struct Loaded {
     relative: String,
     content: Result<String, String>,
 }
-pub(crate) struct Parsed {
-    pub(crate) record: ConceptRecord,
+struct Parsed {
+    record: ConceptRecord,
     facts: Facts,
     /// YAML tags the frontmatter used that JSON cannot carry (OKF102).
     lossy_tags: Vec<String>,
@@ -234,7 +234,47 @@ pub(crate) fn normalized_newlines(text: &str) -> Cow<'_, str> {
         Cow::Borrowed(text)
     }
 }
-pub(crate) fn parse_concept(path: String, text: String) -> Result<Parsed, String> {
+/// A concept's identity and digests: what a writer needs to plan against it.
+pub(crate) struct Identity {
+    pub(crate) concept_id: String,
+    pub(crate) source_digest: String,
+    pub(crate) parsed_digest: String,
+}
+
+/// The digests of `text`, whose normalized source split into `mapping` and `body`.
+fn digests(text: &str, mapping: &Map<String, Value>, body: &str) -> (String, String) {
+    (
+        hash("sha256:", text),
+        hash(
+            "okf-parsed-v1-jcs-sha256:",
+            &canonical_parsed(mapping, body),
+        ),
+    )
+}
+
+/// Identify a concept from its already-split source, or `None` if it is not
+/// one (invalid frontmatter or no `type`). Parses the frontmatter once and
+/// allocates only the identity it returns.
+pub(crate) fn concept_identity(
+    path: &str,
+    text: &str,
+    frontmatter: &str,
+    body: &str,
+) -> Option<Identity> {
+    let mapping = parse_frontmatter(frontmatter).ok()?.mapping;
+    let kind = mapping.get("type").and_then(Value::as_str);
+    if kind.is_none_or(|kind| kind.trim().is_empty()) {
+        return None;
+    }
+    let (source_digest, parsed_digest) = digests(text, &mapping, body);
+    Some(Identity {
+        concept_id: id(path),
+        source_digest,
+        parsed_digest,
+    })
+}
+
+fn parse_concept(path: String, text: String) -> Result<Parsed, String> {
     let normalized = normalized_newlines(&text);
     let (s, b) = split_source(normalized.as_ref())
         .ok_or("concept must start with YAML frontmatter delimited by ---")?;
@@ -246,6 +286,7 @@ pub(crate) fn parse_concept(path: String, text: String) -> Result<Parsed, String
     let kind = field(&map, "type")
         .map(|v| v.trim().into())
         .unwrap_or_default();
+    let (source_digest, parsed_digest) = digests(&text, &map, b);
     Ok(Parsed {
         lossy_tags,
         facts: markdown_facts(b),
@@ -256,8 +297,8 @@ pub(crate) fn parse_concept(path: String, text: String) -> Result<Parsed, String
             concept_type: kind,
             title: field(&map, "title"),
             description: field(&map, "description"),
-            source_digest: hash("sha256:", &text),
-            parsed_digest: hash("okf-parsed-v1-jcs-sha256:", &canonical_parsed(&map, b)),
+            source_digest,
+            parsed_digest,
             frontmatter_json: sorted_json(&map),
             body: b.into(),
         },
