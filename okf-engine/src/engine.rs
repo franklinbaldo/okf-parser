@@ -1002,6 +1002,25 @@ mod tests {
     }
 
     #[test]
+    fn markdown_suffix_is_byte_safe_on_unicode_names() {
+        // The suffix is compared on bytes, so a multibyte tail cannot land
+        // a slice inside a code point.
+        for (name, expected) in [
+            ("éé", false),
+            ("é", false),
+            ("日本", false),
+            ("ü.MD", true),
+            ("知識.md", true),
+            ("a.mdé", false),
+            ("md", false),
+            ("", false),
+        ] {
+            assert_eq!(md_suffix(name), expected, "{name:?}");
+        }
+        assert!(md_target("notas/é.md#seção"));
+    }
+
+    #[test]
     fn a_path_outside_the_root_is_refused() {
         let root = Path::new("/b");
         for outside in [Path::new("/elsewhere/y.md"), Path::new("relative/y.md")] {
