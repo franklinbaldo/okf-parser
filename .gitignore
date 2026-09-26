@@ -14,3 +14,7 @@ release/
 
 # JavaScript dependencies
 node_modules/
+
+# Disposable OKF runtime views in this repository's own bundle
+/index.md
+/log.md

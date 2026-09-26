@@ -23,6 +23,7 @@ from okf_parser.service import (
     import_bundle,
     init_bundle,
     inventory_bundle,
+    materialize_views,
     schema_bundle,
     write_format,
 )
@@ -149,6 +150,25 @@ def inventory(
 def graph(path: str, *, exclude: RepeatableStrings = None) -> CliResult[JsonPayload]:
     """Summarize the resolved concept graph with NetworkX."""
     return CliResult(graph_bundle(path, exclude or ()))
+
+
+@app.command(name="materialize")
+def materialize_command(
+    path: str,
+    *,
+    write: bool = False,
+    update_gitignore: bool = True,
+    exclude: RepeatableStrings = None,
+) -> CliResult[JsonPayload]:
+    """Generate disposable index.md/log.md views from authored OKF state."""
+    return CliResult(
+        materialize_views(
+            path,
+            exclude or (),
+            write=write,
+            update_gitignore=update_gitignore,
+        )
+    )
 
 
 @app.command
