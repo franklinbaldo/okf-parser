@@ -1,9 +1,13 @@
 mod engine;
+mod mcp;
+mod python;
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
 use std::io::{self, Read};
 use std::path::PathBuf;
 use std::process::{Command as ProcessCommand, ExitStatus};
+
+use mcp::Transport;
 #[derive(Parser)]
 #[command(name = "okf-parser", version = env!("CARGO_PKG_VERSION"), about = "Native OKF engine")]
 struct Cli {
@@ -21,6 +25,22 @@ enum Command {
         exclude: Vec<String>,
         #[arg(long, default_value_t = 32)]
         read_concurrency: usize,
+    },
+    /// Serve effect-aware MCP tools, exposing explicit commit tools only on opt-in.
+    Serve {
+        #[arg(long, value_enum, default_value_t = Transport::Stdio)]
+        transport: Transport,
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        #[arg(long, default_value_t = 8000)]
+        port: u16,
+        /// Accept this HTTP `Host` header (repeatable), e.g. the public hostname
+        /// behind a proxy. Loopback names are always accepted.
+        #[arg(long = "allowed-host")]
+        allowed_host: Vec<String>,
+        /// Also register the tools that commit changes to the bundle.
+        #[arg(long)]
+        allow_write: bool,
     },
 }
 #[derive(Deserialize)]
@@ -51,46 +71,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 &engine::load_bundle(&root, &exclude, read_concurrency)?,
             )?;
         }
+        Command::Serve {
+            transport,
+            host,
+            port,
+            allowed_host,
+            allow_write,
+        } => mcp::serve(transport, &host, port, &allowed_host, allow_write)?,
     }
     Ok(())
 }
 
-// The environment's interpreter, searched from the executable's own location.
-// A sibling interpreter covers the ordinary layout, where installers place
-// this executable in the environment's own scripts directory. Walking the
-// remaining ancestors covers layouts that place it deeper, which packaging
-// tools do when they relocate a binary; it costs nothing when the sibling
-// is already there.
-fn find_python(executable: &std::path::Path) -> Option<std::ffi::OsString> {
-    let candidates: &[&[&str]] = if cfg!(windows) {
-        &[&["python.exe"], &["Scripts", "python.exe"]]
-    } else {
-        &[&["python"], &["bin", "python"], &["bin", "python3"]]
-    };
-    for dir in executable.ancestors().skip(1) {
-        for parts in candidates {
-            let mut candidate = dir.to_path_buf();
-            for part in *parts {
-                candidate.push(part);
-            }
-            if candidate.is_file() {
-                return Some(candidate.into_os_string());
-            }
-        }
-    }
-    None
-}
-
 fn python_cli() -> Result<ExitStatus, Box<dyn std::error::Error>> {
-    let executable = std::env::current_exe()?;
-    let python = find_python(&executable).unwrap_or_else(|| {
-        if cfg!(windows) {
-            "python".into()
-        } else {
-            "python3".into()
-        }
-    });
-    Ok(ProcessCommand::new(python)
+    Ok(ProcessCommand::new(python::interpreter()?)
         .arg("-m")
         .arg("okf_parser.cli")
         .args(std::env::args_os().skip(1))
@@ -100,7 +93,7 @@ fn python_cli() -> Result<ExitStatus, Box<dyn std::error::Error>> {
 fn main() {
     let internal = matches!(
         std::env::args().nth(1).as_deref(),
-        Some("__engine-facts" | "__engine-load")
+        Some("__engine-facts" | "__engine-load" | "serve")
     );
     if internal {
         if let Err(error) = run() {

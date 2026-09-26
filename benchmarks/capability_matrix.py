@@ -232,7 +232,7 @@ def answer_with_okf_parser(root: Path) -> dict[str, Any]:
     bundle = load_bundle(root)
     concepts = bundle.concepts.execute()
     links = bundle.links.execute()
-    graph = bundle.to_networkx()
+    graph = bundle.graph().to_networkx()
 
     types = sorted({str(value) for value in concepts["concept_type"]})
     specified = {concept_type.lower() for concept_type in SPEC_TYPES}

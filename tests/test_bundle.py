@@ -90,7 +90,7 @@ def test_networkx_graph_uses_the_same_relations(tmp_path: Path) -> None:
     _write(tmp_path / "a.md", "---\ntype: Node\n---\n[B](b.md)\n")
     _write(tmp_path / "b.md", "---\ntype: Node\n---\n")
 
-    graph = load_bundle(tmp_path).to_networkx()
+    graph = load_bundle(tmp_path).graph().to_networkx()
 
     assert set(graph.nodes) == {"a", "b"}
     assert {(source, target) for source, target, _key in graph.edges} == {("a", "b")}
@@ -113,7 +113,7 @@ def test_link_to_reserved_index_does_not_create_nan_graph_node(tmp_path: Path) -
     _write(tmp_path / "index.md", "# Bundle\n")
     _write(tmp_path / "a.md", "---\ntype: Node\n---\n[Index](index.md)\n")
 
-    graph = load_bundle(tmp_path).to_networkx()
+    graph = load_bundle(tmp_path).graph().to_networkx()
 
     assert set(graph.nodes) == {"a"}
 
@@ -264,7 +264,7 @@ def test_graph_has_no_phantom_nodes_for_unparseable_targets(tmp_path: Path) -> N
     _write(tmp_path / "a.md", "---\ntype: Node\n---\n[B](b.md)\n")
     _write(tmp_path / "b.md", "no frontmatter\n")
 
-    graph = load_bundle(tmp_path).to_networkx()
+    graph = load_bundle(tmp_path).graph().to_networkx()
 
     assert set(graph.nodes) == {"a"}
     assert all("type" in attributes for _node, attributes in graph.nodes(data=True))
@@ -273,6 +273,6 @@ def test_graph_has_no_phantom_nodes_for_unparseable_targets(tmp_path: Path) -> N
 def test_graph_node_without_a_title_uses_none_not_nan(tmp_path: Path) -> None:
     _write(tmp_path / "a.md", "---\ntype: Node\n---\n# A\n")
 
-    graph = load_bundle(tmp_path).to_networkx()
+    graph = load_bundle(tmp_path).graph().to_networkx()
 
     assert graph.nodes["a"]["title"] is None

@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import json
 import re
+import warnings
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, TypedDict, cast
 
 import ibis
-import networkx as nx
 
 from okf_parser.discovery import discover_markdown
 from okf_parser.exclusion import ExclusionRules
+from okf_parser.graph import BundleGraph, GraphEdge, GraphNode
 from okf_parser.models import (
     ConceptRecord,
     LinkRecord,
@@ -42,6 +43,7 @@ from okf_parser.typed_relations import TypedRelations, compile_bundle_types
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
 
+    import networkx as nx
     from ibis.expr.types import Table
 
 _CONCEPT_SCHEMA = ibis.schema(
@@ -113,7 +115,7 @@ def _optional_text(value: object) -> str | None:
     """Normalize an Ibis/pandas cell into a string or ``None``.
 
     A null string column round-trips through pandas as float ``nan``, which
-    must not leak into NetworkX node attributes.
+    must not leak into graph node attributes.
     """
     return value if isinstance(value, str) else None
 
@@ -153,28 +155,37 @@ class Bundle:
         """Whether the bundle has no normative errors."""
         return not any(item.severity is Severity.ERROR for item in self.diagnostics)
 
-    def to_networkx(self) -> nx.MultiDiGraph:
-        """Project concepts and resolved Markdown links into a directed graph."""
-        graph = nx.MultiDiGraph(bundle_root=str(self.root))
-        for row in self.concepts.execute().to_dict(orient="records"):
-            graph.add_node(
-                row["concept_id"],
+    def graph(self) -> BundleGraph:
+        """Project concepts and resolved Markdown links into a directed multigraph."""
+        nodes = (
+            GraphNode(
+                concept_id=row["concept_id"],
                 path=row["path"],
                 type=row["concept_type"],
                 title=_optional_text(row["title"]),
             )
-        for row in self.links.execute().to_dict(orient="records"):
-            target_id = row["target_id"]
-            # A target that exists on disk but never became a concept - because
-            # it failed to parse - must not appear as an attribute-less node.
-            if isinstance(target_id, str) and graph.has_node(target_id):
-                graph.add_edge(
-                    row["source_id"],
-                    target_id,
-                    raw_target=row["raw_target"],
-                    origin=row["origin"],
-                )
-        return graph
+            for row in self.concepts.execute().to_dict(orient="records")
+        )
+        links = (
+            GraphEdge(
+                source_id=row["source_id"],
+                target_id=row["target_id"],
+                raw_target=row["raw_target"],
+                origin=row["origin"],
+            )
+            for row in self.links.execute().to_dict(orient="records")
+            if isinstance(row["target_id"], str)
+        )
+        return BundleGraph.from_records(self.root, nodes, links)
+
+    def to_networkx(self) -> nx.MultiDiGraph:
+        """Deprecated alias of ``bundle.graph().to_networkx()``."""
+        warnings.warn(
+            "Bundle.to_networkx() is deprecated; use bundle.graph().to_networkx()",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.graph().to_networkx()
 
 
 def _load_concept(

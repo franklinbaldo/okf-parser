@@ -8,8 +8,8 @@ description: Every CLI command and MCP tool exposed by okf-parser, with flags an
 
 `okf-parser` exposes its command-line interface through Cyclopts
 (`uv run okf-parser <command>`). Inspection operations are also exposed through
-FastMCP (`okf-parser serve`) and share the same service
-functions and payloads where both surfaces exist.
+MCP (`okf-parser serve`, served natively by the Rust binary) and share the same
+service functions and payloads where both surfaces exist.
 
 The default MCP profile is commit-disabled and exposes inspection plus faithful
 preview tools. `okf-parser serve --allow-write` adds explicit commit tools; the
@@ -76,7 +76,7 @@ Exits `1` when the import plan contains duplicate ids or conflicting existing
 identities. Other invalid inputs are reported as command errors.
 
 MCP tools: `import_preview`; `import_write` with `--allow-write`. Both expose the
-same optional `on_conflict` policy through FastMCP.
+same optional `on_conflict` policy through MCP.
 
 ## `init`
 
@@ -275,11 +275,26 @@ MCP tool: `duckdb_export` with `--allow-write`; it also accepts `spec_template`.
 ## `serve`
 
 ```bash
-uv run okf-parser serve [--transport stdio|http|sse] [--host HOST] [--port PORT] [--allow-write]
+uv run okf-parser serve [--transport stdio|http] [--host HOST] [--port PORT] [--allowed-host NAME ...] [--allow-write]
 ```
 
-Runs the MCP server. `stdio` is the default;
-`http` and `sse` bind `--host` and `--port` for network transports. The default
+Runs the MCP server, built into the native binary on `rmcp`. `stdio` is the
+default; `http` serves Streamable HTTP at `http://HOST:PORT/mcp`.
+
+`--host` is the bind address; the HTTP `Host` header is validated separately,
+as DNS-rebinding protection. Loopback names and a concrete bind address are
+accepted; behind a proxy or on a public hostname, name it with
+`--allowed-host` (repeatable), e.g.
+`serve --transport http --host 0.0.0.0 --allowed-host mcp.example.com`.
+
+Tool arguments are validated at the server: an unknown key is a tool error,
+and defaulted flags keep concrete, non-nullable schemas (`digests` defaults to
+`false`, `database` to `okf.duckdb`). The legacy
+`sse` transport is gone: the MCP specification deprecated it in favor of
+Streamable HTTP. `graph` is answered natively; every other tool is delegated to
+`python -m okf_parser.mcp_bridge`, which runs the CLI's own service function.
+The interpreter is the one installed next to the binary; set `OKF_PYTHON` to
+point a binary outside any Python environment at one. The default
 profile exposes `check`, `inventory`, `graph`, `schema`, `format_check`,
 `apply_preview`, `init_preview`, and `import_preview`. `--allow-write` additionally
 exposes `format_write`, `apply_write`, `init_write`, `import_write`, and

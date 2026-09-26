@@ -210,7 +210,7 @@ Add the repository as a CI check:
 ```yaml
 steps:
   - uses: actions/checkout@v7
-  - uses: franklinbaldo/okf-parser@v0.45.11
+  - uses: franklinbaldo/okf-parser@v0.46.0
     with:
       path: knowledge
 ```
@@ -250,11 +250,31 @@ the target branch before allowing merge.
 ## MCP
 
 ```bash
-uv run okf-parser serve
-uv run fastmcp run
+uv run okf-parser serve                      # stdio
+uv run okf-parser serve --transport http     # Streamable HTTP on 127.0.0.1:8000/mcp
+uv run okf-parser serve --transport http --host 0.0.0.0 --allowed-host mcp.example.com
+uv run okf-parser serve --allow-write        # also register the commit tools
 ```
 
-Read-only tools: `check`, `inventory`, `graph`, and `format_check`.
+The server is part of the native `okf-parser` binary, built on
+[`rmcp`](https://crates.io/crates/rmcp); no Python MCP framework is installed.
+`graph` is answered natively; the remaining tools run the same Python service
+functions as the CLI (see [RFC 0024](rfcs/0024-rust-native-core.md)).
+
+Read-only tools: `check`, `inventory`, `graph`, `format_check`, `init_preview`,
+and `import_preview`.
+
+## Graph
+
+```python
+graph = bundle.graph()
+graph.summary()       # nodes, edges, weak/strong components, directed_acyclic
+graph.nodes, graph.edges
+graph.to_networkx()   # needs `pip install 'okf-parser[networkx]'`
+```
+
+NetworkX is optional. `Bundle.to_networkx()` still works but is deprecated in
+favor of `bundle.graph().to_networkx()`.
 
 ## DuckDB
 
@@ -292,7 +312,7 @@ from okf_parser import load_bundle, validate_path
 bundle = load_bundle(Path("knowledge"))
 print(bundle.concepts.execute())
 print(bundle.links.execute())
-print(bundle.to_networkx())
+print(bundle.graph().summary())
 print(bundle.validate())
 
 report = validate_path(Path("knowledge"))

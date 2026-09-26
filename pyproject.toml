@@ -1,6 +1,6 @@
 [project]
 name = "okf-parser"
-version = "0.45.11"
+version = "0.46.0"
 description = "Relational inspection and validation for Open Knowledge Format bundles"
 # Derived from README.md by scripts/pypi_readme.py. README.md is an OKF concept
 # and must open with frontmatter, which PyPI would otherwise render as a heading
@@ -33,7 +33,6 @@ classifiers = [
 dependencies = [
   "cyclopts>=4.22,<5",
   "duckdb>=1.4,<2",
-  "fastmcp>=4.0.5,<5",
   "ibis-framework[duckdb]>=12,<13",
   "markdown-it-py>=4,<5",
   # okf_parser.markdown_style overrides mdformat's ordered-list renderer, which
@@ -42,7 +41,6 @@ dependencies = [
   "mdformat>=1,<1.1",
   "mdformat-frontmatter>=2,<3",
   "mdformat-gfm>=1,<2",
-  "networkx>=3.4,<4",
   "pyarrow>=18,<26",
   "pydantic>=2.12,<3",
   "pyyaml>=6,<7",
@@ -58,6 +56,7 @@ Documentation = "https://github.com/franklinbaldo/okf-parser/blob/main/docs/arch
 
 [project.optional-dependencies]
 graphql = ["graphql-core>=3.2,<4"]
+networkx = ["networkx>=3.4,<4"]
 
 [project.entry-points."okf_parser.packs"]
 journalism = "okf_parser.type_packs:journalism_pack"
@@ -66,6 +65,7 @@ journalism = "okf_parser.type_packs:journalism_pack"
 dev = [
   "graphql-core>=3.2,<4",
   "jsonschema>=4.26,<5",
+  "networkx>=3.4,<4",
   "pytest>=8,<10",
   "pytest-cov>=6,<7",
   "ruff>=0.15,<0.16",
@@ -108,6 +108,7 @@ runtime-evaluated-base-classes = ["pydantic.BaseModel"]
 "src/okf_parser/graphql_adapter.py" = ["PLR0913"]
 "src/okf_parser/typed_tables.py" = ["S608"]
 "src/okf_parser/cli.py" = ["A002", "PLR0913", "T201"]
+"src/okf_parser/mcp_bridge.py" = ["A002", "PLR0913"]
 "src/okf_parser/schema_export.py" = ["PLR0913"]
 "src/okf_parser/service.py" = ["PLR0913"]
 "tests/*" = ["D103", "PLR2004", "S101"]
