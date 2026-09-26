@@ -133,9 +133,7 @@ def test_failed_write_never_leaves_a_truncated_document(
         )
 
 
-def test_write_always_uses_lf_line_endings(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_write_always_uses_lf_line_endings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     r"""`import` must not let `Path.write_text` translate `\n` to `os.linesep` (#259)."""
     csv = tmp_path / "source.csv"
     _write_csv(csv)
