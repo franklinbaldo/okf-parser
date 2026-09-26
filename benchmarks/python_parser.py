@@ -140,17 +140,12 @@ def _measure(
             concurrent_read_ns[str(concurrency)] = elapsed // len(paths)
         load_ns = _median_ns(lambda: load_bundle(root), rounds)
         if rust_core is not None:
-            native_bundle = load_bundle(root)
-            rust_bundle = load_bundle(root, rust_core=rust_core)
-            for field in ("concepts", "reserved", "links"):
-                native_rows = getattr(native_bundle, field).execute().to_dict(orient="records")
-                rust_rows = getattr(rust_bundle, field).execute().to_dict(orient="records")
-                if native_rows != rust_rows:
-                    msg = f"native and Rust bundle {field} differ"
+            installed_bundle = load_bundle(root)
+            pinned_bundle = load_bundle(root, rust_core=rust_core)
+            for field in ("concepts", "reserved", "links", "diagnostics"):
+                if getattr(installed_bundle, field) != getattr(pinned_bundle, field):
+                    msg = f"installed and pinned binaries disagree on bundle {field}"
                     raise RuntimeError(msg)
-            if native_bundle.diagnostics != rust_bundle.diagnostics:
-                msg = "native and Rust bundle diagnostics differ"
-                raise RuntimeError(msg)
         rust_load_ns = (
             _median_ns(lambda: load_bundle(root, rust_core=rust_core), rounds)
             if rust_core is not None

@@ -22,11 +22,11 @@ def test_rename_is_removal_plus_addition_not_a_tracked_move(tmp_path: Path) -> N
     old_path = tmp_path / "notes/a.md"
     _write(old_path, "---\ntype: note\ntitle: Original\n---\nBody.\n")
 
-    before = load_bundle(tmp_path, engine="native")
+    before = load_bundle(tmp_path)
     original = concept(before, "notes/a")
 
     old_path.rename(tmp_path / "notes/b.md")
-    after = load_bundle(tmp_path, engine="native")
+    after = load_bundle(tmp_path)
 
     with pytest.raises(KeyError, match="not found"):
         concept(after, "notes/a")
@@ -45,11 +45,11 @@ def test_rename_preserves_parsed_digest_as_advisory_continuity_evidence(
     text = "---\ntype: note\ntitle: Original\n---\nBody.\n"
     _write(old_path, text)
 
-    before = load_bundle(tmp_path, engine="native")
+    before = load_bundle(tmp_path)
     original = concept(before, "notes/a")
 
     old_path.rename(tmp_path / "notes/b.md")
-    after = load_bundle(tmp_path, engine="native")
+    after = load_bundle(tmp_path)
     moved = concept(after, "notes/b")
 
     # Same content, unrelated ids: a caller may compute this as evidence of a
@@ -70,12 +70,12 @@ def test_rename_does_not_migrate_a_stale_frontmatter_reference(tmp_path: Path) -
         "---\ntype: article-ready\nsources:\n  - resource: notes/source.md\n---\nBody.\n",
     )
 
-    bundle = load_bundle(tmp_path, engine="native")
+    bundle = load_bundle(tmp_path)
     resolved = resolve_relations(bundle, "notes/ready.md", field="sources")
     assert [item.concept_id for item in resolved] == ["notes/source"]
 
     (tmp_path / "notes/source.md").rename(tmp_path / "notes/moved-source.md")
-    moved_bundle = load_bundle(tmp_path, engine="native")
+    moved_bundle = load_bundle(tmp_path)
 
     with pytest.raises(KeyError, match="not found"):
         resolve_relations(moved_bundle, "notes/ready.md", field="sources")
@@ -90,12 +90,12 @@ def test_content_edited_and_moved_together_diverges_the_digest(tmp_path: Path) -
     old_path = tmp_path / "notes/a.md"
     _write(old_path, "---\ntype: note\ntitle: Original\n---\nBody.\n")
 
-    before = load_bundle(tmp_path, engine="native")
+    before = load_bundle(tmp_path)
     original = concept(before, "notes/a")
 
     old_path.rename(tmp_path / "notes/b.md")
     _write(tmp_path / "notes/b.md", "---\ntype: note\ntitle: Original\n---\nEdited body.\n")
-    after = load_bundle(tmp_path, engine="native")
+    after = load_bundle(tmp_path)
     moved = concept(after, "notes/b")
 
     assert moved.parsed_digest != original.parsed_digest

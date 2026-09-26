@@ -1,28 +1,20 @@
-"""Cross-language contract tests for the optional end-to-end Rust engine."""
+"""Contract tests for a pinned native binary (``OKF_CORE``), e.g. a release build."""
 
 from __future__ import annotations
 
 import json
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
 
 from okf_parser.bundle import load_bundle
 
-if TYPE_CHECKING:
-    from ibis.expr.types import Table
-
 _EXECUTABLE = os.environ.get("OKF_CORE")
 pytestmark = pytest.mark.skipif(_EXECUTABLE is None, reason="OKF_CORE is not set")
 
 
-def _rows(table: Table) -> list[dict[str, object]]:
-    return table.execute().to_dict(orient="records")  # type: ignore[no-any-return]
-
-
-def test_native_engine_matches_python_and_digest_vectors(tmp_path: Path) -> None:
+def test_pinned_binary_matches_the_installed_one_and_digest_vectors(tmp_path: Path) -> None:
     vectors = json.loads(Path("conformance/content-digests.json").read_text())["cases"]
     for index, case in enumerate(vectors):
         (tmp_path / f"case-{index}.md").write_text(case["source"], newline="")
@@ -32,14 +24,14 @@ def test_native_engine_matches_python_and_digest_vectors(tmp_path: Path) -> None
     )
     (tmp_path / "index.md").write_text("# Bundle\n")
 
-    python = load_bundle(tmp_path)
-    native = load_bundle(tmp_path, rust_core=Path(_EXECUTABLE or ""))
+    installed = load_bundle(tmp_path)
+    pinned = load_bundle(tmp_path, rust_core=Path(_EXECUTABLE or ""))
 
-    assert _rows(native.concepts) == _rows(python.concepts)
-    assert _rows(native.reserved) == _rows(python.reserved)
-    assert _rows(native.links) == _rows(python.links)
-    assert native.validate() == python.validate()
-    by_path = {row["path"]: row for row in _rows(native.concepts)}
+    assert pinned.concepts == installed.concepts
+    assert pinned.reserved == installed.reserved
+    assert pinned.links == installed.links
+    assert pinned.validate() == installed.validate()
+    by_path = {concept.path: concept for concept in pinned.concepts}
     for index, case in enumerate(vectors):
-        assert by_path[f"case-{index}.md"]["source_digest"] == case["source_digest"]
-        assert by_path[f"case-{index}.md"]["parsed_digest"] == case["parsed_digest"]
+        assert by_path[f"case-{index}.md"].source_digest == case["source_digest"]
+        assert by_path[f"case-{index}.md"].parsed_digest == case["parsed_digest"]

@@ -69,7 +69,7 @@ def documents_by_type(
     """Every concept's raw frontmatter, grouped by its authored `type`."""
     bundle = load_bundle(Path(path), exclude)
     by_type: dict[str, list[dict[str, object]]] = {}
-    for row in bundle.concepts.execute().to_dict(orient="records"):
+    for row in [concept.model_dump() for concept in bundle.concepts]:
         concept_type = str(row.get("concept_type") or "concept")
         frontmatter_raw = row.get("frontmatter_json")
         if not isinstance(frontmatter_raw, str):

@@ -14,7 +14,6 @@ from okf_parser.parser import (
     looks_like_frontmatter_link,
     markdown_facts,
     parse_document,
-    resolve_local_target,
 )
 
 if TYPE_CHECKING:
@@ -197,9 +196,8 @@ def test_frontmatter_json_preserves_scalar_strings(tmp_path: Path) -> None:
     )
 
 
-def test_malformed_url_target_does_not_raise(tmp_path: Path) -> None:
+def test_malformed_url_target_does_not_raise() -> None:
     assert has_markdown_suffix("http://[oops/x.md") is False
-    assert resolve_local_target(tmp_path, tmp_path / "a.md", "http://[oops/x.md") is None
 
 
 def test_frontmatter_link_inference_ignores_prose() -> None:

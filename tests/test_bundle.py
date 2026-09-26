@@ -27,9 +27,9 @@ def test_loads_concepts_reserved_documents_and_links(tmp_path: Path) -> None:
     bundle = load_bundle(tmp_path)
 
     assert bundle.is_conformant
-    assert bundle.concepts.count().execute() == 2
-    assert bundle.reserved.count().execute() == 1
-    link = bundle.links.execute().to_dict(orient="records")[0]
+    assert len(bundle.concepts) == 2
+    assert len(bundle.reserved) == 1
+    link = bundle.links[0].model_dump()
     assert link["source_id"] == "people/alice"
     assert link["target_id"] == "people/bob"
     assert link["exists"]
@@ -70,7 +70,7 @@ def test_repeated_targets_preserve_each_authored_link(tmp_path: Path) -> None:
     _write(tmp_path / "a.md", "---\ntype: Node\n---\n[B](b.md) and [B again](b.md)\n")
     _write(tmp_path / "b.md", "---\ntype: Node\n---\n")
 
-    links = load_bundle(tmp_path).links.execute().to_dict(orient="records")
+    links = [record.model_dump() for record in load_bundle(tmp_path).links]
 
     assert [link["target_id"] for link in links] == ["b", "b"]
 
@@ -83,7 +83,7 @@ def test_link_cannot_escape_bundle(tmp_path: Path) -> None:
 
     bundle = load_bundle(tmp_path)
 
-    assert bundle.links.count().execute() == 0
+    assert len(bundle.links) == 0
 
 
 def test_networkx_graph_uses_the_same_relations(tmp_path: Path) -> None:
@@ -105,7 +105,7 @@ def test_frontmatter_markdown_paths_remain_metadata_not_relations(tmp_path: Path
 
     bundle = load_bundle(tmp_path)
 
-    assert bundle.links.count().execute() == 0
+    assert len(bundle.links) == 0
     assert bundle.validate() == []
 
 
@@ -169,11 +169,11 @@ def test_logical_keys_do_not_depend_on_checkout_path(tmp_path: Path) -> None:
     _write(first / "nested" / "concept.md", "---\ntype: Reference\n---\n# Concept\n")
     shutil.copytree(first, second)
 
-    first_keys = load_bundle(first).concepts.select("logical_key").execute()
-    second_keys = load_bundle(second).concepts.select("logical_key").execute()
+    first_keys = [concept.logical_key for concept in load_bundle(first).concepts]
+    second_keys = [concept.logical_key for concept in load_bundle(second).concepts]
 
-    assert first_keys.to_dict(orient="records") == [{"logical_key": "nested/concept"}]
-    assert second_keys.to_dict(orient="records") == first_keys.to_dict(orient="records")
+    assert first_keys == ["nested/concept"]
+    assert second_keys == first_keys
 
 
 def test_one_unparseable_concept_does_not_abort_the_run(tmp_path: Path) -> None:
@@ -205,7 +205,7 @@ def test_prose_ending_in_md_is_not_a_link(tmp_path: Path) -> None:
 
     bundle = load_bundle(tmp_path)
 
-    assert bundle.links.count().execute() == 0
+    assert len(bundle.links) == 0
     assert bundle.validate() == []
 
 
@@ -255,7 +255,7 @@ def test_uppercase_markdown_extension_is_discovered_and_resolvable(tmp_path: Pat
     assert report.markdown_count == 2
     assert report.concept_count == 2
     assert report.is_conformant
-    [link] = bundle.links.execute().to_dict(orient="records")
+    [link] = [record.model_dump() for record in bundle.links]
     assert link["target_id"] == "B"
     assert link["exists"]
 

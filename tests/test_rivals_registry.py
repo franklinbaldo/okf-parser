@@ -46,8 +46,7 @@ def _flag(value: object) -> bool:
 def registered() -> dict[str, dict[str, Any]]:
     """Read every Rival concept through the parser this repository ships."""
     bundle = load_bundle(RIVALS_BUNDLE)
-    frame = bundle.concepts.execute()
-    return {str(row.concept_id): json.loads(row.frontmatter_json) for row in frame.itertuples()}
+    return {concept.concept_id: json.loads(concept.frontmatter_json) for concept in bundle.concepts}
 
 
 @pytest.fixture(scope="module")

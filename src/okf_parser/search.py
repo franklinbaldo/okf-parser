@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from collections import Counter
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from okf_parser.body_lines import body_lines
 from okf_parser.exclusion import ExclusionRules
@@ -80,8 +80,7 @@ def _passages(
 ) -> list[_Passage]:
     """Build Phase 1 line passages from already-discovered bundle concepts."""
     matcher = _validate_path_glob(path_glob) if path_glob is not None else None
-    frame = bundle.concepts.execute()
-    rows = cast("list[dict[str, object]]", frame.to_dict(orient="records"))
+    rows: list[dict[str, object]] = [concept.model_dump() for concept in bundle.concepts]
     passages: list[_Passage] = []
     for row in rows:
         row_type = _required_text(row, "concept_type")

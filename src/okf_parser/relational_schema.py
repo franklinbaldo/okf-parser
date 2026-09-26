@@ -134,7 +134,7 @@ def load_relational_schema(path: Path) -> RelationalSchema:
 
 def _concepts_by_type(bundle: Bundle) -> dict[str, list[_Concept]]:
     rows: dict[str, list[_Concept]] = {}
-    for record in bundle.concepts.execute().to_dict(orient="records"):
+    for record in [concept.model_dump() for concept in bundle.concepts]:
         raw = record.get("frontmatter_json")
         if not isinstance(raw, str):
             continue

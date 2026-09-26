@@ -20,7 +20,6 @@ stays asserted normally. A failure message says what broke:
 from __future__ import annotations
 
 import json
-import math
 import os
 import re
 from pathlib import Path
@@ -42,40 +41,34 @@ def _case(case_dir: Path) -> dict[str, Any]:
     return json.loads((case_dir / "case.json").read_text(encoding="utf-8"))  # type: ignore[no-any-return]
 
 
-def _text(value: object) -> str | None:
-    return None if value is None or (isinstance(value, float) and math.isnan(value)) else str(value)
-
-
 def observe(bundle: Bundle) -> dict[str, Any]:
     """Project a loaded bundle onto the engine-neutral shape the corpus asserts."""
-    concepts = bundle.concepts.execute().to_dict(orient="records")
+    concepts = [concept.model_dump() for concept in bundle.concepts]
     return {
         "conformant": bundle.is_conformant,
         "concepts": {row["path"]: row["concept_type"] for row in concepts},
-        "reserved": sorted(
-            row["path"] for row in bundle.reserved.execute().to_dict(orient="records")
-        ),
+        "reserved": sorted(reserved.path for reserved in bundle.reserved),
         "diagnostics": [
             {"code": item.code, "severity": item.severity.value, "path": item.path}
             for item in bundle.validate()
         ],
         "links": [
             {
-                "source": row["source_id"],
-                "raw_target": row["raw_target"],
-                "target": _text(row["target_id"]),
-                "exists": bool(row["exists"]),
+                "source": link.source_id,
+                "raw_target": link.raw_target,
+                "target": link.target_id,
+                "exists": link.exists,
             }
-            for row in bundle.links.execute().to_dict(orient="records")
+            for link in bundle.links
         ],
         "frontmatter": {row["path"]: json.loads(row["frontmatter_json"]) for row in concepts},
     }
 
 
 def _engines(bundle_dir: Path) -> dict[str, dict[str, Any]]:
-    observed = {"python": observe(load_bundle(bundle_dir))}
+    observed = {"rust": observe(load_bundle(bundle_dir))}
     if _EXECUTABLE is not None:
-        observed["rust"] = observe(load_bundle(bundle_dir, rust_core=Path(_EXECUTABLE)))
+        observed["rust-pinned"] = observe(load_bundle(bundle_dir, rust_core=Path(_EXECUTABLE)))
     return observed
 
 
@@ -91,15 +84,15 @@ def test_upstream_case(case_dir: Path) -> None:
     divergent_fields = {field for fields in divergent.values() for field in fields}
     observed = _engines(case_dir / "bundle")
 
-    reference = observed["python"]
+    reference = observed["rust"]
     for engine, result in observed.items():
         drift = sorted(
             field for field in _FIELDS - divergent_fields if result[field] != reference[field]
         )
-        assert not drift, f"engine-divergence: python != {engine} on {drift}"
+        assert not drift, f"engine-divergence: installed != {engine} on {drift}"
 
     for engine, result in observed.items():
-        recorded = divergent.get(engine, {})
+        recorded = divergent.get(engine.removesuffix("-pinned"), {})
         wanted = {**case["expected"], **recorded}
         mismatches = {
             field: {"expected": value, "observed": result[field]}

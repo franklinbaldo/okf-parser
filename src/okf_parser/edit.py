@@ -200,16 +200,14 @@ def _edit_concept(  # noqa: PLR0913 -- independent edit safety inputs.
             ).to_dict()
 
         candidate_bundle = load_bundle(candidate_root, exclude)
-        staged = (
-            candidate_bundle.concepts.filter(candidate_bundle.concepts.concept_id == concept_id)
-            .select("source_digest", "parsed_digest")
-            .execute()
-        )
+        staged = [
+            concept for concept in candidate_bundle.concepts if concept.concept_id == concept_id
+        ]
         if len(staged) != 1:
             msg = f"candidate concept does not exist exactly once after staging: {concept_id}"
             raise EditError(msg)
-        candidate_source_digest = str(staged.iloc[0]["source_digest"])
-        candidate_parsed_digest = str(staged.iloc[0]["parsed_digest"])
+        candidate_source_digest = staged[0].source_digest
+        candidate_parsed_digest = staged[0].parsed_digest
 
         candidate_report = validate_path(candidate_root, exclude)
         candidate_keys = {

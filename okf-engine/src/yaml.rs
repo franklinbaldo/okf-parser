@@ -91,24 +91,70 @@ impl Loader {
     }
 }
 
+/// Standard tags whose values have a JSON representation. Scalars keep their
+/// spelling (typed scalars stay strings); anything else, such as `!!binary`,
+/// `!!set` or an application tag, has no faithful JSON form and is rejected,
+/// as the reference implementation's safe loader rejects it.
+const JSON_TAGS: &[&str] = &[
+    "str",
+    "null",
+    "bool",
+    "int",
+    "float",
+    "timestamp",
+    "map",
+    "seq",
+];
+
+impl Loader {
+    /// Record an error for a tag with no JSON representation; true if rejected.
+    fn reject_tag(&mut self, tag: Option<&Tag>) -> bool {
+        let Some(tag) = tag else {
+            return false;
+        };
+        let standard =
+            tag.handle == "tag:yaml.org,2002:" && JSON_TAGS.contains(&tag.suffix.as_str());
+        let non_specific = tag.handle == "!" && tag.suffix.is_empty();
+        if standard || non_specific {
+            return false;
+        }
+        self.error = Some(format!(
+            "frontmatter uses unsupported YAML tag {}{}",
+            tag.handle, tag.suffix
+        ));
+        true
+    }
+}
+
 impl MarkedEventReceiver for Loader {
     fn on_event(&mut self, event: Event, _marker: Marker) {
         if self.error.is_some() {
             return;
         }
         match event {
-            Event::SequenceStart(anchor, _) => {
+            Event::SequenceStart(anchor, tag) => {
+                if self.reject_tag(tag.as_ref()) {
+                    return;
+                }
                 self.stack.push((Container::Sequence(Vec::new()), anchor));
             }
-            Event::MappingStart(anchor, _) => self.stack.push((
-                Container::Mapping {
-                    values: Map::new(),
-                    key: None,
-                },
-                anchor,
-            )),
+            Event::MappingStart(anchor, tag) => {
+                if self.reject_tag(tag.as_ref()) {
+                    return;
+                }
+                self.stack.push((
+                    Container::Mapping {
+                        values: Map::new(),
+                        key: None,
+                    },
+                    anchor,
+                ));
+            }
             Event::SequenceEnd | Event::MappingEnd => self.finish(),
             Event::Scalar(value, style, anchor, tag) => {
+                if self.reject_tag(tag.as_ref()) {
+                    return;
+                }
                 let tagged_null = tag.as_ref().is_some_and(|tag: &Tag| {
                     tag.handle == "tag:yaml.org,2002:" && tag.suffix == "null"
                 });
@@ -298,6 +344,26 @@ pub fn canonical_parsed(mapping: &Map<String, Value>, body: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{parse_mapping, parse_mapping_yaml, try_parse_canonical_mapping};
+
+    #[test]
+    fn json_representable_tags_are_accepted() {
+        let source = "type: !!str Reference\nn: !!int 3\nitems: !!seq [a]\nmeta: !!map {k: v}";
+
+        assert!(parse_mapping(source).is_ok());
+    }
+
+    #[test]
+    fn tags_with_no_json_representation_are_rejected() {
+        for source in [
+            "blob: !!binary aGk=",
+            "items: !!set {a: null}",
+            "pairs: !!omap [a: 1]",
+            "custom: !thing value",
+        ] {
+            let error = parse_mapping(source).unwrap_err();
+            assert!(error.contains("unsupported YAML tag"), "{source}: {error}");
+        }
+    }
 
     #[test]
     fn canonical_flat_mapping_matches_yaml_parser() {

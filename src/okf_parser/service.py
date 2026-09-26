@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -114,21 +115,17 @@ def inventory_bundle(
 ) -> dict[str, object]:
     """Count concepts by their producer-defined type."""
     bundle = load_bundle(Path(path), exclude)
-    rows = (
-        bundle.concepts.group_by("concept_type")
-        .aggregate(concept_count=lambda table: table.count())
-        .order_by("concept_type")
-        .execute()
-        .to_dict(orient="records")
-    )
+    counts = Counter(concept.concept_type for concept in bundle.concepts)
+    rows = [
+        {"concept_type": concept_type, "concept_count": count}
+        for concept_type, count in sorted(counts.items())
+    ]
     payload: dict[str, object] = {"root": str(bundle.root), "types": rows}
     if digests:
-        payload["digests"] = (
-            bundle.concepts.select("concept_id", "path", "source_digest", "parsed_digest")
-            .order_by("path")
-            .execute()
-            .to_dict(orient="records")
-        )
+        payload["digests"] = [
+            concept.model_dump(include={"concept_id", "path", "source_digest", "parsed_digest"})
+            for concept in sorted(bundle.concepts, key=lambda concept: concept.path)
+        ]
     return payload
 
 

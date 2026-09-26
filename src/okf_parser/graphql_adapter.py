@@ -401,7 +401,7 @@ class _Runtime:
         self.typed_values = typed_values
         self.links_by_source: dict[str, list[dict[str, object]]] = {}
         self.links_by_target: dict[str, list[dict[str, object]]] = {}
-        for row in bundle.links.execute().to_dict(orient="records"):
+        for row in (link.model_dump() for link in bundle.links):
             link = {
                 "sourceId": row["source_id"],
                 "rawTarget": row["raw_target"],
@@ -478,15 +478,12 @@ class _Runtime:
         concept_id = arguments.get("id")
         if not isinstance(concept_id, str):
             return None
-        table = self.bundle.concepts
-        rows = (
-            table.filter(table["concept_id"] == concept_id)
-            .order_by("concept_id")
-            .limit(1)
-            .execute()
-            .to_dict(orient="records")
-        )
-        return self._record(rows[0]) if rows else None
+        matches = [
+            concept.model_dump()
+            for concept in self.bundle.concepts
+            if concept.concept_id == concept_id
+        ]
+        return self._record(matches[0]) if matches else None
 
     def resolve_concepts(
         self,
@@ -496,17 +493,16 @@ class _Runtime:
     ) -> list[dict[str, object]]:
         """Resolve canonical concepts with deterministic bounded pagination."""
         first, offset = self._pagination(arguments)
-        table = self.bundle.concepts
         concept_type = arguments.get("type")
-        if isinstance(concept_type, str):
-            table = table.filter(table["concept_type"] == concept_type)
-        rows = (
-            table.order_by("concept_id")
-            .limit(first, offset=offset)
-            .execute()
-            .to_dict(orient="records")
+        selected = sorted(
+            (
+                concept
+                for concept in self.bundle.concepts
+                if not isinstance(concept_type, str) or concept.concept_type == concept_type
+            ),
+            key=lambda concept: concept.concept_id,
         )
-        return [self._record(row) for row in rows]
+        return [self._record(concept.model_dump()) for concept in selected[offset : offset + first]]
 
 
 def _build_executable_schema(sdl: str, runtime: _Runtime) -> GraphQLSchema:

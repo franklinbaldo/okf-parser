@@ -34,7 +34,7 @@ def _rows(bundle_path: Path) -> list[dict[str, Any]]:
         fail("bundle is not conformant")
 
     result: list[dict[str, Any]] = []
-    for row in bundle.concepts.execute().to_dict(orient="records"):
+    for row in [record.model_dump() for record in bundle.concepts]:
         frontmatter = json.loads(row["frontmatter_json"])
         result.append(
             {
