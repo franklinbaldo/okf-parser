@@ -24,22 +24,18 @@ ones, produced it.
 
 from __future__ import annotations
 
-import hashlib
-import hmac
-import json
 import re
 from dataclasses import dataclass
-from io import StringIO
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import duckdb
 import ibis
-from ruamel.yaml import YAML
+from pydantic import BaseModel, ConfigDict, JsonValue
 
-from okf_parser.bundle import validate_path
 from okf_parser.declared_schema import DeclaredSchema, DeclaredSchemaError
-from okf_parser.models import Severity
+from okf_parser.models import YamlValue
+from okf_parser.rust_core import RustCoreError, call_native
 from okf_parser.typed_tables import (
     TypedTableError,
     TypedTablePlan,
@@ -47,30 +43,6 @@ from okf_parser.typed_tables import (
     discover_declared_schemas,
     duckdb_identifier_key,
     field_input_value,
-)
-from okf_parser.write_support import (
-    BundleSnapshot as _BundleSnapshot,
-)
-from okf_parser.write_support import (
-    ConceptSnapshot as _Concept,
-)
-from okf_parser.write_support import (
-    RawDocument as _RawDocument,
-)
-from okf_parser.write_support import (
-    WriteResult as ApplyResult,
-)
-from okf_parser.write_support import (
-    WriteSupportError,
-)
-from okf_parser.write_support import (
-    render_raw as _render_raw,
-)
-from okf_parser.write_support import (
-    snapshot_bundle as _snapshot_bundle,
-)
-from okf_parser.write_support import (
-    stage_validate_write as _stage_validate_write,
 )
 
 if TYPE_CHECKING:
@@ -100,14 +72,81 @@ def _quote_ident(name: str) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 
-def _round_trips_losslessly(yaml: YAML, frontmatter_text: str) -> bool:
-    try:
-        data = yaml.load(frontmatter_text)
-        buffer = StringIO()
-        yaml.dump(data, buffer)
-    except Exception:  # any load/dump failure means "cannot round-trip"
-        return False
-    return buffer.getvalue().rstrip("\n") == frontmatter_text.rstrip("\n")
+class _Concept(BaseModel):
+    """One concept as the native snapshot hands it to the planner."""
+
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    concept_id: str
+    concept_type: str
+    frontmatter: dict[str, YamlValue]
+    frontmatter_text: str
+    body: str
+
+
+class _PlanningSnapshot(BaseModel):
+    """``__apply-snapshot``: the concepts to plan against, and their digest."""
+
+    model_config = ConfigDict(frozen=True)
+
+    root: str
+    digest: str
+    concepts: tuple[_Concept, ...]
+
+
+class _SnapshotRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    exclude: list[str]
+
+
+class _ConceptChanges(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    fields: list[tuple[str, str | None]]
+
+
+class _CommitRequest(BaseModel):
+    """``__apply-commit``: the planned changes, for the native write engine."""
+
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    exclude: list[str]
+    spec_template: str | None
+    sql: str
+    snapshot_digest: str
+    changes: list[_ConceptChanges]
+    expected_preview_token: str | None
+    write: bool
+
+
+def _failed(error: str) -> dict[str, object]:
+    """The result shape of an apply that could not be planned."""
+    return {
+        "changed_paths": [],
+        "skipped_paths": [],
+        "succeeded": False,
+        "written": False,
+        "validation": [],
+        "conflict_paths": [],
+        "error": error,
+    }
+
+
+def _native(command: str, request: BaseModel) -> dict[str, JsonValue]:
+    response = call_native(command, request)
+    if response.error is not None:
+        if response.error.kind == "request":
+            raise ApplyError(response.error.message)
+        raise RustCoreError(response.error.message)
+    if response.result is None:
+        msg = f"okf-parser {command} answered with neither a result nor an error"
+        raise RustCoreError(msg)
+    return response.result
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,12 +249,12 @@ def _typed_insert_columns(plan: TypedTablePlan) -> tuple[str, ...]:
 def _typed_row_values(concept: _Concept, plan: TypedTablePlan) -> tuple[object, ...]:
     frontmatter = cast("Mapping[str, Any]", concept.frontmatter)
     values: list[object] = [
-        concept.relative,
+        concept.path,
         concept.concept_id,
         concept.concept_id,
         concept.body,
         concept.body.splitlines(),
-        concept.raw.frontmatter_text,
+        concept.frontmatter_text,
     ]
     values.extend(field_input_value(frontmatter, field) for field in plan.fields)
     return tuple(values)
@@ -256,12 +295,12 @@ def _build_table(
     for name in field_names:
         columns[name] = []
     for concept in concepts:
-        columns["__okf_path"].append(concept.relative)
+        columns["__okf_path"].append(concept.path)
         columns["__okf_concept_id"].append(concept.concept_id)
         columns["__okf_logical_key"].append(concept.concept_id)
         columns["__okf_body"].append(concept.body)
         columns["__okf_body_lines"].append(concept.body.splitlines())
-        columns["__okf_frontmatter"].append(concept.raw.frontmatter_text)
+        columns["__okf_frontmatter"].append(concept.frontmatter_text)
         for name in field_names:
             value = concept.frontmatter.get(name)
             columns[name].append(value if isinstance(value, str) else None)
@@ -900,21 +939,6 @@ def _execute_script(
     return _ScriptOutcome(touched_type=touched, row_diffs=row_diffs)
 
 
-def _apply_frontmatter_changes(
-    yaml: YAML, frontmatter_text: str, changes: dict[str, str | None]
-) -> str:
-    data = yaml.load(frontmatter_text)
-    for key, value in changes.items():
-        if value is None:
-            if key in data:
-                del data[key]
-        else:
-            data[key] = value
-    buffer = StringIO()
-    yaml.dump(data, buffer)
-    return buffer.getvalue()
-
-
 def _build_sugar_sql(type_name: str, field_name: str, from_value: str, to_value: str) -> str:
     escaped_to = to_value.replace("'", "''")
     escaped_from = from_value.replace("'", "''")
@@ -924,112 +948,6 @@ def _build_sugar_sql(type_name: str, field_name: str, from_value: str, to_value:
         f"UPDATE {_quote_ident(type_name)} SET {quoted_field} = '{escaped_to}' "
         f"WHERE {quoted_field} = '{escaped_from}'"
     )
-
-
-def _snapshot_for_apply(root: Path, exclude: Sequence[str]) -> _BundleSnapshot:
-    """Capture apply's coherent snapshot while preserving its public conflict wording."""
-    try:
-        return _snapshot_bundle(root, exclude)
-    except WriteSupportError as exc:
-        message = str(exc).replace(
-            "file changed while it was being read",
-            "file changed while apply was reading it",
-        )
-        raise ApplyError(message) from exc
-
-
-_APPLY_PREVIEW_PREFIX = "okf-apply-preview-v1-sha256:"
-_APPLY_PREVIEW_CONFLICT = "apply candidate no longer matches the reviewed preview"
-
-
-def _apply_preview_token(
-    snapshot: _BundleSnapshot,
-    sql: str,
-    exclude: Sequence[str],
-    spec_template: str | None,
-    candidates: dict[str, tuple[_RawDocument, str, Path]],
-) -> str:
-    """Fingerprint the exact baseline, operation and physical candidate bytes."""
-    payload = {
-        "version": 1,
-        "sql": sql,
-        "exclude": list(exclude),
-        "spec_template": spec_template,
-        "manifest": [
-            [relative, signature[0], signature[1]]
-            for relative, signature in sorted(snapshot.manifest.items())
-        ],
-        "concepts": [
-            [concept.relative, concept.content_hash]
-            for concept in sorted(snapshot.concepts, key=lambda item: item.relative)
-        ],
-        "candidates": [
-            [relative, hashlib.sha256(_render_raw(raw, frontmatter_text)).hexdigest()]
-            for relative, (raw, frontmatter_text, _real_path) in sorted(candidates.items())
-        ],
-    }
-    encoded = json.dumps(
-        payload,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return _APPLY_PREVIEW_PREFIX + hashlib.sha256(encoded).hexdigest()
-
-
-def _with_preview_token(payload: dict[str, object], preview_token: str) -> dict[str, object]:
-    payload["preview_token"] = preview_token
-    return payload
-
-
-def _preview_token_conflict(
-    expected_preview_token: str | None,
-    preview_token: str,
-    changed_paths: Sequence[str] = (),
-) -> dict[str, object] | None:
-    if expected_preview_token is None or hmac.compare_digest(expected_preview_token, preview_token):
-        return None
-    return _with_preview_token(
-        ApplyResult(
-            changed_paths=tuple(sorted(changed_paths)),
-            succeeded=False,
-            conflict_paths=tuple(sorted(changed_paths)),
-            error=_APPLY_PREVIEW_CONFLICT,
-        ).to_dict(),
-        preview_token,
-    )
-
-
-def _no_op_preview_result(
-    snapshot: _BundleSnapshot,
-    sql: str,
-    exclude: Sequence[str],
-    spec_template: str | None,
-    expected_preview_token: str | None,
-) -> dict[str, object]:
-    preview_token = _apply_preview_token(snapshot, sql, exclude, spec_template, {})
-    conflict = _preview_token_conflict(expected_preview_token, preview_token)
-    if conflict is not None:
-        return conflict
-    return _with_preview_token(ApplyResult().to_dict(), preview_token)
-
-
-def _candidate_review_result(
-    expected_preview_token: str | None,
-    preview_token: str,
-    changed_paths: Sequence[str],
-    *,
-    write: bool,
-) -> dict[str, object] | None:
-    conflict = _preview_token_conflict(expected_preview_token, preview_token, changed_paths)
-    if conflict is not None:
-        return conflict
-    if not write:
-        return _with_preview_token(
-            ApplyResult(changed_paths=tuple(sorted(changed_paths))).to_dict(),
-            preview_token,
-        )
-    return None
 
 
 def apply_bundle(  # each argument is an independent public CLI flag.
@@ -1061,19 +979,10 @@ def apply_bundle(  # each argument is an independent public CLI flag.
 
     try:
         alter_queries, update_query = _parse_script(sql)
-
-        # Captured first and together: the manifest baseline used for the
-        # write-time conflict check comes from the exact same walk, and for
-        # concept files the exact same bytes, that fed the SQL diff below -
-        # not a second, later, independent filesystem visit.
-        snapshot = _snapshot_for_apply(root, exclude)
+        snapshot = _PlanningSnapshot.model_validate(
+            _native("__apply-snapshot", _SnapshotRequest(path=str(root), exclude=list(exclude)))
+        )
         concepts = snapshot.concepts
-
-        baseline = validate_path(root, exclude)
-        baseline_keys = {
-            (v.code, v.path, v.message) for v in baseline.violations if v.severity == Severity.ERROR
-        }
-
         declarations = discover_declared_schemas(
             root,
             {concept.concept_type for concept in concepts},
@@ -1084,60 +993,28 @@ def apply_bundle(  # each argument is an independent public CLI flag.
             con.raw_sql("SET TimeZone = 'UTC'")
         materialized = _materialize(con, concepts, declarations)
         outcome = _execute_script(con, materialized, alter_queries, update_query)
-    except (ApplyError, DeclaredSchemaError, TypedTableError, WriteSupportError) as exc:
-        return ApplyResult(succeeded=False, error=str(exc)).to_dict()
+    except (ApplyError, DeclaredSchemaError, TypedTableError) as exc:
+        return _failed(str(exc))
 
-    if outcome.touched_type is None or not outcome.row_diffs:
-        return _no_op_preview_result(snapshot, sql, exclude, spec_template, expected_preview_token)
-
-    concepts_by_id = {c.concept_id: c for c in concepts}
-    content_hashes = {c.relative: c.content_hash for c in concepts}
-    yaml = YAML()
-    yaml.preserve_quotes = True
-    yaml.width = 4096
-
-    changed_paths: list[str] = []
-    skipped_paths: list[str] = []
-    candidates: dict[str, tuple[_RawDocument, str, Path]] = {}
-    for row in outcome.row_diffs:
-        concept = concepts_by_id[row.concept_id]
-        # Built from the snapshot's own bytes (`concept.raw`), not a fresh
-        # read of the real path: the candidate must reflect exactly what the
-        # SQL diff was computed against, not whatever happens to be on disk
-        # by the time this loop runs.
-        if not _round_trips_losslessly(yaml, concept.raw.frontmatter_text):
-            skipped_paths.append(concept.relative)
-            continue
-        new_frontmatter_text = _apply_frontmatter_changes(
-            yaml, concept.raw.frontmatter_text, row.changed_fields
+    paths_by_id = {concept.concept_id: concept.path for concept in concepts}
+    changes = [
+        _ConceptChanges(path=paths_by_id[row.concept_id], fields=list(row.changed_fields.items()))
+        for row in (outcome.row_diffs if outcome.touched_type is not None else ())
+    ]
+    try:
+        committed = _native(
+            "__apply-commit",
+            _CommitRequest(
+                path=str(root),
+                exclude=list(exclude),
+                spec_template=spec_template,
+                sql=sql,
+                snapshot_digest=snapshot.digest,
+                changes=changes,
+                expected_preview_token=expected_preview_token,
+                write=write,
+            ),
         )
-        candidates[concept.relative] = (concept.raw, new_frontmatter_text, concept.path)
-        changed_paths.append(concept.relative)
-
-    if skipped_paths:
-        return ApplyResult(
-            skipped_paths=tuple(sorted(skipped_paths)),
-            succeeded=False,
-            error="one or more matched documents cannot round-trip losslessly",
-        ).to_dict()
-
-    preview_token = _apply_preview_token(snapshot, sql, exclude, spec_template, candidates)
-    reviewed = _candidate_review_result(
-        expected_preview_token, preview_token, changed_paths, write=write
-    )
-    if reviewed is not None:
-        return reviewed
-
-    touched_hashes = {rel: content_hashes[rel] for rel in candidates}
-    result = _stage_validate_write(
-        root,
-        exclude,
-        candidates,
-        baseline_keys,
-        changed_paths,
-        touched_hashes,
-        snapshot.manifest,
-        conflict_error="the bundle changed since apply validated it",
-        temp_prefix="okf-apply-",
-    )
-    return _with_preview_token(result, preview_token)
+    except ApplyError as exc:
+        return _failed(str(exc))
+    return dict(committed.items())

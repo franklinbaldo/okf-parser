@@ -323,6 +323,12 @@ impl BundlePath {
     pub fn into_string(self) -> String {
         self.0
     }
+    /// The UTF-8 spelling of a bundle root itself.
+    pub fn root_text(root: &Path) -> Result<String, BundlePathError> {
+        root.to_str()
+            .map(str::to_owned)
+            .ok_or_else(|| BundlePathError::NonUtf8(root.to_owned()))
+    }
 }
 
 /// Why a document's text could not be read.
@@ -538,8 +544,10 @@ pub(crate) fn normalized_newlines(text: &str) -> Cow<'_, str> {
 /// A concept's identity and digests: what a writer needs to plan against it.
 pub(crate) struct Identity {
     pub(crate) concept_id: String,
+    pub(crate) concept_type: String,
     pub(crate) source_digest: String,
     pub(crate) parsed_digest: String,
+    pub(crate) frontmatter: Map<String, Value>,
 }
 
 /// The digests of `text`, whose normalized source split into `mapping` and `body`.
@@ -563,15 +571,18 @@ pub(crate) fn concept_identity(
     body: &str,
 ) -> Option<Identity> {
     let mapping = parse_frontmatter(frontmatter).ok()?.mapping;
-    let kind = mapping.get("type").and_then(Value::as_str);
-    if kind.is_none_or(|kind| kind.trim().is_empty()) {
+    let kind = mapping.get("type").and_then(Value::as_str)?.trim();
+    if kind.is_empty() {
         return None;
     }
+    let concept_type = kind.to_owned();
     let (source_digest, parsed_digest) = digests(text, &mapping, body);
     Some(Identity {
         concept_id: id(path),
+        concept_type,
         source_digest,
         parsed_digest,
+        frontmatter: mapping,
     })
 }
 

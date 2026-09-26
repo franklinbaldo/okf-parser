@@ -6,14 +6,15 @@ import json
 import math
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from io import StringIO
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
-from pydantic import BaseModel, ValidationError
-from ruamel.yaml import YAML
+from pydantic import BaseModel, ConfigDict, ValidationError
 
-from okf_parser.frontmatter_order import frontmatter_key_order
 from okf_parser.models import FRONTMATTER_ADAPTER, YamlValue
+from okf_parser.rust_core import RustCoreError, call_native
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 _MISSING_HOOK = object()
 
@@ -228,34 +229,53 @@ def to_okf(value: object, *, concept_type: str | None = None) -> OKFDocument:
     return OKFDocument(frontmatter=frontmatter, body=representation.body)
 
 
-def _canonicalize_value(value: YamlValue) -> YamlValue:
-    """Order mappings deterministically while preserving list order."""
-    if isinstance(value, dict):
-        return {key: _canonicalize_value(value[key]) for key in sorted(value)}
-    if isinstance(value, list):
-        return [_canonicalize_value(item) for item in value]
-    return value
+class _NewDocument(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    frontmatter: dict[str, YamlValue]
+    body: str
 
 
-def render_frontmatter(frontmatter: Mapping[str, YamlValue]) -> str:
-    """Render new-document frontmatter in canonical physical order."""
-    ordered = {
-        key: _canonicalize_value(frontmatter[key])
-        for key in sorted(frontmatter, key=frontmatter_key_order)
-    }
-    yaml = YAML()
-    yaml.preserve_quotes = True
-    yaml.default_flow_style = False
-    yaml.width = 4096
-    buffer = StringIO()
-    yaml.dump(ordered, buffer)
-    return buffer.getvalue()
+class _RenderRequest(BaseModel):
+    """``__render``: new documents for the native canonical emitter."""
+
+    model_config = ConfigDict(frozen=True)
+
+    documents: list[_NewDocument]
+
+
+class _Rendered(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    documents: list[str]
+
+
+def render_documents(documents: Sequence[tuple[Mapping[str, YamlValue], str]]) -> list[str]:
+    """Render new OKF documents canonically, in one native call.
+
+    The binary (``okf-engine/src/frontmatter.rs``) orders ``type``, ``title``
+    and ``description`` first and every other key sorted, and checks that
+    the text parses back to exactly the given frontmatter.
+    """
+    if not documents:
+        return []
+    response = call_native(
+        "__render",
+        _RenderRequest(
+            documents=[
+                _NewDocument(frontmatter=dict(frontmatter), body=body)
+                for frontmatter, body in documents
+            ]
+        ),
+    )
+    if response.error is not None:
+        if response.error.kind == "request":
+            raise ValueError(response.error.message)
+        raise RustCoreError(response.error.message)
+    return _Rendered.model_validate(response.result).documents
 
 
 def dumps(value: object, *, concept_type: str | None = None) -> str:
     """Serialize a supported Python value as deterministic OKF Markdown text."""
     document = to_okf(value, concept_type=concept_type)
-    frontmatter = render_frontmatter(document.frontmatter)
-    if not frontmatter.endswith("\n"):
-        frontmatter += "\n"
-    return f"---\n{frontmatter}---\n{document.body}"
+    return render_documents([(document.frontmatter, document.body)])[0]

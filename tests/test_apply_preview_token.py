@@ -45,7 +45,7 @@ def test_preview_returns_a_deterministic_candidate_token(tmp_path: Path) -> None
 
     token = first["preview_token"]
     assert isinstance(token, str)
-    assert token.startswith("okf-apply-preview-v1-sha256:")
+    assert token.startswith("okf-apply-preview-v2-sha256:")
     assert second["preview_token"] == token
     assert first["changed_paths"] == ["note.md"]
     note = (tmp_path / "note.md").read_text(encoding="utf-8")

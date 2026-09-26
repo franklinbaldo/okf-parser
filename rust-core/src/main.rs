@@ -39,6 +39,15 @@ enum Command {
     /// Scaffold type specifications for the Python shell (JSON request on stdin).
     #[command(name = "__init-specs", hide = true)]
     InitSpecsRequest,
+    /// Snapshot a bundle for the Python apply planner (JSON request on stdin).
+    #[command(name = "__apply-snapshot", hide = true)]
+    ApplySnapshot,
+    /// Edit, fingerprint and commit a planned apply (JSON request on stdin).
+    #[command(name = "__apply-commit", hide = true)]
+    ApplyCommit,
+    /// Render new OKF documents canonically (JSON request on stdin).
+    #[command(name = "__render", hide = true)]
+    Render,
     #[command(name = "__engine-load", hide = true)]
     Load {
         root: PathBuf,
@@ -177,6 +186,16 @@ fn run() -> Outcome {
         }
         Command::InitSpecsRequest => {
             serde_json::to_writer(io::stdout().lock(), &protocol::init_specs(&stdin_text()?)?)?;
+        }
+        Command::ApplySnapshot => {
+            let response = protocol::apply_snapshot(&stdin_text()?)?;
+            serde_json::to_writer(io::stdout().lock(), &response)?;
+        }
+        Command::ApplyCommit => {
+            serde_json::to_writer(io::stdout().lock(), &protocol::apply(&stdin_text()?)?)?;
+        }
+        Command::Render => {
+            serde_json::to_writer(io::stdout().lock(), &protocol::render(&stdin_text()?)?)?;
         }
         Command::Load {
             root,

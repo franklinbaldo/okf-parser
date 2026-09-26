@@ -15,18 +15,19 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
-from io import StringIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 import duckdb
-from ruamel.yaml import YAML
 
 from okf_parser.parser import DocumentParseError, parse_document, parse_document_text
+from okf_parser.serialization import render_documents
 from okf_parser.type_specs import type_slug
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+    from okf_parser.models import YamlValue
 
 
 class BundleImportError(ValueError):
@@ -63,16 +64,14 @@ def _concept_id(row: dict[str, object], index: int, id_column: str | None) -> st
     return str(value)
 
 
-def _frontmatter_text(yaml: YAML, concept_type: str, row: dict[str, object]) -> str:
-    data: dict[str, object] = {"type": concept_type}
+def _frontmatter(concept_type: str, row: dict[str, object]) -> dict[str, YamlValue]:
+    data: dict[str, YamlValue] = {"type": concept_type}
     for key, value in row.items():
         if key == "type":
             continue
         if value is not None:
             data[key] = value if isinstance(value, str) else str(value)
-    buffer = StringIO()
-    yaml.dump(data, buffer)
-    return buffer.getvalue()
+    return data
 
 
 def _plan(
@@ -255,17 +254,21 @@ def import_bundle(  # each argument is an independent public CLI flag.
             "written": False,
         }
 
-    yaml = YAML()
-    yaml.preserve_quotes = True
-    yaml.width = 4096
+    rendered = dict(
+        zip(
+            plan,
+            render_documents([(_frontmatter(concept_type, row), "") for _, row in plan.values()]),
+            strict=True,
+        )
+    )
 
     to_write: dict[str, str] = {}
     skipped_existing: list[str] = []
     matched_existing: list[str] = []
     conflicting_existing: list[str] = []
-    for relative, (_, row) in plan.items():
+    for relative in plan:
         destination = root / relative
-        candidate = "---\n" + _frontmatter_text(yaml, concept_type, row) + "---\n"
+        candidate = rendered[relative]
         if destination.is_file() and not overwrite:
             if on_conflict == "skip":
                 skipped_existing.append(relative)
@@ -305,7 +308,7 @@ def import_bundle(  # each argument is an independent public CLI flag.
     for relative, text in to_write.items():
         destination = root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        # Stage and rename like write_support.write_raw does for apply/edit:
+        # Stage and rename, as the native write engine does for apply/edit:
         # writing destinations directly meant one crash mid-import left a
         # truncated concept behind, detectable only by a later OKF001.
         staged = destination.with_name(f".{destination.name}.okf-write.tmp")

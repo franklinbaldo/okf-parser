@@ -4,9 +4,12 @@
 //! not understand instead of misreading it. Bump it on any breaking change to a
 //! response shape; adding a field is not breaking.
 
+use okf_engine::frontmatter::render_document;
 use okf_engine::write::{
-    EditOutcome, EditReport, EditRequest, ValidationItem, WriteError, edit_concept,
+    ApplyOutcome, ApplyReport, ApplyRequest, EditOutcome, EditReport, EditRequest,
+    PlanningSnapshot, ValidationItem, WriteError, apply_commit, edit_concept, planning_snapshot,
 };
+use serde_json::{Map, Value};
 use std::path::PathBuf;
 
 use okf_engine::check::{CheckReport, READ_CONCURRENCY, check_loaded};
@@ -285,6 +288,122 @@ pub fn edit(request: &str) -> Result<Response<EditResult>, serde_json::Error> {
     }))
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ApplySnapshotRequest {
+    path: PathBuf,
+    #[serde(default)]
+    exclude: Vec<String>,
+}
+
+/// `__apply-snapshot`: the concepts `apply` plans against, and their digest.
+pub fn apply_snapshot(request: &str) -> Result<Response<PlanningSnapshot>, serde_json::Error> {
+    let request: ApplySnapshotRequest = serde_json::from_str(request)?;
+    Ok(planning_snapshot(&request.path, &request.exclude)
+        .map_err(|error| ProtocolError::from_write(&error, "apply"))
+        .into())
+}
+
+/// The JSON shape `apply` has always returned; built only here, from the
+/// engine's `ApplyReport`.
+#[derive(Debug, Default, Serialize, PartialEq, Eq)]
+pub struct ApplyResult {
+    changed_paths: Vec<String>,
+    skipped_paths: Vec<String>,
+    succeeded: bool,
+    written: bool,
+    validation: Vec<ValidationItem>,
+    conflict_paths: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview_token: Option<String>,
+}
+
+impl From<ApplyReport> for ApplyResult {
+    fn from(report: ApplyReport) -> Self {
+        let refused = |error: &'static str| Self {
+            error: Some(error),
+            ..Self::default()
+        };
+        let mut result = match report.outcome {
+            ApplyOutcome::Unchanged => Self::default(),
+            ApplyOutcome::Replanned => refused("the bundle changed while apply was planning it"),
+            ApplyOutcome::Lossy(paths) => Self {
+                skipped_paths: paths,
+                ..refused("one or more matched documents cannot round-trip losslessly")
+            },
+            ApplyOutcome::TokenMismatch(paths) => Self {
+                changed_paths: paths.clone(),
+                conflict_paths: paths,
+                ..refused("apply candidate no longer matches the reviewed preview")
+            },
+            ApplyOutcome::Previewed(paths) => Self {
+                changed_paths: paths,
+                ..Self::default()
+            },
+            ApplyOutcome::Written(paths) => Self {
+                changed_paths: paths,
+                written: true,
+                ..Self::default()
+            },
+            ApplyOutcome::Invalid(items) => Self {
+                validation: items,
+                ..refused("candidate bundle introduces new normative diagnostics")
+            },
+            ApplyOutcome::Conflict(paths) => Self {
+                conflict_paths: paths,
+                ..refused("the bundle changed since apply validated it")
+            },
+        };
+        result.succeeded = result.error.is_none();
+        result.preview_token = report.preview_token;
+        result
+    }
+}
+
+/// `__apply-commit`: edit, fingerprint and optionally commit a planned apply.
+pub fn apply(request: &str) -> Result<Response<ApplyResult>, serde_json::Error> {
+    let request: ApplyRequest = serde_json::from_str(request)?;
+    Ok(apply_commit(&request)
+        .map(ApplyResult::from)
+        .map_err(|error| ProtocolError::from_write(&error, "apply"))
+        .into())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NewDocument {
+    frontmatter: Map<String, Value>,
+    #[serde(default)]
+    body: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RenderRequest {
+    documents: Vec<NewDocument>,
+}
+
+/// The rendered documents, in request order.
+#[derive(Debug, Serialize)]
+pub struct Rendered {
+    documents: Vec<String>,
+}
+
+/// `__render`: the canonical text of new OKF documents, in one batch.
+pub fn render(request: &str) -> Result<Response<Rendered>, serde_json::Error> {
+    let request: RenderRequest = serde_json::from_str(request)?;
+    let rendered = request
+        .documents
+        .iter()
+        .map(|document| render_document(&document.frontmatter, &document.body))
+        .collect::<Result<Vec<_>, _>>()
+        .map(|documents| Rendered { documents })
+        .map_err(|error| ProtocolError::request(&error));
+    Ok(rendered.into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,6 +537,57 @@ mod tests {
         assert_eq!(result["bundle"]["concepts"][0]["concept_id"], "a");
         assert_eq!(result["bundle"]["root"], result["root"]);
         assert_eq!(result["bundle"]["graph"]["nodes"], 1);
+    }
+
+    #[test]
+    fn apply_outcomes_keep_the_legacy_shape() {
+        let result = |outcome| {
+            serde_json::to_value(ApplyResult::from(ApplyReport {
+                outcome,
+                preview_token: Some("t".into()),
+            }))
+            .unwrap()
+        };
+        let written = result(ApplyOutcome::Written(vec!["a.md".into()]));
+        assert_eq!(
+            written,
+            serde_json::json!({
+                "changed_paths": ["a.md"], "skipped_paths": [], "succeeded": true,
+                "written": true, "validation": [], "conflict_paths": [], "preview_token": "t"
+            })
+        );
+        let mismatch = result(ApplyOutcome::TokenMismatch(vec!["a.md".into()]));
+        assert_eq!(mismatch["succeeded"], false);
+        assert_eq!(mismatch["conflict_paths"], serde_json::json!(["a.md"]));
+        assert_eq!(
+            mismatch["error"],
+            "apply candidate no longer matches the reviewed preview"
+        );
+        let lossy = serde_json::to_value(ApplyResult::from(ApplyReport {
+            outcome: ApplyOutcome::Lossy(vec!["b.md".into()]),
+            preview_token: None,
+        }))
+        .unwrap();
+        assert!(lossy.get("preview_token").is_none());
+        assert_eq!(lossy["skipped_paths"], serde_json::json!(["b.md"]));
+    }
+
+    #[test]
+    fn render_batches_documents_and_refuses_non_string_scalars() {
+        let ok = serde_json::to_value(
+            render(r##"{"documents": [{"frontmatter": {"type": "Note"}, "body": "# A\n"}]}"##)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            ok["result"]["documents"],
+            serde_json::json!(["---\ntype: Note\n---\n# A\n"])
+        );
+        let refused = serde_json::to_value(
+            render(r#"{"documents": [{"frontmatter": {"type": "Note", "n": 1}}]}"#).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(refused["error"]["kind"], "request");
     }
 
     #[test]

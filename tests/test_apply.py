@@ -2,18 +2,19 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import okf_parser.apply as apply_module
 from okf_parser.apply import apply_bundle
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable
+    from pathlib import Path
 
     import pytest
+    from pydantic import BaseModel
 
-    from okf_parser.bundle import ValidationReport
+    from okf_parser.rust_core import NativeResponse
 
 
 def _write(path: Path, text: str) -> None:
@@ -493,40 +494,39 @@ def test_alter_column_type_change_is_rejected(tmp_path: Path) -> None:
     assert _read(tmp_path / "r1.md") == original
 
 
+def _after_planning_snapshot(monkeypatch: pytest.MonkeyPatch, action: Callable[[], None]) -> None:
+    """Run `action` right after `apply` snapshots the bundle for planning.
+
+    That is the window between the planner's read (`__apply-snapshot`) and
+    the native commit (`__apply-commit`), where a concurrent editor would
+    have to act for a plan to go stale.
+    """
+    real = apply_module.call_native
+
+    def hooked(command: str, request: BaseModel, executable: Path | None = None) -> NativeResponse:
+        response = real(command, request, executable)
+        if command == "__apply-snapshot":
+            action()
+        return response
+
+    monkeypatch.setattr(apply_module, "call_native", hooked)
+
+
 def test_untouched_file_edited_before_write_aborts_as_a_conflict(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Apply re-checks the whole bundle, not just the fields it's writing.
 
-    It compares the state of every file it saw during validation against the
-    state immediately before replacing any real file, and refuses to write
-    anything if the bundle moved since. r2 never matches the WHERE clause
-    below, so this exercises that guarantee for a document the SQL itself
-    never touches, not just the ones it does.
+    r2 never matches the WHERE clause below, so this exercises the guarantee
+    for a document the SQL itself never touches: the plan was computed
+    against a bundle that no longer exists, so nothing is written.
     """
     _write(tmp_path / "r1.md", "---\ntype: Rotina\nsetor: GAB\n---\n# R1\n")
     _write(tmp_path / "r2.md", "---\ntype: Rotina\nsetor: OTHER\n---\n# R2\n")
-
-    real_validate_path = apply_module.validate_path
-
-    def racing_validate_path(
-        path: Path,
-        exclude: Sequence[str] = (),
-        require_spec: str | None = None,
-        *,
-        normative_spec: bool = False,
-    ) -> ValidationReport:
-        # `validate_path` runs the baseline check once, right after
-        # `_snapshot_bundle` has already captured r2.md's signature, and
-        # well before apply re-walks the whole bundle right before writing
-        # - mutating r2.md right here simulates a concurrent editor saving
-        # it somewhere in that window.
-        (tmp_path / "r2.md").write_text(
-            "---\ntype: Rotina\nsetor: RACED\n---\n# R2\n", encoding="utf-8"
-        )
-        return real_validate_path(path, exclude, require_spec, normative_spec=normative_spec)
-
-    monkeypatch.setattr(apply_module, "validate_path", racing_validate_path)
+    _after_planning_snapshot(
+        monkeypatch,
+        lambda: _write(tmp_path / "r2.md", "---\ntype: Rotina\nsetor: RACED\n---\n# R2\n"),
+    )
 
     result = apply_bundle(
         str(tmp_path),
@@ -535,38 +535,25 @@ def test_untouched_file_edited_before_write_aborts_as_a_conflict(
     )
 
     assert result["succeeded"] is False
-    assert "r2.md" in _str_list(result, "conflict_paths")
+    assert _error(result) == "the bundle changed while apply was planning it"
     assert "setor: GAB" in _read(tmp_path / "r1.md")
 
 
-def test_document_edited_right_after_materialization_read_is_still_caught(
+def test_document_edited_right_after_the_planning_read_is_still_caught(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The read that feeds the SQL diff is bracketed by two consistency stats.
+    """A read that fed the SQL diff never goes stale unnoticed.
 
-    r2 changes to `setor: GAB` immediately after `apply` reads its bytes for
-    materialization - if the freshness signature were derived from a
-    `stat()` made separately from that read, a same-timing coincidence could
-    let the stale read go unnoticed. Requiring the stat taken right before
-    the read to match the one taken right after catches the drift the
-    instant it happens, rather than only much later at write time.
+    r2 changes to `setor: GAB` right after the planner read it, so the plan
+    misses a row the UPDATE would now select. The commit re-snapshots and
+    refuses instead of writing a plan made for a different bundle.
     """
     _write(tmp_path / "r1.md", "---\ntype: Rotina\nsetor: GAB\n---\n# R1\n")
     _write(tmp_path / "r2.md", "---\ntype: Rotina\nsetor: OTHER\n---\n# R2\n")
-
-    real_read_bytes = Path.read_bytes
-    mutated = {"done": False}
-
-    def racing_read(self: Path) -> bytes:
-        raw = real_read_bytes(self)
-        if self.name == "r2.md" and not mutated["done"]:
-            mutated["done"] = True
-            (tmp_path / "r2.md").write_text(
-                "---\ntype: Rotina\nsetor: GAB\n---\n# R2\n", encoding="utf-8"
-            )
-        return raw
-
-    monkeypatch.setattr(Path, "read_bytes", racing_read)
+    _after_planning_snapshot(
+        monkeypatch,
+        lambda: _write(tmp_path / "r2.md", "---\ntype: Rotina\nsetor: GAB\n---\n# R2\n"),
+    )
 
     result = apply_bundle(
         str(tmp_path),
@@ -575,37 +562,19 @@ def test_document_edited_right_after_materialization_read_is_still_caught(
     )
 
     assert result["succeeded"] is False
-    assert "changed while apply was reading it" in _error(result)
+    assert "changed while apply was planning it" in _error(result)
     assert "setor: GAB" in _read(tmp_path / "r1.md")
 
 
-def test_same_size_replace_during_read_is_still_caught(
+def test_same_size_replace_after_the_planning_read_is_still_caught(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A same-length swap between the two consistency stats is not invisible.
-
-    Deriving the manifest signature's size component from `len(raw)` (the
-    bytes actually read) instead of a separate `stat()` would let a
-    same-size replace slip through undetected: the recorded size would
-    still match reality even though the content differs. Bracketing the
-    read with two identical `stat()` calls catches this by mtime alone,
-    independent of whether the replacement happens to be the same length.
-    """
+    """A same-length swap is not invisible: concepts are compared by content."""
     _write(tmp_path / "r1.md", "---\ntype: Rotina\nsetor: AAAAA\n---\n# R1\n")
-
-    real_read_bytes = Path.read_bytes
-    mutated = {"done": False}
-
-    def racing_read(self: Path) -> bytes:
-        raw = real_read_bytes(self)
-        if self.name == "r1.md" and not mutated["done"]:
-            mutated["done"] = True
-            (tmp_path / "r1.md").write_text(
-                "---\ntype: Rotina\nsetor: BBBBB\n---\n# R1\n", encoding="utf-8"
-            )
-        return raw
-
-    monkeypatch.setattr(Path, "read_bytes", racing_read)
+    _after_planning_snapshot(
+        monkeypatch,
+        lambda: _write(tmp_path / "r1.md", "---\ntype: Rotina\nsetor: BBBBB\n---\n# R1\n"),
+    )
 
     result = apply_bundle(
         str(tmp_path),
@@ -614,7 +583,8 @@ def test_same_size_replace_during_read_is_still_caught(
     )
 
     assert result["succeeded"] is False
-    assert "changed while apply was reading it" in _error(result)
+    assert "changed while apply was planning it" in _error(result)
+    assert "setor: BBBBB" in _read(tmp_path / "r1.md")
 
 
 def test_type_named_like_the_internal_before_namespace_works_like_any_other_type(
@@ -664,52 +634,20 @@ def test_type_named_like_the_staging_variable_does_not_shadow_a_later_type(
 def test_candidate_is_built_from_snapshot_bytes_not_a_transient_live_read(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A transient edit that reverts before the final hash check must not leak in.
+    """A transient edit that reverts before the commit must not leak in.
 
-    1. `_snapshot_bundle` reads A (with `note: keep-me-A`).
-    2. Before the final hash recheck, the file is briefly B (`note:
-       keep-me-B`), then reverted to A.
-    3. The final hash check sees A again and lets the write through.
-
-    If the candidate were rendered from a *second* live read anywhere in
-    between (instead of exclusively from the bytes step 1 already
-    captured), it could have caught B in that window and published a
-    transformed B - which never belonged to the snapshot the migration was
-    validated against - while `note` still reads `keep-me-A` in the final
-    output only if the candidate genuinely never went back to the
-    filesystem for content.
+    Between the planning read and the commit the file is briefly B, then A
+    again. The commit sees A's bytes, so the plan still holds and is written
+    from exactly those bytes: B never reaches the output.
     """
-    _write(
-        tmp_path / "r1.md",
-        "---\ntype: Rotina\nsetor: GAB\nnote: keep-me-A\n---\n# R1\n",
-    )
+    source_a = "---\ntype: Rotina\nsetor: GAB\nnote: keep-me-A\n---\n# R1\n"
+    _write(tmp_path / "r1.md", source_a)
 
-    real_validate_path = apply_module.validate_path
-    calls = {"count": 0}
+    def flicker() -> None:
+        _write(tmp_path / "r1.md", source_a.replace("keep-me-A", "keep-me-B"))
+        _write(tmp_path / "r1.md", source_a)
 
-    def racing_validate_path(
-        path: Path,
-        exclude: Sequence[str] = (),
-        require_spec: str | None = None,
-        *,
-        normative_spec: bool = False,
-    ) -> ValidationReport:
-        calls["count"] += 1
-        if calls["count"] == 1:  # right after the baseline check, before the
-            # candidate is built - the exact window a fresh read of the real
-            # path (instead of the snapshot's bytes) would have been vulnerable
-            # to, before the fix.
-            (tmp_path / "r1.md").write_text(
-                "---\ntype: Rotina\nsetor: GAB\nnote: keep-me-B\n---\n# R1\n",
-                encoding="utf-8",
-            )
-            (tmp_path / "r1.md").write_text(
-                "---\ntype: Rotina\nsetor: GAB\nnote: keep-me-A\n---\n# R1\n",
-                encoding="utf-8",
-            )
-        return real_validate_path(path, exclude, require_spec, normative_spec=normative_spec)
-
-    monkeypatch.setattr(apply_module, "validate_path", racing_validate_path)
+    _after_planning_snapshot(monkeypatch, flicker)
 
     result = apply_bundle(
         str(tmp_path),
@@ -719,8 +657,8 @@ def test_candidate_is_built_from_snapshot_bytes_not_a_transient_live_read(
 
     assert result["succeeded"] is True, result
     text = _read(tmp_path / "r1.md")
-    assert "setor: '#GAB#FSB'" in text or "setor: #GAB#FSB" in text
     assert "note: keep-me-A" in text
+    assert "keep-me-B" not in text
 
 
 def test_update_selecting_an_already_null_field_deletes_it(tmp_path: Path) -> None:
@@ -1070,3 +1008,19 @@ def test_typed_apply_keeps_undeclared_alter_add_semantics(tmp_path: Path) -> Non
 
     assert result["succeeded"] is True, result
     assert "status: ok" in _read(tmp_path / "r1.md")
+
+
+def test_frontmatter_the_old_round_trip_check_refused_is_now_edited_losslessly(
+    tmp_path: Path,
+) -> None:
+    source = "---\n{type: Rotina, setor: GAB, note: 'kept # as is'}\n---\n# R1\n"
+    _write(tmp_path / "r1.md", source)
+
+    result = apply_bundle(
+        str(tmp_path),
+        sql="UPDATE \"Rotina\" SET setor = 'FSB' WHERE setor = 'GAB'",
+        write=True,
+    )
+
+    assert result["succeeded"] is True, result
+    assert _read(tmp_path / "r1.md") == source.replace("setor: GAB", 'setor: "FSB"')
