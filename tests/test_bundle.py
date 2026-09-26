@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from typing import TYPE_CHECKING
 
@@ -177,7 +178,7 @@ def test_logical_keys_do_not_depend_on_checkout_path(tmp_path: Path) -> None:
 
 
 def test_one_unparseable_concept_does_not_abort_the_run(tmp_path: Path) -> None:
-    _write(tmp_path / "a-broken.md", "---\nblob: !!binary aGk=\n---\n")
+    _write(tmp_path / "a-broken.md", "---\nkey: [unclosed\n---\n")
     _write(tmp_path / "b-cyclic.md", "---\nself: &a\n  child: *a\n---\n")
     _write(tmp_path / "c-good.md", "---\ntype: Node\n---\n# Good\n")
 
@@ -186,6 +187,26 @@ def test_one_unparseable_concept_does_not_abort_the_run(tmp_path: Path) -> None:
     assert report.markdown_count == 3
     assert report.concept_count == 1
     assert [item.code for item in report.violations] == ["OKF001", "OKF001"]
+
+
+def test_yaml_tag_without_json_form_warns_and_keeps_the_concept(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "a.md",
+        "---\ntype: Node\nblob: !!binary aGk=\ncustom: !thing value\n---\n# A\n",
+    )
+
+    bundle = load_bundle(tmp_path)
+
+    assert bundle.is_conformant
+    [concept] = bundle.concepts
+    assert json.loads(concept.frontmatter_json) == {
+        "blob": "aGk=",
+        "custom": "value",
+        "type": "Node",
+    }
+    [warning] = bundle.validate()
+    assert (warning.code, warning.severity.value) == ("OKF102", "warning")
+    assert "!!binary, !thing" in warning.message
 
 
 def test_malformed_url_in_frontmatter_does_not_abort_the_run(tmp_path: Path) -> None:

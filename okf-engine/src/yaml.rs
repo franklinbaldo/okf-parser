@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use serde_json::{Map, Value};
 use yaml_rust2::parser::{Event, MarkedEventReceiver, Parser, Tag};
@@ -15,6 +15,7 @@ struct Loader {
     stack: Vec<(Container, usize)>,
     anchors: HashMap<usize, Value>,
     error: Option<String>,
+    lossy_tags: BTreeSet<String>,
 }
 
 enum Container {
@@ -92,9 +93,10 @@ impl Loader {
 }
 
 /// Standard tags whose values have a JSON representation. Scalars keep their
-/// spelling (typed scalars stay strings); anything else, such as `!!binary`,
-/// `!!set` or an application tag, has no faithful JSON form and is rejected,
-/// as the reference implementation's safe loader rejects it.
+/// spelling (typed scalars stay strings). Any other tag, such as `!!binary`,
+/// `!!set` or an application tag, has no faithful JSON form: the value keeps
+/// its written spelling or structure, and the tag is reported (OKF102) so a
+/// concept is never dropped over one field.
 const JSON_TAGS: &[&str] = &[
     "str",
     "null",
@@ -107,22 +109,19 @@ const JSON_TAGS: &[&str] = &[
 ];
 
 impl Loader {
-    /// Record an error for a tag with no JSON representation; true if rejected.
-    fn reject_tag(&mut self, tag: Option<&Tag>) -> bool {
+    /// Remember a tag whose meaning JSON cannot carry.
+    fn note_tag(&mut self, tag: Option<&Tag>) {
         let Some(tag) = tag else {
-            return false;
+            return;
         };
-        let standard =
-            tag.handle == "tag:yaml.org,2002:" && JSON_TAGS.contains(&tag.suffix.as_str());
+        let yaml = tag.handle == "tag:yaml.org,2002:";
+        let standard = yaml && JSON_TAGS.contains(&tag.suffix.as_str());
         let non_specific = tag.handle == "!" && tag.suffix.is_empty();
         if standard || non_specific {
-            return false;
+            return;
         }
-        self.error = Some(format!(
-            "frontmatter uses unsupported YAML tag {}{}",
-            tag.handle, tag.suffix
-        ));
-        true
+        let handle = if yaml { "!!" } else { tag.handle.as_str() };
+        self.lossy_tags.insert(format!("{handle}{}", tag.suffix));
     }
 }
 
@@ -133,15 +132,11 @@ impl MarkedEventReceiver for Loader {
         }
         match event {
             Event::SequenceStart(anchor, tag) => {
-                if self.reject_tag(tag.as_ref()) {
-                    return;
-                }
+                self.note_tag(tag.as_ref());
                 self.stack.push((Container::Sequence(Vec::new()), anchor));
             }
             Event::MappingStart(anchor, tag) => {
-                if self.reject_tag(tag.as_ref()) {
-                    return;
-                }
+                self.note_tag(tag.as_ref());
                 self.stack.push((
                     Container::Mapping {
                         values: Map::new(),
@@ -152,9 +147,7 @@ impl MarkedEventReceiver for Loader {
             }
             Event::SequenceEnd | Event::MappingEnd => self.finish(),
             Event::Scalar(value, style, anchor, tag) => {
-                if self.reject_tag(tag.as_ref()) {
-                    return;
-                }
+                self.note_tag(tag.as_ref());
                 let tagged_null = tag.as_ref().is_some_and(|tag: &Tag| {
                     tag.handle == "tag:yaml.org,2002:" && tag.suffix == "null"
                 });
@@ -257,7 +250,19 @@ fn try_parse_canonical_mapping(source: &str) -> Option<Map<String, Value>> {
     Some(result)
 }
 
+/// A frontmatter mapping plus the tags whose meaning it could not carry.
+pub struct Frontmatter {
+    pub mapping: Map<String, Value>,
+    /// Tags with no JSON representation, spelled `!!binary` / `!local`, sorted.
+    pub lossy_tags: Vec<String>,
+}
+
+#[cfg(test)]
 fn parse_mapping_yaml(source: &str) -> Result<Map<String, Value>, String> {
+    parse_frontmatter_yaml(source).map(|parsed| parsed.mapping)
+}
+
+fn parse_frontmatter_yaml(source: &str) -> Result<Frontmatter, String> {
     let mut parser = Parser::new_from_str(source);
     let mut loader = Loader::default();
     parser
@@ -269,18 +274,29 @@ fn parse_mapping_yaml(source: &str) -> Result<Map<String, Value>, String> {
     if loader.documents.len() > 1 {
         return Err("invalid YAML frontmatter: multiple documents are not supported".into());
     }
-    match loader.documents.into_iter().next().unwrap_or(Value::Null) {
-        Value::Null => Ok(Map::new()),
-        Value::Object(mapping) => Ok(mapping),
-        _ => Err("frontmatter must be a YAML mapping".into()),
-    }
+    let mapping = match loader.documents.into_iter().next().unwrap_or(Value::Null) {
+        Value::Null => Map::new(),
+        Value::Object(mapping) => mapping,
+        _ => return Err("frontmatter must be a YAML mapping".into()),
+    };
+    Ok(Frontmatter {
+        mapping,
+        lossy_tags: loader.lossy_tags.into_iter().collect(),
+    })
 }
 
 pub fn parse_mapping(source: &str) -> Result<Map<String, Value>, String> {
+    parse_frontmatter(source).map(|parsed| parsed.mapping)
+}
+
+pub fn parse_frontmatter(source: &str) -> Result<Frontmatter, String> {
     if let Some(mapping) = try_parse_canonical_mapping(source) {
-        return Ok(mapping);
+        return Ok(Frontmatter {
+            mapping,
+            lossy_tags: Vec::new(),
+        });
     }
-    parse_mapping_yaml(source)
+    parse_frontmatter_yaml(source)
 }
 
 fn write_sorted(value: &Value, output: &mut String, spaced: bool) {
@@ -343,7 +359,9 @@ pub fn canonical_parsed(mapping: &Map<String, Value>, body: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_mapping, parse_mapping_yaml, try_parse_canonical_mapping};
+    use super::{
+        parse_frontmatter, parse_mapping, parse_mapping_yaml, try_parse_canonical_mapping,
+    };
 
     #[test]
     fn json_representable_tags_are_accepted() {
@@ -353,16 +371,26 @@ mod tests {
     }
 
     #[test]
-    fn tags_with_no_json_representation_are_rejected() {
-        for source in [
-            "blob: !!binary aGk=",
-            "items: !!set {a: null}",
-            "pairs: !!omap [a: 1]",
-            "custom: !thing value",
-        ] {
-            let error = parse_mapping(source).unwrap_err();
-            assert!(error.contains("unsupported YAML tag"), "{source}: {error}");
-        }
+    fn tags_with_no_json_representation_keep_their_spelling_and_are_reported() {
+        let parsed =
+            parse_frontmatter("type: Note\nblob: !!binary aGk=\ncustom: !thing value").unwrap();
+        assert_eq!(parsed.mapping["blob"], "aGk=");
+        assert_eq!(parsed.mapping["custom"], "value");
+        assert_eq!(parsed.lossy_tags, ["!!binary", "!thing"]);
+    }
+
+    #[test]
+    fn tagged_collections_keep_their_structure() {
+        let parsed = parse_frontmatter("items: !!set {a: null}\npairs: !!omap [a: 1]").unwrap();
+        assert_eq!(parsed.mapping["items"], serde_json::json!({"a": null}));
+        assert_eq!(parsed.mapping["pairs"], serde_json::json!([{"a": "1"}]));
+        assert_eq!(parsed.lossy_tags, ["!!omap", "!!set"]);
+    }
+
+    #[test]
+    fn json_representable_tags_are_not_reported() {
+        let parsed = parse_frontmatter("type: !!str Reference\nn: !!int 3").unwrap();
+        assert!(parsed.lossy_tags.is_empty());
     }
 
     #[test]

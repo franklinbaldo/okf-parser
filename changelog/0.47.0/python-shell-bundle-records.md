@@ -19,8 +19,12 @@ Breaking:
   `.execute()` shim: read the records directly, or query them as SQL through
   `attach_okf`.
 - Frontmatter with a YAML tag that has no JSON representation (`!!binary`,
-  `!!set`, application tags) is reported as `OKF001` by the native engine too,
-  matching the Python engine it replaces.
+  `!!set`, `!!omap`, application tags such as `!thing`) no longer drops the
+  concept. The value keeps its written spelling or structure, and a new
+  **`OKF102` warning** names the tags, so the bundle stays conformant. The
+  Python engine used to reject these documents with `OKF001`. Writes that still
+  parse in Python (`apply`, `edit`) reject such a document until they move to
+  the binary.
 
 The binary's answers now carry a protocol version, validated by the shell, and
 include the graph summary, so `Bundle.graph().summary()` no longer computes
