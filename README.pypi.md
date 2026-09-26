@@ -327,16 +327,26 @@ assert report.markdown_count == report.concept_count + report.reserved_count
 assert report.is_conformant
 ```
 
-Declared RFC 0006 types can be queried directly as Ibis relations without a CLI or database-file round trip:
+A loaded bundle answers SQL directly, no database file involved. The tables are
+the ones `okf-parser duckdb` exports, and declared RFC 0006 types become typed
+tables with `spec_template`:
 
 ```python
 bundle = load_bundle(Path("knowledge"))
-with bundle.compile_types("docs/types/{slug}.md") as typed:
-    routines = typed["Rotina"]
-    print(routines.filter(routines.custo.notnull()).execute())
+print(bundle.sql("SELECT concept_type, count(*) FROM concepts GROUP BY 1").to_dicts())
+
+routines = bundle.sql(
+    "SELECT __okf_path, custo FROM Rotina WHERE custo IS NOT NULL",
+    spec_template="docs/types/{slug}.md",
+)
+for path, cost in routines:      # cost is a Decimal
+    print(path, cost)
 ```
 
-`TypedRelations` owns an ephemeral DuckDB/Ibis backend; use it as a context manager or call `close()` explicitly. With no matching declarations, `tables` is empty rather than silently inventing an inferred physical schema.
+The query runs in the binary over this snapshot, is one read-only statement, and
+cannot read files or reach the network. Values come back typed by their DuckDB
+column (`Decimal`, `date`, `datetime`, lists, dicts). The same query runs from the
+command line as `okf-parser sql knowledge "SELECT ..."` and over MCP as `sql`.
 
 `load_bundle`, `validate_path` and `format_path` read the bundle's `.okfignore`
 on their own, and take an `exclude` sequence for patterns supplied per call:

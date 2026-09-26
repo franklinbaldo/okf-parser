@@ -33,6 +33,7 @@ type JsonObject = dict[str, Any]
 
 DEFAULT_TOOLS = {
     "check",
+    "sql",
     "inventory",
     "graph",
     "schema",
@@ -41,7 +42,15 @@ DEFAULT_TOOLS = {
     "init_preview",
     "import_preview",
 }
-NATIVE_TOOLS = {"check", "inventory", "graph", "init_preview", "init_write", "duckdb_export"}
+NATIVE_TOOLS = {
+    "check",
+    "inventory",
+    "graph",
+    "sql",
+    "init_preview",
+    "init_write",
+    "duckdb_export",
+}
 """Answered by the binary itself, never delegated to the bridge."""
 WRITE_TOOLS = {
     "format_write",
@@ -177,6 +186,7 @@ def test_mcp_effect_annotations_describe_maximum_possible_effect() -> None:
         tools = session.tools()
     expected = {
         "check": (True, False, True, False),
+        "sql": (True, False, True, False),
         "inventory": (True, False, True, False),
         "graph": (True, False, True, False),
         "schema": (False, True, False, True),
@@ -252,6 +262,25 @@ def test_duckdb_export_is_native_and_answers_a_collision_as_data(tmp_path: Path)
         "diagnostics",
     ]
     assert "--overwrite" in refused["structuredContent"]["error"]
+
+
+@native
+def test_sql_answers_rows_and_caps_them(tmp_path: Path) -> None:
+    bundle = _bundle(tmp_path)
+
+    with McpSession() as session:
+        tools = session.tools()
+        answered = session.call(
+            "sql", {"path": str(bundle), "query": "SELECT concept_id FROM concepts ORDER BY 1"}
+        )
+        capped = session.call("sql", {"path": str(bundle), "query": "FROM concepts", "limit": 1})
+        refused = session.call("sql", {"path": str(bundle), "query": "DROP TABLE concepts"})
+
+    assert _annotation_tuple(tools["sql"]) == (True, False, True, False)
+    assert answered["structuredContent"]["rows"] == [["a"], ["b"]]
+    assert capped["structuredContent"]["truncated"] is True
+    assert refused["isError"] is True
+    assert "one read-only query" in refused["content"][0]["text"]
 
 
 @native

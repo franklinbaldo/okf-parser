@@ -139,7 +139,9 @@ def rust_load_bundle(
         raise RustCoreError(message) from exc
 
 
-type ErrorKind = Literal["request", "spec_template", "declared_schema", "relational_schema", "io"]
+type ErrorKind = Literal[
+    "request", "spec_template", "declared_schema", "relational_schema", "query", "io"
+]
 
 
 class NativeError(BaseModel):
@@ -149,7 +151,8 @@ class NativeError(BaseModel):
     fault); ``spec_template`` is the request error of a specification
     template without ``{slug}``; ``declared_schema`` and
     ``relational_schema`` are a trusted SQL file that failed or declares
-    nothing usable; ``io`` means the filesystem or DuckDB failed underneath
+    nothing usable; ``query`` is a ``Bundle.sql()`` query that is not one
+    valid read-only query; ``io`` means the filesystem or DuckDB failed underneath
     the command.
     """
 

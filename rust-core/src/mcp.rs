@@ -2,7 +2,7 @@
 //!
 //! The protocol, the tool schemas and the effect annotations live here. A tool
 //! is answered natively once its logic exists in Rust: `check`, `inventory`,
-//! `graph`, `init_*` and `duckdb_export`. The others (`schema`, `format_*`,
+//! `graph`, `sql`, `init_*` and `duckdb_export`. The others (`schema`, `format_*`,
 //! `apply_*`, `import_*`) are delegated to `python -m okf_parser.mcp_bridge`,
 //! which runs the same service function the Python CLI does.
 
@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 
 use okf_db::export::ExportOptions;
+use okf_db::query::QueryOptions;
 
 use crate::{commands, python};
 
@@ -66,6 +67,30 @@ pub struct CheckArgs {
     relational_schema: Option<PathBuf>,
     #[serde(default)]
     classify: bool,
+}
+
+/// At most this many rows answer a `sql` call unless it asks for fewer.
+const SQL_ROW_LIMIT: usize = 1_000;
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SqlArgs {
+    path: PathBuf,
+    /// One read-only query (SELECT, WITH, FROM ..., VALUES) over `concepts`,
+    /// `links`, `reserved`, `diagnostics` and, with `spec_template`, one table
+    /// per declared type.
+    query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exclude: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    spec_template: Option<String>,
+    /// Return at most this many rows (1-1000).
+    #[serde(default = "default_sql_limit")]
+    limit: usize,
+}
+
+fn default_sql_limit() -> usize {
+    SQL_ROW_LIMIT
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -403,6 +428,29 @@ impl OkfServer {
     }
 
     #[tool(
+        description = "Run one read-only SQL query over the bundle: tables concepts, links, \
+            reserved and diagnostics, plus one table per declared type with spec_template. \
+            The query cannot read files or reach the network. `truncated` says whether \
+            `limit` cut the rows short.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn sql(&self, Parameters(args): Parameters<SqlArgs>) -> CallToolResult {
+        native(move || {
+            let options = QueryOptions {
+                spec_template: args.spec_template.as_deref(),
+                limit: Some(args.limit.clamp(1, SQL_ROW_LIMIT)),
+            };
+            commands::sql(&args.path, exclude(&args.exclude), &args.query, options)
+        })
+        .await
+    }
+
+    #[tool(
         description = "Summarize resolved concept relationships.",
         annotations(
             read_only_hint = true,
@@ -663,6 +711,7 @@ mod tests {
                 "init_preview",
                 "inventory",
                 "schema",
+                "sql",
             ]
         );
     }
@@ -670,7 +719,7 @@ mod tests {
     #[test]
     fn allow_write_adds_exactly_the_commit_tools() {
         let names = tool_names(&OkfServer::new(true, PathBuf::from("python")));
-        assert_eq!(names.len(), 13);
+        assert_eq!(names.len(), 14);
         for tool in WRITE_TOOLS {
             assert!(names.iter().any(|name| name == tool), "missing {tool}");
         }

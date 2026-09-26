@@ -8,6 +8,7 @@ use std::{fmt, io};
 
 use okf_db::export::{ExportError, ExportOptions, ExportReport, export_bundle};
 use okf_db::infer::{InferError, scaffold_starter_schemas};
+use okf_db::query::{QueryError, QueryOptions, QueryResult, query_bundle};
 use okf_db::relational::{RelationalSchemaError, load_relational_schema, validate_relations};
 use okf_engine::check::{
     self, CheckError, CheckReport, Inventory, READ_CONCURRENCY, SpecRules, check_loaded,
@@ -224,6 +225,42 @@ pub fn export(path: &Path, options: &ExportOptions<'_>) -> Result<ExportAnswer, 
         }
         Err(error) => Err(error),
     }
+}
+
+/// Why `sql` produced no rows.
+#[derive(Debug)]
+pub enum SqlError {
+    Load(LoadError),
+    Query(QueryError),
+}
+
+impl fmt::Display for SqlError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Load(error) => error.fmt(f),
+            Self::Query(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for SqlError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Load(error) => Some(error),
+            Self::Query(error) => Some(error),
+        }
+    }
+}
+
+/// `okf-parser sql`: one read-only query over the bundle at `path`.
+pub fn sql(
+    path: &Path,
+    exclude: &[String],
+    query: &str,
+    options: QueryOptions<'_>,
+) -> Result<QueryResult, SqlError> {
+    let data = load_bundle(path, exclude, READ_CONCURRENCY).map_err(SqlError::Load)?;
+    query_bundle(&data, query, options).map_err(SqlError::Query)
 }
 
 /// Whether the caller, not the environment, is at fault for a load failure.

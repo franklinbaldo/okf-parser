@@ -12,6 +12,7 @@ default = ["bundled"]
 bundled = ["duckdb/bundled", "duckdb/json", "duckdb/parquet"]
 
 [dependencies]
+chrono = "0.4"
 duckdb = "~1.10504.0"
 okf-engine = { path = "../okf-engine", version = "0.48.0" }
 serde = { version = "1", features = ["derive"] }

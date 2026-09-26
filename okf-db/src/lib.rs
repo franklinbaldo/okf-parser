@@ -10,5 +10,6 @@ pub mod catalog;
 pub mod declared;
 pub mod export;
 pub mod infer;
+pub mod query;
 pub mod relational;
 pub mod typed;

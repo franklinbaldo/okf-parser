@@ -19,7 +19,7 @@ use crate::declared::{DeclaredSchemaError, discover_declared_schemas};
 use crate::typed::{TypedTableError, materialize_typed_tables};
 
 /// The base tables, in creation order, with their columns.
-const TABLES: [(&str, &[(&str, &str)]); 4] = [
+pub(crate) const TABLES: [(&str, &[(&str, &str)]); 4] = [
     (
         "concepts",
         &[
@@ -204,7 +204,7 @@ fn replace_table(
     ))
 }
 
-fn fill_tables(
+pub(crate) fn fill_tables(
     connection: &Connection,
     schema: &Schema,
     data: &BundleData,

@@ -22,7 +22,7 @@ from okf_parser.graphql_adapter import (
 from okf_parser.ingestion import DocumentEnvelope, IngestionCapability, ingest_documents
 from okf_parser.models import Severity, ValidationReport, Violation
 from okf_parser.serialization import OKFDocument, OKFRepresentation, SupportsOKF, dumps, to_okf
-from okf_parser.typed_relations import TypedRelations
+from okf_parser.sql import SqlColumn, SqlError, SqlResult
 
 __all__ = [
     "Bundle",
@@ -38,8 +38,10 @@ __all__ = [
     "OKFDocument",
     "OKFRepresentation",
     "Severity",
+    "SqlColumn",
+    "SqlError",
+    "SqlResult",
     "SupportsOKF",
-    "TypedRelations",
     "ValidationReport",
     "Violation",
     "build_graphql_schema",

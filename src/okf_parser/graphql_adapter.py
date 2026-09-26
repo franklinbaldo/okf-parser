@@ -338,15 +338,20 @@ def _typed_values(
     if spec_template is None:
         return {}
     values: dict[str, dict[str, dict[str, object]]] = {}
-    with bundle.compile_types(spec_template) as typed:
-        for concept_type in typed:
-            rows = typed[concept_type].execute().to_dict(orient="records")
-            by_path: dict[str, dict[str, object]] = {}
-            for row in rows:
-                path = row.get("__okf_path")
-                if isinstance(path, str):
-                    by_path[path] = dict(row)
-            values[concept_type] = by_path
+    tables = bundle.sql(
+        "SELECT table_name FROM information_schema.tables "
+        "WHERE table_schema = 'okf_types' ORDER BY table_name",
+        spec_template=spec_template,
+    )
+    for (concept_type,) in tables:
+        quoted = '"' + str(concept_type).replace('"', '""') + '"'
+        rows = bundle.sql(f"FROM okf_types.{quoted}", spec_template=spec_template).to_dicts()
+        by_path: dict[str, dict[str, object]] = {}
+        for row in rows:
+            path = row.get("__okf_path")
+            if isinstance(path, str):
+                by_path[path] = row
+        values[str(concept_type)] = by_path
     return values
 
 
