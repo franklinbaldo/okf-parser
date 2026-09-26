@@ -27,12 +27,12 @@ pub(crate) const IGNORED: &[&str] = &[
     "node_modules",
 ];
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Facts {
     pub links: Vec<String>,
     pub headings: Vec<(u8, String)>,
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConceptRecord {
     pub concept_id: String,
     pub logical_key: String,
@@ -69,7 +69,7 @@ impl ReservedFile {
         }
     }
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReservedRecord {
     pub path: String,
     pub filename: ReservedFile,
@@ -88,7 +88,7 @@ impl LinkOrigin {
         }
     }
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinkRecord {
     pub source_id: String,
     pub raw_target: String,
@@ -143,6 +143,12 @@ pub enum Code {
     /// `log.md` dates are not newest first.
     #[serde(rename = "OKF009")]
     Okf009,
+    /// A type in use has no specification document.
+    #[serde(rename = "OKF010")]
+    Okf010,
+    /// A concept lacks a field its type's specification requires.
+    #[serde(rename = "OKF011")]
+    Okf011,
     /// A local Markdown link does not resolve.
     #[serde(rename = "OKF101")]
     Okf101,
@@ -162,6 +168,8 @@ impl Code {
             Self::Okf007 => "OKF007",
             Self::Okf008 => "OKF008",
             Self::Okf009 => "OKF009",
+            Self::Okf010 => "OKF010",
+            Self::Okf011 => "OKF011",
             Self::Okf101 => "OKF101",
             Self::Okf102 => "OKF102",
         }
@@ -172,14 +180,14 @@ impl fmt::Display for Code {
         f.write_str(self.as_str())
     }
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Diagnostic {
     pub code: Code,
     pub severity: Severity,
     pub path: String,
     pub message: String,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct BundleData {
     pub root: String,
     pub concepts: Vec<ConceptRecord>,
@@ -192,8 +200,11 @@ pub struct BundleData {
 #[derive(Debug)]
 pub enum LoadError {
     /// The root does not exist or cannot be resolved.
-    Root(io::Error),
-    NotADirectory,
+    Root {
+        path: PathBuf,
+        source: io::Error,
+    },
+    NotADirectory(PathBuf),
     Concurrency(usize),
     Exclusions(ExclusionError),
     Walk(walkdir::Error),
@@ -204,8 +215,14 @@ pub enum LoadError {
 impl fmt::Display for LoadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Root(error) => error.fmt(f),
-            Self::NotADirectory => f.write_str("bundle root is not a directory"),
+            Self::Root { path, source } => write!(
+                f,
+                "bundle root is not a directory: {} ({source})",
+                path.display()
+            ),
+            Self::NotADirectory(path) => {
+                write!(f, "bundle root is not a directory: {}", path.display())
+            }
             Self::Concurrency(_) => {
                 f.write_str("read concurrency must be an integer from 1 through 256")
             }
@@ -219,12 +236,12 @@ impl fmt::Display for LoadError {
 impl std::error::Error for LoadError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Root(error) => Some(error),
+            Self::Root { source, .. } => Some(source),
             Self::Exclusions(error) => Some(error),
             Self::Walk(error) => Some(error),
             Self::ThreadPool(error) => Some(error),
             Self::Path(error) => Some(error),
-            Self::NotADirectory | Self::Concurrency(_) => None,
+            Self::NotADirectory(_) | Self::Concurrency(_) => None,
         }
     }
 }
@@ -395,8 +412,17 @@ pub(crate) fn exclusions(root: &Path, patterns: &[String]) -> Result<Gitignore, 
     }
     builder.build().map_err(ExclusionError)
 }
+/// Every Markdown file below `root` that no exclusion rule could hide: only
+/// symlinks and the always-ignored directories are skipped. This is what a
+/// bundle would contain with no `.okfignore` and no `--exclude`.
+pub fn discover_unfiltered(root: &Path) -> Result<Vec<PathBuf>, LoadError> {
+    walk_markdown(root, None)
+}
 pub fn discover(root: &Path, patterns: &[String]) -> Result<Vec<PathBuf>, LoadError> {
     let rules = exclusions(root, patterns)?;
+    walk_markdown(root, Some(&rules))
+}
+fn walk_markdown(root: &Path, rules: Option<&Gitignore>) -> Result<Vec<PathBuf>, LoadError> {
     let mut paths = Vec::new();
     for entry in WalkDir::new(root)
         .follow_links(false)
@@ -407,7 +433,8 @@ pub fn discover(root: &Path, patterns: &[String]) -> Result<Vec<PathBuf>, LoadEr
         if entry.file_type().is_file() && !entry.file_type().is_symlink() && markdown(entry.path())
         {
             let rel = entry.path().strip_prefix(root).unwrap();
-            if !rules.matched_path_or_any_parents(rel, false).is_ignore() {
+            if !rules.is_some_and(|rules| rules.matched_path_or_any_parents(rel, false).is_ignore())
+            {
                 paths.push(entry.into_path());
             }
         }
@@ -733,9 +760,12 @@ pub fn load_bundle(
     patterns: &[String],
     concurrency: usize,
 ) -> Result<BundleData, LoadError> {
-    let root = root.canonicalize().map_err(LoadError::Root)?;
+    let root = root.canonicalize().map_err(|source| LoadError::Root {
+        path: root.to_owned(),
+        source,
+    })?;
     if !root.is_dir() {
-        return Err(LoadError::NotADirectory);
+        return Err(LoadError::NotADirectory(root));
     }
     if !(1..=256).contains(&concurrency) {
         return Err(LoadError::Concurrency(concurrency));
@@ -863,9 +893,7 @@ pub fn load_bundle(
             });
         }
     }
-    diagnostics.sort_by(|a, b| {
-        (&a.path, a.severity, a.code, &a.message).cmp(&(&b.path, b.severity, b.code, &b.message))
-    });
+    crate::check::order(&mut diagnostics);
     Ok(BundleData {
         root: root_text,
         concepts,
@@ -932,6 +960,8 @@ mod tests {
             Code::Okf007,
             Code::Okf008,
             Code::Okf009,
+            Code::Okf010,
+            Code::Okf011,
             Code::Okf101,
             Code::Okf102,
         ];
@@ -970,8 +1000,8 @@ mod tests {
         let error = load_bundle(&bundle.0, &["{a".into()], 1).err().unwrap();
         assert!(matches!(error, LoadError::Exclusions(_)), "{error:?}");
         assert_eq!(
-            LoadError::NotADirectory.to_string(),
-            "bundle root is not a directory"
+            LoadError::NotADirectory("/b/a.md".into()).to_string(),
+            "bundle root is not a directory: /b/a.md"
         );
     }
 

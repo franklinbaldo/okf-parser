@@ -197,7 +197,14 @@ DuckDB.
 
 - **3a (0.48.0):** the write engine and the single-concept body `edit`, which
   now runs entirely in the binary (`__edit`).
-- **3b:** `check`, `inventory` and `classify` as native commands and MCP tools.
+- **3b (0.48.0):** `check` (with `--classify`, `--require-spec` and
+  `--normative-spec`, so `OKF010`/`OKF011` too), `inventory`, `graph` and
+  `init` run natively as CLI commands, MCP tools and the `__check`/
+  `__init-specs` shell requests (`okf-engine/src/check.rs`, `specs.rs`).
+  The binary no longer falls through to Python for them, except
+  `check --relational-schema` and `init --infer-schema`, which need DuckDB.
+  The binary also emits the final public `frontmatter_json` spelling: the
+  compact, UTF-16-ordered JSON the parsed digest is taken over.
 - **3c:** the non-SQL `apply` paths (type and field renames) and `dumps`, on
   the write engine. ruamel.yaml leaves.
 

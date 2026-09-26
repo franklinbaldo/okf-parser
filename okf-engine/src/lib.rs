@@ -1,5 +1,7 @@
+pub mod check;
 pub mod engine;
 pub mod graph;
+pub mod specs;
 pub mod write;
 mod yaml;
 

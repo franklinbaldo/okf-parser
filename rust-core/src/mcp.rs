@@ -10,7 +10,6 @@ use std::process::Stdio;
 use std::sync::Arc;
 use std::{fmt, io};
 
-use okf_engine::{ConceptGraph, LoadError, load_bundle};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
@@ -21,7 +20,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 
-use crate::python;
+use crate::{commands, python};
 
 const INSTRUCTIONS: &str = "Deterministic OKF inspection and preview tools. Explicit commit tools \
 are available only when the server is launched with --allow-write. Tool annotations describe \
@@ -35,8 +34,6 @@ pub const WRITE_TOOLS: [&str; 5] = [
     "import_write",
     "duckdb_export",
 ];
-
-const READ_CONCURRENCY: usize = 32;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum Transport {
@@ -291,6 +288,26 @@ impl std::error::Error for BridgeError {
     }
 }
 
+impl OkfServer {
+    /// `init_preview`/`init_write`: native, unless `infer_schema` needs DuckDB.
+    async fn init(&self, args: InitArgs, write: bool) -> CallToolResult {
+        if args.infer_schema {
+            let tool = if write { "init_write" } else { "init_preview" };
+            return self.delegate(tool, args).await;
+        }
+        native(move || {
+            commands::init_specs(
+                &args.path,
+                exclude(&args.exclude),
+                &args.spec_template,
+                write,
+            )
+            .map(|specs| commands::InitReport { specs })
+        })
+        .await
+    }
+}
+
 /// Run one delegated call and return its JSON result, or the error it raised.
 async fn python_bridge(python: &Path, request: &Value) -> Result<Value, BridgeError> {
     let mut child = tokio::process::Command::new(python)
@@ -328,38 +345,25 @@ fn bridge_error(stderr: &str) -> String {
         .to_owned()
 }
 
-/// Why the native `graph` tool produced no summary.
-#[derive(Debug)]
-enum GraphError {
-    Load(LoadError),
-    Encode(serde_json::Error),
-}
-
-impl fmt::Display for GraphError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Load(error) => error.fmt(f),
-            Self::Encode(error) => error.fmt(f),
-        }
+/// Run a native command off the async runtime and return its report as
+/// structured content, or its error as the tool's error text.
+async fn native<T, E>(command: impl FnOnce() -> Result<T, E> + Send + 'static) -> CallToolResult
+where
+    T: Serialize + Send + 'static,
+    E: std::error::Error + Send + 'static,
+{
+    match tokio::task::spawn_blocking(command).await {
+        Ok(Ok(report)) => match serde_json::to_value(report) {
+            Ok(value) => CallToolResult::structured(value),
+            Err(error) => tool_error(&error),
+        },
+        Ok(Err(error)) => tool_error(&error),
+        Err(error) => tool_error(&error),
     }
 }
 
-impl std::error::Error for GraphError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Load(error) => Some(error),
-            Self::Encode(error) => Some(error),
-        }
-    }
-}
-
-fn graph_summary(args: &PathArgs) -> Result<Value, GraphError> {
-    let exclude = args.exclude.as_deref().unwrap_or_default();
-    let data = load_bundle(&args.path, exclude, READ_CONCURRENCY).map_err(GraphError::Load)?;
-    let summary = ConceptGraph::from_bundle(&data).summary();
-    let mut payload = serde_json::to_value(summary).map_err(GraphError::Encode)?;
-    payload["root"] = Value::String(data.root);
-    Ok(payload)
+fn exclude(patterns: &Option<Vec<String>>) -> &[String] {
+    patterns.as_deref().unwrap_or_default()
 }
 
 #[tool_router]
@@ -374,7 +378,19 @@ impl OkfServer {
         )
     )]
     async fn check(&self, Parameters(args): Parameters<CheckArgs>) -> CallToolResult {
-        self.delegate("check", args).await
+        if args.relational_schema.is_some() {
+            return self.delegate("check", args).await;
+        }
+        native(move || {
+            commands::check(
+                &args.path,
+                exclude(&args.exclude),
+                args.require_spec.as_deref(),
+                args.normative_spec,
+                args.classify,
+            )
+        })
+        .await
     }
 
     #[tool(
@@ -387,7 +403,7 @@ impl OkfServer {
         )
     )]
     async fn inventory(&self, Parameters(args): Parameters<InventoryArgs>) -> CallToolResult {
-        self.delegate("inventory", args).await
+        native(move || commands::inventory(&args.path, exclude(&args.exclude), args.digests)).await
     }
 
     #[tool(
@@ -400,11 +416,7 @@ impl OkfServer {
         )
     )]
     async fn graph(&self, Parameters(args): Parameters<PathArgs>) -> CallToolResult {
-        match tokio::task::spawn_blocking(move || graph_summary(&args)).await {
-            Ok(Ok(value)) => CallToolResult::structured(value),
-            Ok(Err(error)) => tool_error(&error),
-            Err(error) => tool_error(&error),
-        }
+        native(move || commands::graph(&args.path, exclude(&args.exclude))).await
     }
 
     #[tool(
@@ -456,7 +468,7 @@ impl OkfServer {
         )
     )]
     async fn init_preview(&self, Parameters(args): Parameters<InitArgs>) -> CallToolResult {
-        self.delegate("init_preview", args).await
+        self.init(args, false).await
     }
 
     #[tool(
@@ -511,7 +523,7 @@ impl OkfServer {
         )
     )]
     async fn init_write(&self, Parameters(args): Parameters<InitArgs>) -> CallToolResult {
-        self.delegate("init_write", args).await
+        self.init(args, true).await
     }
 
     #[tool(
@@ -618,6 +630,7 @@ pub fn serve(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use okf_engine::LoadError;
 
     fn tool_names(server: &OkfServer) -> Vec<String> {
         let mut names: Vec<_> = server
@@ -728,11 +741,9 @@ mod tests {
 
     #[test]
     fn a_missing_bundle_is_a_typed_graph_error() {
-        let args: PathArgs =
-            serde_json::from_value(json!({"path": "/definitely/not/a/bundle"})).unwrap();
         assert!(matches!(
-            graph_summary(&args),
-            Err(GraphError::Load(LoadError::Root(_)))
+            commands::graph(Path::new("/definitely/not/a/bundle"), &[]),
+            Err(LoadError::Root { .. })
         ));
     }
 

@@ -128,45 +128,24 @@ def rust_load_bundle(
         message = completed.stderr.strip() or f"okf exited with {completed.returncode}"
         raise RustCoreError(message)
     try:
-        return EngineLoad.model_validate(_canonical_frontmatter(json.loads(completed.stdout)))
-    except (json.JSONDecodeError, ValidationError) as exc:
+        return EngineLoad.model_validate_json(completed.stdout)
+    except ValidationError as exc:
         message = f"invalid okf load response (protocol {PROTOCOL_VERSION} expected): {exc}"
         raise RustCoreError(message) from exc
-
-
-def _canonical_frontmatter(payload: object) -> object:
-    """Re-serialize each concept's ``frontmatter_json`` with sorted keys.
-
-    The engine emits frontmatter in document order; the public record carries
-    one canonical spelling so equal frontmatter compares equal.
-    """
-    if not isinstance(payload, dict):
-        return payload
-    concepts = payload.get("concepts")
-    if not isinstance(concepts, list):
-        return payload
-    normalized = [_canonical_concept(concept) for concept in concepts]
-    return {**payload, "concepts": normalized}
-
-
-def _canonical_concept(concept: object) -> object:
-    text = concept.get("frontmatter_json") if isinstance(concept, dict) else None
-    if not isinstance(concept, dict) or not isinstance(text, str):
-        return concept
-    canonical = json.dumps(json.loads(text), ensure_ascii=False, sort_keys=True)
-    return {**concept, "frontmatter_json": canonical}
 
 
 class NativeError(BaseModel):
     """Why the binary could not answer a command.
 
     ``request`` means the request is invalid for this bundle (the caller's
-    fault); ``io`` means the filesystem failed underneath the command.
+    fault); ``spec_template`` is the request error of a specification
+    template without ``{slug}``; ``io`` means the filesystem failed
+    underneath the command.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    kind: Literal["request", "io"]
+    kind: Literal["request", "spec_template", "io"]
     message: str
 
 

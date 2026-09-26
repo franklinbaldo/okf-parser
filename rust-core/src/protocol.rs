@@ -7,8 +7,14 @@
 use okf_engine::write::{
     EditOutcome, EditReport, EditRequest, ValidationItem, WriteError, edit_concept,
 };
-use okf_engine::{BundleData, ConceptGraph, GraphSummary};
-use serde::Serialize;
+use std::path::PathBuf;
+
+use okf_engine::check::{CheckError, CheckReport};
+use okf_engine::specs::Scaffold;
+use okf_engine::{BundleData, ConceptGraph, GraphSummary, LoadError};
+use serde::{Deserialize, Serialize};
+
+use crate::commands::InitError;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
@@ -143,6 +149,105 @@ impl From<EditReport> for EditResult {
     }
 }
 
+impl ProtocolError {
+    fn request(error: &dyn std::error::Error) -> Self {
+        Self {
+            kind: "request",
+            message: error.to_string(),
+        }
+    }
+
+    fn io(error: &dyn std::error::Error) -> Self {
+        Self {
+            kind: "io",
+            message: error.to_string(),
+        }
+    }
+
+    fn spec_template(error: &dyn std::error::Error) -> Self {
+        Self {
+            kind: "spec_template",
+            message: error.to_string(),
+        }
+    }
+
+    fn from_load(error: &LoadError) -> Self {
+        if crate::commands::load_is_request(error) {
+            Self::request(error)
+        } else {
+            Self::io(error)
+        }
+    }
+}
+
+impl<T> From<Result<T, ProtocolError>> for Response<T> {
+    fn from(outcome: Result<T, ProtocolError>) -> Self {
+        Self::new(match outcome {
+            Ok(result) => Answer::Success(result),
+            Err(error) => Answer::Error(error),
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CheckRequest {
+    path: PathBuf,
+    #[serde(default)]
+    exclude: Vec<String>,
+    #[serde(default)]
+    require_spec: Option<String>,
+    #[serde(default)]
+    normative_spec: bool,
+    #[serde(default)]
+    classify: bool,
+}
+
+/// `__check`: the native check report, for the Python shell's `validate_path`.
+pub fn check(request: &str) -> Result<Response<CheckReport>, serde_json::Error> {
+    let request: CheckRequest = serde_json::from_str(request)?;
+    let outcome = crate::commands::check(
+        &request.path,
+        &request.exclude,
+        request.require_spec.as_deref(),
+        request.normative_spec,
+        request.classify,
+    )
+    .map_err(|error| match &error {
+        CheckError::SpecTemplate(_) => ProtocolError::spec_template(&error),
+        CheckError::Load(load) => ProtocolError::from_load(load),
+    });
+    Ok(outcome.into())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InitSpecsRequest {
+    path: PathBuf,
+    spec_template: String,
+    #[serde(default)]
+    exclude: Vec<String>,
+    #[serde(default)]
+    write: bool,
+}
+
+/// `__init-specs`: the specification scaffold, for `init --infer-schema`.
+pub fn init_specs(request: &str) -> Result<Response<Scaffold>, serde_json::Error> {
+    let request: InitSpecsRequest = serde_json::from_str(request)?;
+    let outcome = crate::commands::init_specs(
+        &request.path,
+        &request.exclude,
+        &request.spec_template,
+        request.write,
+    )
+    .map_err(|error| match &error {
+        InitError::SpecTemplate(_) => ProtocolError::spec_template(&error),
+        InitError::Load(load) => ProtocolError::from_load(load),
+        InitError::Io(_) => ProtocolError::io(&error),
+    });
+    Ok(outcome.into())
+}
+
 /// `__edit`: preview or commit one concept's body replacement.
 pub fn edit(request: &str) -> Result<Response<EditResult>, serde_json::Error> {
     let request: EditRequest = serde_json::from_str(request)?;
@@ -244,6 +349,31 @@ mod tests {
                 message: "disk full".into(),
             }
         );
+    }
+
+    #[test]
+    fn check_requests_report_a_bad_template_as_its_own_kind() {
+        let dir = std::env::temp_dir();
+        let request = serde_json::json!({
+            "path": dir, "require_spec": "docs/types.md"
+        })
+        .to_string();
+        let value = serde_json::to_value(check(&request).unwrap()).unwrap();
+        assert_eq!(value["error"]["kind"], "spec_template");
+        assert_eq!(
+            value["error"]["message"],
+            r#"specification template must contain {slug}: "docs/types.md""#
+        );
+    }
+
+    #[test]
+    fn a_missing_root_is_a_request_error_for_every_command() {
+        let check_request = r#"{"path": "/definitely/not/a/bundle"}"#;
+        let value = serde_json::to_value(check(check_request).unwrap()).unwrap();
+        assert_eq!(value["error"]["kind"], "request");
+        let init_request = r#"{"path": "/definitely/not/a/bundle", "spec_template": "{slug}.md"}"#;
+        let value = serde_json::to_value(init_specs(init_request).unwrap()).unwrap();
+        assert_eq!(value["error"]["kind"], "request");
     }
 
     #[test]

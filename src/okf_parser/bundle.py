@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from pydantic import BaseModel, ConfigDict
+
 from okf_parser.graph import BundleGraph, GraphEdge, GraphNode, GraphSummary
 from okf_parser.models import (
     ConceptRecord,
@@ -21,8 +23,8 @@ from okf_parser.models import (
     Violation,
 )
 from okf_parser.relational_schema import validate_relations
-from okf_parser.rust_core import native_binary, rust_load_bundle
-from okf_parser.type_specs import missing_type_specs, required_type_spec_fields
+from okf_parser.rust_core import RustCoreError, call_native, native_binary, rust_load_bundle
+from okf_parser.type_specs import SpecTemplateError
 from okf_parser.typed_relations import TypedRelations, compile_bundle_types
 
 if TYPE_CHECKING:
@@ -134,6 +136,75 @@ def load_bundle(
     )
 
 
+class Classification(BaseModel):
+    """How each candidate Markdown file participated in a check."""
+
+    model_config = ConfigDict(frozen=True)
+
+    concepts: tuple[str, ...]
+    reserved: tuple[str, ...]
+    ignored: tuple[str, ...]
+    invalid_or_untyped: tuple[str, ...]
+
+
+class CheckReport(BaseModel):
+    """The native check report (``okf-engine/src/check.rs``)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    root: Path
+    conformant: bool
+    markdown_count: int
+    concept_count: int
+    reserved_count: int
+    diagnostics: tuple[Violation, ...]
+    classification: Classification | None = None
+
+
+class _CheckRequest(BaseModel):
+    """The ``__check`` request the binary validates."""
+
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    exclude: list[str]
+    require_spec: str | None
+    normative_spec: bool
+    classify: bool
+
+
+def check_report(
+    path: Path,
+    exclude: Sequence[str] = (),
+    require_spec: str | None = None,
+    *,
+    normative_spec: bool = False,
+    classify: bool = False,
+) -> CheckReport:
+    """Check a bundle natively: diagnostics, spec rules and classification."""
+    root = path.resolve()
+    if not root.is_dir():
+        msg = f"bundle root is not a directory: {root}"
+        raise NotADirectoryError(msg)
+    response = call_native(
+        "__check",
+        _CheckRequest(
+            path=str(root),
+            exclude=list(exclude),
+            require_spec=require_spec,
+            normative_spec=normative_spec,
+            classify=classify,
+        ),
+    )
+    if response.error is not None:
+        if response.error.kind == "spec_template":
+            raise SpecTemplateError(response.error.message)
+        if response.error.kind == "request":
+            raise ValueError(response.error.message)
+        raise RustCoreError(response.error.message)
+    return CheckReport.model_validate(response.result)
+
+
 def validate_path(
     path: Path,
     exclude: Sequence[str] = (),
@@ -144,39 +215,24 @@ def validate_path(
 ) -> ValidationReport:
     """Validate every Markdown file recursively below a path as OKF v0.2.
 
+    The native check answers everything but ``relational_schema``, whose
+    declared relations are still validated through DuckDB (RFC 0024 phase 4).
     ``require_spec`` adds the optional rule that every producer-defined type in
     use has a specification document at the path its template derives.
     """
-    bundle = load_bundle(path, exclude)
-    diagnostics = list(bundle.diagnostics)
+    report = check_report(path, exclude, require_spec, normative_spec=normative_spec)
+    diagnostics = list(report.diagnostics)
     if relational_schema is not None:
         schema_path = (
             relational_schema
             if relational_schema.is_absolute()
-            else bundle.root / relational_schema
+            else report.root / relational_schema
         )
-        diagnostics.extend(validate_relations(bundle, schema_path))
-    if require_spec is not None:
-        diagnostics.extend(
-            missing_type_specs(
-                bundle.root,
-                bundle.concept_types,
-                require_spec,
-                normative=normative_spec,
-            )
-        )
-        diagnostics.extend(
-            required_type_spec_fields(
-                bundle.root,
-                [concept.model_dump() for concept in bundle.concepts],
-                require_spec,
-                normative=normative_spec,
-            )
-        )
+        diagnostics.extend(validate_relations(load_bundle(report.root, exclude), schema_path))
     return ValidationReport(
-        root=bundle.root,
-        markdown_count=bundle.markdown_count,
-        concept_count=len(bundle.concepts),
-        reserved_count=len(bundle.reserved),
+        root=report.root,
+        markdown_count=report.markdown_count,
+        concept_count=report.concept_count,
+        reserved_count=report.reserved_count,
         violations=tuple(_ordered(diagnostics)),
     )
