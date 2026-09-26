@@ -16,7 +16,6 @@ keywords = [
   "knowledge-graph",
   "markdown",
   "duckdb",
-  "ibis",
   "validation",
   "mcp",
 ]
@@ -33,7 +32,6 @@ classifiers = [
 dependencies = [
   "cyclopts>=4.22,<5",
   "duckdb>=1.4,<2",
-  "ibis-framework[duckdb]>=12,<13",
   "markdown-it-py>=4,<5",
   # okf_parser.markdown_style overrides mdformat's ordered-list renderer, which
   # needs symbols mdformat does not export. Keep this range as narrow as that
@@ -41,7 +39,6 @@ dependencies = [
   "mdformat>=1,<1.1",
   "mdformat-frontmatter>=2,<3",
   "mdformat-gfm>=1,<2",
-  "pyarrow>=18,<26",
   "pydantic>=2.12,<3",
   "pyyaml>=6,<7",
 ]

@@ -839,7 +839,7 @@ pub fn planning_snapshot(path: &Path, exclude: &[String]) -> Result<PlanningSnap
 
 /// The frontmatter changes a plan made to one concept: `Some` sets a field
 /// to a string, `None` removes it.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConceptChanges {
     pub path: String,

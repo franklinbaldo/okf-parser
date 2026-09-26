@@ -26,5 +26,4 @@ one typed table per declared type, all on the search path.
 
 `Bundle.compile_types()` and `TypedRelations` are removed with their ibis
 tables: query the typed tables through `Bundle.sql(..., spec_template=...)`.
-The GraphQL adapter reads declared values that way too. ibis remains a
-dependency only until `apply` moves to the binary.
+The GraphQL adapter reads declared values that way too.

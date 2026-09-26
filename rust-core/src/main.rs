@@ -50,12 +50,12 @@ enum Command {
     /// Run a relational schema and read its keys (JSON request on stdin).
     #[command(name = "__relational-schema", hide = true)]
     RelationalSchema,
-    /// Snapshot a bundle for the Python apply planner (JSON request on stdin).
-    #[command(name = "__apply-snapshot", hide = true)]
-    ApplySnapshot,
-    /// Edit, fingerprint and commit a planned apply (JSON request on stdin).
-    #[command(name = "__apply-commit", hide = true)]
-    ApplyCommit,
+    /// Read a DuckDB-readable source for `import` (JSON request on stdin).
+    #[command(name = "__read-source", hide = true)]
+    ReadSource,
+    /// Plan and preview or commit an apply (JSON request on stdin).
+    #[command(name = "__apply", hide = true)]
+    ApplyRequest,
     /// Query a loaded bundle for the Python shell (JSON request on stdin).
     #[command(name = "__sql", hide = true)]
     SqlRequest,
@@ -151,9 +151,45 @@ enum Command {
     /// Check mdformat style, writing only when --write is explicit.
     #[command(disable_help_flag = true)]
     Format(Delegated),
-    /// Mutate frontmatter fields via a bounded ALTER TABLE + UPDATE SQL script.
-    #[command(disable_help_flag = true)]
-    Apply(Delegated),
+    /// Edit frontmatter fields with SQL: each type is a table, each field a column.
+    #[command(
+        after_help = "The script runs over one table per concept type (named for the \
+        type, one VARCHAR column per scalar field) and any statements go: UPDATE, ALTER TABLE \
+        ... ADD/DROP/RENAME COLUMN, UPDATE ... FROM across types. The final tables are the \
+        answer: a changed value sets the field, NULL removes it, a dropped column removes it \
+        everywhere. Rows and __okf_* columns cannot change.\n\n\
+        Example: okf-parser apply notes --sql \"UPDATE Note SET status = 'final' WHERE status = 'draft'\""
+    )]
+    Apply {
+        path: PathBuf,
+        /// The SQL script.
+        #[arg(long, conflicts_with_all = ["type_name", "field", "from", "to"])]
+        sql: Option<String>,
+        /// Shorthand: the type whose field changes (with --field, --from, --to).
+        #[arg(long = "type", requires_all = ["field", "from", "to"])]
+        type_name: Option<String>,
+        /// Shorthand: the field to change.
+        #[arg(long, requires = "type_name")]
+        field: Option<String>,
+        /// Shorthand: change the field where it has this value...
+        #[arg(long, requires = "type_name")]
+        from: Option<String>,
+        /// ...to this one.
+        #[arg(long, requires = "type_name")]
+        to: Option<String>,
+        /// Write the changes; without it, only report what would change.
+        #[arg(long)]
+        write: bool,
+        /// Skip files matching this gitignore-style pattern (repeatable).
+        #[arg(long, value_name = "PATTERN")]
+        exclude: Vec<String>,
+        /// Materialize declared types as typed, read-only columns for filtering.
+        #[arg(long, value_name = "TEMPLATE")]
+        spec_template: Option<String>,
+        /// Refuse to write unless the changes match this reviewed preview.
+        #[arg(long, value_name = "TOKEN")]
+        expected_preview_token: Option<String>,
+    },
     /// Materialize an OKF bundle into a DuckDB database file.
     #[command(
         after_help = "Tables: concepts, links, reserved and diagnostics in SCHEMA; with \
@@ -261,11 +297,11 @@ fn run() -> Outcome {
             let response = protocol::relational_schema(&stdin_text()?)?;
             serde_json::to_writer(io::stdout().lock(), &response)?;
         }
-        Command::ApplySnapshot => {
-            let response = protocol::apply_snapshot(&stdin_text()?)?;
+        Command::ReadSource => {
+            let response = protocol::read_source(&stdin_text()?)?;
             serde_json::to_writer(io::stdout().lock(), &response)?;
         }
-        Command::ApplyCommit => {
+        Command::ApplyRequest => {
             serde_json::to_writer(io::stdout().lock(), &protocol::apply(&stdin_text()?)?)?;
         }
         Command::SqlRequest => {
@@ -285,7 +321,6 @@ fn run() -> Outcome {
         Command::Import(_)
         | Command::Schema(_)
         | Command::Format(_)
-        | Command::Apply(_)
         | Command::Packs(_)
         | Command::AddPack(_) => return python_cli(),
         Command::Check {
@@ -322,6 +357,34 @@ fn run() -> Outcome {
             let report = commands::init(&path, &exclude, &spec_template, write, infer_schema)?;
             let code = i32::from(report.collided());
             return print(&report, code);
+        }
+        Command::Apply {
+            path,
+            sql,
+            type_name,
+            field,
+            from,
+            to,
+            write,
+            exclude,
+            spec_template,
+            expected_preview_token,
+        } => {
+            let input = commands::ApplyInput {
+                path,
+                sql,
+                type_name,
+                field,
+                from_value: from,
+                to,
+                exclude,
+                spec_template,
+                write,
+                expected_preview_token,
+            };
+            let result = commands::apply(&input)?;
+            let code = i32::from(!result.succeeded());
+            return print(&result, code);
         }
         Command::Sql {
             path,

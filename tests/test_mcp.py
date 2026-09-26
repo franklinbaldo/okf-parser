@@ -49,6 +49,8 @@ NATIVE_TOOLS = {
     "sql",
     "init_preview",
     "init_write",
+    "apply_preview",
+    "apply_write",
     "duckdb_export",
 }
 """Answered by the binary itself, never delegated to the bridge."""
@@ -158,10 +160,15 @@ def test_mcp_public_schemas_keep_aliases_and_preview_write_pairs_match() -> None
         tools = session.tools()
 
     apply_properties = _properties(tools["apply_preview"])
-    assert tools["apply_preview"]["inputSchema"] == tools["apply_write"]["inputSchema"]
+    assert {
+        key: value
+        for key, value in _properties(tools["apply_write"]).items()
+        if key != "expected_preview_token"
+    } == apply_properties
     assert {"from", "type", "spec_template"} <= set(apply_properties)
     assert "from_" not in apply_properties
     assert "write" not in apply_properties
+    assert "expected_preview_token" not in apply_properties
 
     assert tools["init_preview"]["inputSchema"] == tools["init_write"]["inputSchema"]
     assert "write" not in _properties(tools["init_preview"])
@@ -191,11 +198,11 @@ def test_mcp_effect_annotations_describe_maximum_possible_effect() -> None:
         "graph": (True, False, True, False),
         "schema": (False, True, False, True),
         "format_check": (True, False, True, False),
-        "apply_preview": (False, True, False, True),
+        "apply_preview": (True, False, True, False),
         "init_preview": (True, False, True, False),
         "import_preview": (True, False, True, True),
         "format_write": (False, True, True, False),
-        "apply_write": (False, True, False, True),
+        "apply_write": (False, True, False, False),
         "init_write": (False, False, True, False),
         "import_write": (False, True, False, True),
         "duckdb_export": (False, True, False, True),
@@ -433,23 +440,19 @@ def test_http_host_validation_is_separate_from_the_bind_address(
 
 
 def test_bridge_accepts_wire_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[dict[str, object]] = []
+    calls: list[tuple[object, ...]] = []
 
-    def fake_apply_bundle(path: str, **kwargs: object) -> dict[str, object]:
-        calls.append({"path": path, **kwargs})
-        return {}
+    def fake_schema_bundle(path: str, schema_format: str, *args: object, **_: object) -> str:
+        calls.append((path, schema_format, *args))
+        return ""
 
-    monkeypatch.setattr(mcp_bridge, "apply_bundle", fake_apply_bundle)
+    monkeypatch.setattr(mcp_bridge, "schema_bundle", fake_schema_bundle)
 
     mcp_bridge.run_tool_call(
-        mcp_bridge.ToolCall(
-            tool="apply_preview",
-            arguments={"path": "b", "type": "T", "field": "f", "from": "x", "to": "y"},
-        )
+        mcp_bridge.ToolCall(tool="schema", arguments={"path": "b", "format": "zod"})
     )
 
-    assert calls[0]["type_name"] == "T"
-    assert calls[0]["from_value"] == "x"
+    assert calls[0][:2] == ("b", "zod")
 
 
 def test_bridge_rejects_arguments_a_tool_does_not_take() -> None:
@@ -467,25 +470,6 @@ def test_bridge_serves_every_tool_the_native_server_may_delegate() -> None:
 def test_bridge_rejects_an_unknown_tool_at_the_boundary() -> None:
     with pytest.raises(ValueError, match="literal_error"):
         mcp_bridge.ToolCall.model_validate({"tool": "rm_rf", "arguments": {}})
-
-
-def test_apply_preview_and_write_share_service_with_only_commit_bit_changed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[dict[str, object]] = []
-
-    def fake_apply_bundle(path: str, **kwargs: object) -> dict[str, object]:
-        calls.append({"path": path, **kwargs})
-        return {"written": bool(kwargs["write"])}
-
-    monkeypatch.setattr(mcp_bridge, "apply_bundle", fake_apply_bundle)
-
-    preview = mcp_bridge.mcp_apply_preview("bundle", sql="UPDATE x SET y = 1")
-    written = mcp_bridge.mcp_apply_write("bundle", sql="UPDATE x SET y = 1")
-
-    assert preview == {"written": False}
-    assert written == {"written": True}
-    assert calls[0] | {"write": True} == calls[1]
 
 
 def test_import_preview_and_write_share_service_with_review_binding_on_commit(

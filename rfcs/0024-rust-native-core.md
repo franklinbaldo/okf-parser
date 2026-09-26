@@ -252,9 +252,16 @@ nothing installed. See docs/releasing.md.
   access disabled and locked, and runs only one statement that `DESCRIBE`
   accepts. `compile_types()`/`TypedRelations` leave; ibis stays until 4c,
   for `apply` alone.
-- **4c:** the DuckDB half of `apply`, and `import`'s reading; ibis leaves.
-- **4d:** full-text search; pandas, numpy, pyarrow and the Python `duckdb`
-  package leave.
+- **4c (0.48.0):** `apply` runs in the binary (`okf-parser apply`, the MCP
+  `apply_*` tools, `__apply` for the Python API), planned by `okf-db` and
+  committed by the RFC 0019 write path. Its contract gets simpler: each type
+  is a table, the script is any sequence of statements in the sandboxed
+  connection, and the final tables are the truth (a changed value sets the
+  field as text, `NULL` or a dropped column removes it). Rows, the `__okf_*`
+  columns, declared fields and structured fields are not writable. `import`
+  reads its source through the binary (`__read-source`), every value as
+  DuckDB's `VARCHAR` cast. ibis, pyarrow, pandas and numpy leave.
+- **4d:** full-text search; the Python `duckdb` package leaves.
 
 ### Phase 5 — the Rust formatter
 

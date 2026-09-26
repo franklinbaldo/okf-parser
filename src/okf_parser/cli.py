@@ -1,7 +1,7 @@
 """Expose the commands the native binary has not taken over yet, through Cyclopts.
 
 The binary (``rust-core/src/main.rs``) answers ``check``, ``inventory``,
-``graph``, ``init``, ``duckdb`` and ``serve`` itself and passes every other
+``graph``, ``init``, ``duckdb``, ``sql``, ``apply`` and ``serve`` itself and passes every other
 command line here (RFC 0024).
 """
 
@@ -16,7 +16,6 @@ from typing import Annotated, Literal
 from cyclopts import App, Parameter
 
 from okf_parser.service import (
-    apply_bundle,
     check_format,
     import_bundle,
     schema_bundle,
@@ -58,7 +57,7 @@ def _render_cli_result(result: object) -> None:
 
 app = App(
     name="okf-parser",
-    help="Validate and inspect OKF bundles with Ibis and NetworkX.",
+    help="Validate, query and edit OKF bundles.",
     version=_package_version("okf-parser"),
     result_action=_render_cli_result,
 )
@@ -130,34 +129,6 @@ def format_command(
     """Check mdformat style, writing only when --write is explicit."""
     patterns = exclude or ()
     payload = write_format(path, patterns) if write else check_format(path, patterns)
-    return CliResult(payload, 0 if payload["succeeded"] else 1)
-
-
-@app.command
-def apply(  # each argument is an independent public CLI flag.
-    path: str,
-    *,
-    sql: str | None = None,
-    type: str | None = None,  # the domain name for this flag is `type`.
-    field: str | None = None,
-    from_: Annotated[str | None, Parameter(name="from")] = None,
-    to: str | None = None,
-    write: bool = False,
-    exclude: RepeatableStrings = None,
-    spec_template: str | None = None,
-) -> CliResult[JsonPayload]:
-    """Mutate frontmatter fields via a bounded ALTER TABLE + UPDATE SQL script."""
-    payload = apply_bundle(
-        path,
-        sql=sql,
-        type_name=type,
-        field_name=field,
-        from_value=from_,
-        to_value=to,
-        write=write,
-        exclude=exclude or (),
-        spec_template=spec_template,
-    )
     return CliResult(payload, 0 if payload["succeeded"] else 1)
 
 
