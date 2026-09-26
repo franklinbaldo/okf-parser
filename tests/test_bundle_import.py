@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 from okf_parser.bundle_import import BundleImportError, import_bundle
+from okf_parser.parser import parse_document
 
 
 def _write_csv(path: Path) -> None:
@@ -43,7 +46,7 @@ def test_write_creates_one_document_per_row(tmp_path: Path) -> None:
     assert content.startswith("---\n")
     assert "type: Pessoa" in content
     assert "nome: Ana" in content
-    assert "idade: '30'" in content
+    assert "idade: 30" in content
 
 
 def test_without_id_column_uses_a_zero_padded_row_index(tmp_path: Path) -> None:
@@ -128,6 +131,29 @@ def test_failed_write_never_leaves_a_truncated_document(
         assert path.read_bytes() == (clean / "pessoa" / path.name).read_bytes(), (
             f"{path.name} was left truncated by the failed import"
         )
+
+
+def test_write_always_uses_lf_line_endings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r"""`import` must not let `Path.write_text` translate `\n` to `os.linesep` (#259)."""
+    csv = tmp_path / "source.csv"
+    _write_csv(csv)
+    bundle = tmp_path / "bundle"
+    recorded: list[str | None] = []
+    real_write_text = Path.write_text
+
+    def recording_write_text(self: Path, data: str, **kwargs: object) -> int:
+        recorded.append(kwargs.get("newline"))
+        return real_write_text(self, data, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", recording_write_text)
+
+    import_bundle(str(csv), str(bundle), "Pessoa", id_column="id", write=True)
+
+    assert recorded == ["\n", "\n"]
+    assert b"\r\n" not in (bundle / "pessoa" / "r1.md").read_bytes()
+    assert b"\r\n" not in (bundle / "pessoa" / "r2.md").read_bytes()
 
 
 def test_verify_identical_classifies_an_idempotent_reapplication(tmp_path: Path) -> None:
@@ -288,3 +314,76 @@ def test_unreadable_source_raises(tmp_path: Path) -> None:
 
     with pytest.raises(BundleImportError, match="could not read"):
         import_bundle(str(tmp_path / "missing.csv"), str(bundle), "Pessoa")
+
+
+def test_list_column_is_written_as_a_yaml_sequence(tmp_path: Path) -> None:
+    """A LIST source column round-trips as a real YAML list, not `str(value)` (#260)."""
+    source = tmp_path / "source.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "id": ["c-1"],
+                "pastas": pa.array([["u1", "u2"]], pa.list_(pa.string())),
+            }
+        ),
+        source,
+    )
+    bundle = tmp_path / "bundle"
+
+    result = import_bundle(str(source), str(bundle), "Tipo", id_column="id", write=True)
+
+    assert result["created"] == ["tipo/c-1.md"]
+    destination = bundle / "tipo" / "c-1.md"
+    content = destination.read_text(encoding="utf-8")
+    assert "pastas:\n- u1\n- u2\n" in content
+
+    parsed = parse_document(destination)
+    assert parsed.frontmatter["pastas"] == ["u1", "u2"]
+
+
+def test_struct_column_is_written_as_a_yaml_mapping(tmp_path: Path) -> None:
+    source = tmp_path / "source.parquet"
+    pq.write_table(
+        pa.table(
+            {
+                "id": ["c-1"],
+                "endereco": pa.array(
+                    [{"cidade": "Porto Velho", "numero": 42}],
+                    pa.struct([("cidade", pa.string()), ("numero", pa.int64())]),
+                ),
+            }
+        ),
+        source,
+    )
+    bundle = tmp_path / "bundle"
+
+    import_bundle(str(source), str(bundle), "Tipo", id_column="id", write=True)
+
+    destination = bundle / "tipo" / "c-1.md"
+    content = destination.read_text(encoding="utf-8")
+    assert "cidade: Porto Velho" in content
+    assert "numero: 42" in content
+    # okf_parser's own reader normalizes every scalar leaf to its spelling
+    # (see parser._StringScalarLoader), so the structure round-trips but the
+    # nested number comes back as the string it's spelled as on disk.
+    parsed = parse_document(destination)
+    assert parsed.frontmatter["endereco"] == {"cidade": "Porto Velho", "numero": "42"}
+
+
+def test_numbers_and_booleans_are_written_as_native_yaml_scalars(tmp_path: Path) -> None:
+    """Integers/booleans are spelled unquoted instead of as quoted text (#260)."""
+    source = tmp_path / "source.parquet"
+    pq.write_table(
+        pa.table({"id": ["c-1"], "caixa_id": [915], "ativo": [True]}),
+        source,
+    )
+    bundle = tmp_path / "bundle"
+
+    import_bundle(str(source), str(bundle), "Tipo", id_column="id", write=True)
+
+    destination = bundle / "tipo" / "c-1.md"
+    content = destination.read_text(encoding="utf-8")
+    assert "caixa_id: 915" in content
+    assert "ativo: true" in content
+    assert "'915'" not in content
+    assert "'true'" not in content

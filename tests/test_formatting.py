@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 from markdown_it import MarkdownIt
 
 from okf_parser.formatting import format_path
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def test_format_check_is_read_only_and_write_is_explicit(tmp_path: Path) -> None:
@@ -305,6 +302,28 @@ def test_check_does_not_report_success_when_a_file_needs_formatting(tmp_path: Pa
     (tmp_path / "a.md").write_text("# Heading\n\n-   item\n", encoding="utf-8")
 
     assert not format_path(tmp_path).succeeded
+
+
+def test_write_always_uses_lf_line_endings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    r"""`--write` must not let `Path.write_text` translate `\n` to `os.linesep` (#259)."""
+    path = tmp_path / "a.md"
+    path.write_text("# Heading\n\n-   item\n", encoding="utf-8")
+    recorded: list[str | None] = []
+    real_write_text = Path.write_text
+
+    def recording_write_text(self: Path, data: str, **kwargs: object) -> int:
+        recorded.append(kwargs.get("newline"))
+        return real_write_text(self, data, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", recording_write_text)
+
+    format_path(tmp_path, write=True)
+
+    assert recorded == ["\n"]
+    assert b"\r\n" not in path.read_bytes()
 
 
 def test_write_is_all_or_nothing_when_formatting_fails(

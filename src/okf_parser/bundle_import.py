@@ -63,13 +63,30 @@ def _concept_id(row: dict[str, object], index: int, id_column: str | None) -> st
     return str(value)
 
 
+def _to_frontmatter_value(value: object) -> object:
+    """Preserve a source value's YAML-native shape instead of flattening it to text.
+
+    Lists and structs (DuckDB's LIST/STRUCT) become YAML sequences and
+    mappings, and numbers/booleans become native YAML scalars. Any other
+    scalar DuckDB may hand back (a date, a decimal, a UUID, ...) still falls
+    back to its ``str()`` spelling, same as before.
+    """
+    if isinstance(value, (str, bool, int, float)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): _to_frontmatter_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_to_frontmatter_value(item) for item in value]
+    return str(value)
+
+
 def _frontmatter_text(yaml: YAML, concept_type: str, row: dict[str, object]) -> str:
     data: dict[str, object] = {"type": concept_type}
     for key, value in row.items():
         if key == "type":
             continue
         if value is not None:
-            data[key] = value if isinstance(value, str) else str(value)
+            data[key] = _to_frontmatter_value(value)
     buffer = StringIO()
     yaml.dump(data, buffer)
     return buffer.getvalue()
@@ -309,7 +326,7 @@ def import_bundle(  # each argument is an independent public CLI flag.
         # writing destinations directly meant one crash mid-import left a
         # truncated concept behind, detectable only by a later OKF001.
         staged = destination.with_name(f".{destination.name}.okf-write.tmp")
-        staged.write_text(text, encoding="utf-8")
+        staged.write_text(text, encoding="utf-8", newline="\n")
         staged.replace(destination)
         created.append(relative)
     return {

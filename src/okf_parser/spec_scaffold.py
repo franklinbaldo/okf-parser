@@ -92,7 +92,7 @@ def scaffold_missing_specs(
     for concept_type, relative in to_create.items():
         destination = root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(_stub_content(concept_type), encoding="utf-8")
+        destination.write_text(_stub_content(concept_type), encoding="utf-8", newline="\n")
         created.append(relative)
     return {"created": sorted(created), "would_create": [], "collisions": [], "written": True}
 
@@ -197,6 +197,6 @@ def scaffold_missing_declared_schemas(
             continue
         destination = root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.write_text(content, encoding="utf-8")
+        destination.write_text(content, encoding="utf-8", newline="\n")
         created.append(relative)
     return {"created": sorted(created), "would_create": [], "collisions": [], "written": True}
