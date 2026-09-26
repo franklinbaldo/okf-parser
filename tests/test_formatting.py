@@ -314,9 +314,15 @@ def test_write_always_uses_lf_line_endings(
     recorded: list[str | None] = []
     real_write_text = Path.write_text
 
-    def recording_write_text(self: Path, data: str, **kwargs: object) -> int:
-        recorded.append(kwargs.get("newline"))
-        return real_write_text(self, data, **kwargs)
+    def recording_write_text(
+        self: Path,
+        data: str,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> int:
+        recorded.append(newline)
+        return real_write_text(self, data, encoding=encoding, errors=errors, newline=newline)
 
     monkeypatch.setattr(Path, "write_text", recording_write_text)
 

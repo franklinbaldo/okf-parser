@@ -1,6 +1,6 @@
 [package]
 name = "okf-core"
-version = "0.47.0"
+version = "0.47.1"
 edition = "2024"
 license = "MIT"
 description = "Native OKF CLI and compatibility adapters"
@@ -12,7 +12,7 @@ path = "src/main.rs"
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 clap = { version = "4", features = ["derive"] }
-okf-engine = { path = "../okf-engine", version = "0.47.0" }
+okf-engine = { path = "../okf-engine", version = "0.47.1" }
 rmcp = { version = "3.4", features = ["server", "transport-io", "macros", "transport-streamable-http-server"] }
 schemars = "1"
 serde = { version = "1", features = ["derive"] }
