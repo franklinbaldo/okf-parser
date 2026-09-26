@@ -4,11 +4,9 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
-import ibis
-
-from okf_parser.bundle import Bundle, load_bundle
+from okf_parser.bundle import load_bundle
 from okf_parser.typed_tables import (
     TypedTableCollisionError,
     discover_declared_schemas,
@@ -16,19 +14,39 @@ from okf_parser.typed_tables import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     import duckdb
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_DIAGNOSTIC_SCHEMA = ibis.schema(
-    {
-        "code": "string",
-        "severity": "string",
-        "path": "string",
-        "message": "string",
-    }
-)
+_VARCHAR = "VARCHAR"
+_TABLE_COLUMNS: dict[str, dict[str, str]] = {
+    "concepts": dict.fromkeys(
+        (
+            "concept_id",
+            "logical_key",
+            "path",
+            "concept_type",
+            "title",
+            "description",
+            "source_digest",
+            "parsed_digest",
+            "frontmatter_json",
+            "body",
+        ),
+        _VARCHAR,
+    ),
+    "links": {
+        "source_id": _VARCHAR,
+        "raw_target": _VARCHAR,
+        "target_id": _VARCHAR,
+        "exists": "BOOLEAN",
+        "origin": _VARCHAR,
+    },
+    "reserved": dict.fromkeys(("path", "filename", "body"), _VARCHAR),
+    "diagnostics": dict.fromkeys(("code", "severity", "path", "message"), _VARCHAR),
+}
+"""Column order and DuckDB types of the four exported tables."""
 
 
 class BundleExportError(ValueError):
@@ -49,11 +67,6 @@ def _validate_schema_name(schema: str) -> None:
     if _IDENTIFIER_RE.fullmatch(schema) is None:
         msg = f"invalid DuckDB schema name: {schema!r}"
         raise ValueError(msg)
-
-
-def _diagnostics_table(bundle: Bundle) -> ibis.Table:
-    rows = [item.model_dump(mode="json") for item in bundle.validate()]
-    return ibis.memtable(rows, schema=_DIAGNOSTIC_SCHEMA)
 
 
 def _existing_tables(
@@ -93,11 +106,11 @@ def attach_okf(
     _validate_schema_name(schema)
     bundle = load_bundle(Path(path), exclude)
     typed_schema = f"{schema}_types"
-    relations = {
-        "concepts": bundle.concepts,
-        "links": bundle.links,
-        "reserved": bundle.reserved,
-        "diagnostics": _diagnostics_table(bundle),
+    relations: dict[str, list[dict[str, object]]] = {
+        "concepts": [concept.model_dump() for concept in bundle.concepts],
+        "links": [link.model_dump() for link in bundle.links],
+        "reserved": [reserved.model_dump() for reserved in bundle.reserved],
+        "diagnostics": [item.model_dump(mode="json") for item in bundle.validate()],
     }
 
     collisions = _existing_tables(connection, schema, tuple(relations))
@@ -113,8 +126,8 @@ def attach_okf(
     connection.execute("BEGIN TRANSACTION")
     try:
         connection.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
-        for table_name, relation in relations.items():
-            _replace_table(connection, schema, table_name, relation)
+        for table_name, rows in relations.items():
+            _replace_table(connection, schema, table_name, rows)
         typed = None
         if spec_template is not None:
             try:
@@ -137,8 +150,8 @@ def attach_okf(
         "root": str(bundle.root),
         "conformant": bundle.is_conformant,
         "markdown_count": bundle.markdown_count,
-        "concept_count": cast("int", bundle.concepts.count().execute()),
-        "link_count": cast("int", bundle.links.count().execute()),
+        "concept_count": len(bundle.concepts),
+        "link_count": len(bundle.links),
         "diagnostic_count": len(bundle.diagnostics),
     }
     if spec_template is not None and typed is not None:
@@ -157,13 +170,24 @@ def _replace_table(
     connection: duckdb.DuckDBPyConnection,
     schema: str,
     table_name: str,
-    relation: ibis.Table,
+    rows: Sequence[Mapping[str, object]],
 ) -> None:
-    """Create one table from an Ibis relation, dropping any earlier copy.
+    """Create one table from records, dropping any earlier copy.
 
-    The DuckDB relation API has no replace mode, so an existing table is
-    dropped first. Both statements run inside the caller's transaction, so a
-    failure rolls the drop back with everything else.
+    Rows load column by column - one ``unnest`` per column in a single
+    ``INSERT`` - so no dataframe library is involved. Both statements run
+    inside the caller's transaction, so a failure rolls the drop back with
+    everything else.
     """
-    connection.execute(f'DROP TABLE IF EXISTS "{schema}"."{table_name}"')
-    connection.from_arrow(relation.to_pyarrow()).create(f"{schema}.{table_name}")
+    columns = _TABLE_COLUMNS[table_name]
+    qualified = f'"{schema}"."{table_name}"'
+    definition = ", ".join(f'"{column}" {kind}' for column, kind in columns.items())
+    connection.execute(f"DROP TABLE IF EXISTS {qualified}")
+    connection.execute(f"CREATE TABLE {qualified} ({definition})")
+    if not rows:
+        return
+    selections = ", ".join(
+        f"unnest(${index})::{kind}" for index, kind in enumerate(columns.values(), start=1)
+    )
+    values = [[row.get(column) for row in rows] for column in columns]
+    connection.execute(f"INSERT INTO {qualified} SELECT {selections}", values)

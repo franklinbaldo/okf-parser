@@ -11,10 +11,14 @@ Relational inspection and validation for
 bundles.
 
 `okf-parser` reads an OKF bundle without imposing a domain taxonomy, preserves
-unknown frontmatter fields, and exposes concepts and links as
-[Ibis](https://ibis-project.org/) tables. This makes bundle-wide rules—identity,
-lineage, cardinality, provenance, and profile-specific constraints—expressible
-as deterministic relational checks.
+unknown frontmatter fields, and exposes concepts and links as typed records and
+DuckDB tables. This makes bundle-wide rules—identity, lineage, cardinality,
+provenance, and profile-specific constraints—expressible as deterministic
+relational checks.
+
+It ships the way `ruff` and `uv` do: a native Rust binary does the work, and the
+Python package is a thin shell over it
+([RFC 0024](rfcs/0024-rust-native-core.md)).
 
 ## Why another OKF tool?
 
@@ -23,11 +27,11 @@ The ecosystem already has good static linters and generators, including
 layer:
 
 - compile a bundle into queryable relational tables;
-- project those same relations into a NetworkX graph;
+- project those same relations into a graph, with an optional NetworkX bridge;
 - validate OKF v0.2 conformance without rejecting extensions, against a
   [corpus pinned to the upstream specification](conformance/README.md);
 - distinguish normative errors from advisory diagnostics;
-- let projects add cross-concept rules as Ibis expressions;
+- let projects add cross-concept rules as SQL over the same relations;
 - produce stable human-readable and JSON reports for CI and agents.
 
 The architectural boundary between strict authored OKF and source adapters is documented in
@@ -210,15 +214,16 @@ Add the repository as a CI check:
 ```yaml
 steps:
   - uses: actions/checkout@v7
-  - uses: franklinbaldo/okf-parser@v0.46.0
+  - uses: franklinbaldo/okf-parser@v0.47.0
     with:
       path: knowledge
 ```
 
 ### Rust end-to-end engine
 
-The default Python and TypeScript implementations remain portable and require no Rust
-binary. For large bundles, build the native engine and pass its path explicitly:
+Python always loads bundles through the native binary installed with the package.
+The TypeScript package keeps a portable implementation. To test a locally built
+engine, build it and pass its path explicitly:
 
 ```bash
 cargo build --release --manifest-path rust-core/Cargo.toml
@@ -310,8 +315,9 @@ from pathlib import Path
 from okf_parser import load_bundle, validate_path
 
 bundle = load_bundle(Path("knowledge"))
-print(bundle.concepts.execute())
-print(bundle.links.execute())
+for concept in bundle.concepts:          # tuple[ConceptRecord, ...]
+    print(concept.concept_id, concept.concept_type, concept.title)
+print(len(bundle.links))                 # tuple[LinkRecord, ...]
 print(bundle.graph().summary())
 print(bundle.validate())
 
@@ -355,9 +361,11 @@ report = validate_path(Path("knowledge"), require_spec=".okf/specs/{slug}.md")
   type in use;
 - stable concept IDs derived from paths;
 - Markdown-link extraction and resolution;
-- Ibis tables for concepts, reserved documents, and links;
-- NetworkX graph projection for traversal, cycles, components, and impact;
+- typed records for concepts, reserved documents, and links, and DuckDB tables
+  through `attach_okf`;
+- a native graph summary, with an optional NetworkX projection for traversal,
+  cycles, components, and impact;
 - aggregated validation reports.
 
 Profiles, lifecycle/provenance family validation, external resources, and
-pluggable Ibis rules are the next milestones.
+SQL rules run by the binary are the next milestones.

@@ -14,13 +14,10 @@ from okf_parser.edit import EditError, preview_concept_edit, write_concept_edit
 
 
 def _source_digest(root: Path, concept_id: str) -> str:
-    bundle = load_bundle(root)
-    row = (
-        bundle.concepts.filter(bundle.concepts.concept_id == concept_id)
-        .select("source_digest")
-        .execute()
-    )
-    return str(row.iloc[0]["source_digest"])
+    [concept] = [
+        concept for concept in load_bundle(root).concepts if concept.concept_id == concept_id
+    ]
+    return concept.source_digest
 
 
 def test_preview_does_not_write_and_reports_candidate_digests(tmp_path: Path) -> None:
@@ -137,7 +134,7 @@ def test_rejects_a_body_that_cannot_be_encoded_as_utf8(tmp_path: Path) -> None:
 def test_edit_uses_canonical_linear_frontmatter_boundaries(tmp_path: Path) -> None:
     concept = tmp_path / "note.md"
     concept.write_bytes(b"\xef\xbb\xbf---   \r\ntype: Note\r\ntitle: Kept\r\n---\t\r\nold\r\n")
-    source = load_bundle(tmp_path).concepts.execute().iloc[0]["source_digest"]
+    source = load_bundle(tmp_path).concepts[0].source_digest
 
     result = write_concept_edit(str(tmp_path), "note", "new\n", str(source))
 

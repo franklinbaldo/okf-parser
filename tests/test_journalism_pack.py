@@ -180,7 +180,7 @@ def _project_complete_bundle(tmp_path: Path) -> dict[str, object]:
     root_schema = _resource_json(NINJS_RESOURCE)
     geojson = _resource_json(GEOJSON_RESOURCE)
     mapping = _resource_json(MAPPING_RESOURCE)
-    bundle = load_bundle(_copy_fixture_bundle(tmp_path), engine="native")
+    bundle = load_bundle(_copy_fixture_bundle(tmp_path))
     item = concept(bundle, "examples/complete-profile.md")
     properties = _root_properties(root_schema)
     rules = cast("dict[str, dict[str, object]]", mapping["properties"])
@@ -334,7 +334,7 @@ def test_generated_body_schema_has_every_authored_body_metadata_field() -> None:
 
 
 def test_newsitem_resolves_multiple_body_concepts(tmp_path: Path) -> None:
-    bundle = load_bundle(_copy_fixture_bundle(tmp_path), engine="native")
+    bundle = load_bundle(_copy_fixture_bundle(tmp_path))
     resolved = resolve_relations(
         bundle,
         "examples/complete-profile.md",

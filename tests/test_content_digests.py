@@ -42,8 +42,8 @@ def test_bundle_relations_expose_self_describing_digests(tmp_path: Path) -> None
         encoding="utf-8",
     )
     bundle = load_bundle(tmp_path)
-    [row] = (
-        bundle.concepts.select("source_digest", "parsed_digest").execute().to_dict(orient="records")
-    )
+    [row] = [
+        record.model_dump(include={"source_digest", "parsed_digest"}) for record in bundle.concepts
+    ]
     assert row["source_digest"].startswith("sha256:")
     assert row["parsed_digest"].startswith("okf-parsed-v1-jcs-sha256:")

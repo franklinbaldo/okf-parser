@@ -1,5 +1,6 @@
 mod engine;
 mod mcp;
+mod protocol;
 mod python;
 use clap::{Parser, Subcommand};
 use serde::Deserialize;
@@ -66,10 +67,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             exclude,
             read_concurrency,
         } => {
-            serde_json::to_writer(
-                io::stdout().lock(),
-                &engine::load_bundle(&root, &exclude, read_concurrency)?,
-            )?;
+            let data = engine::load_bundle(&root, &exclude, read_concurrency)?;
+            serde_json::to_writer(io::stdout().lock(), &protocol::LoadResponse::new(&data))?;
         }
         Command::Serve {
             transport,

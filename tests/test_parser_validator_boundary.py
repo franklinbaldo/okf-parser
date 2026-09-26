@@ -66,7 +66,7 @@ def test_validator_not_parser_rejects_missing_type(tmp_path: Path) -> None:
 
     bundle = load_bundle(tmp_path)
 
-    assert bundle.concepts.count().execute() == 1
+    assert len(bundle.concepts) == 1
     assert {item.code for item in bundle.validate()} == {"OKF002"}
 
 
@@ -77,6 +77,4 @@ def test_validator_accepts_unrecognized_type_without_taxonomy(tmp_path: Path) ->
     bundle = load_bundle(tmp_path)
 
     assert bundle.is_conformant
-    assert bundle.concepts.execute().to_dict(orient="records")[0]["concept_type"] == (
-        "NobodyDefinedThis"
-    )
+    assert bundle.concepts[0].concept_type == ("NobodyDefinedThis")

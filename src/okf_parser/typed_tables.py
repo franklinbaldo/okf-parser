@@ -150,7 +150,7 @@ def discover_declared_schemas(
 
 def _rows_by_type(bundle: Bundle) -> dict[str, list[_ConceptRow]]:
     rows: dict[str, list[_ConceptRow]] = {}
-    records = bundle.concepts.execute().to_dict(orient="records")
+    records = [concept.model_dump() for concept in bundle.concepts]
     for record in records:
         frontmatter_raw = record.get("frontmatter_json")
         if not isinstance(frontmatter_raw, str):

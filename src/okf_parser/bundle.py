@@ -1,42 +1,27 @@
-"""Load an OKF bundle into Ibis relations and validate its structure."""
+"""Load an OKF bundle through the native binary and validate its structure.
+
+Ingestion is the binary's job (RFC 0024): ``load_bundle`` asks it for the
+bundle's records and holds them as immutable, typed tuples.
+"""
 
 from __future__ import annotations
 
-import json
-import re
 import warnings
 from dataclasses import dataclass
-from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING, TypedDict, cast
+from typing import TYPE_CHECKING
 
-import ibis
-
-from okf_parser.discovery import discover_markdown
-from okf_parser.exclusion import ExclusionRules
-from okf_parser.graph import BundleGraph, GraphEdge, GraphNode
+from okf_parser.graph import BundleGraph, GraphEdge, GraphNode, GraphSummary
 from okf_parser.models import (
     ConceptRecord,
     LinkRecord,
-    ParsedDocument,
     ReservedRecord,
     Severity,
     ValidationReport,
     Violation,
 )
-from okf_parser.parser import (
-    DocumentParseError,
-    MarkdownFacts,
-    concept_id,
-    has_markdown_suffix,
-    is_reserved_document,
-    markdown_facts,
-    parse_document,
-    resolve_local_target,
-    split_optional_frontmatter,
-)
 from okf_parser.relational_schema import validate_relations
-from okf_parser.rust_core import rust_load_bundle
+from okf_parser.rust_core import native_binary, rust_load_bundle
 from okf_parser.type_specs import missing_type_specs, required_type_spec_fields
 from okf_parser.typed_relations import TypedRelations, compile_bundle_types
 
@@ -44,58 +29,6 @@ if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
 
     import networkx as nx
-    from ibis.expr.types import Table
-
-_CONCEPT_SCHEMA = ibis.schema(
-    {
-        "concept_id": "string",
-        "logical_key": "string",
-        "path": "string",
-        "concept_type": "string",
-        "title": "string",
-        "description": "string",
-        "source_digest": "string",
-        "parsed_digest": "string",
-        "frontmatter_json": "string",
-        "body": "string",
-    }
-)
-_RESERVED_SCHEMA = ibis.schema({"path": "string", "filename": "string", "body": "string"})
-_LINK_SCHEMA = ibis.schema(
-    {
-        "source_id": "string",
-        "raw_target": "string",
-        "target_id": "string",
-        "exists": "boolean",
-        "origin": "string",
-    }
-)
-_ISO_DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
-_TITLE_LEVEL = 1
-_DATE_LEVEL = 2
-type TableRecord = ConceptRecord | ReservedRecord | LinkRecord
-
-
-class _RustBundlePayload(TypedDict):
-    root: str
-    concepts: list[object]
-    reserved: list[object]
-    links: list[object]
-    diagnostics: list[object]
-    markdown_count: int
-
-
-def _python_concept_payload(item: object) -> object:
-    if not isinstance(item, dict):
-        return item
-    frontmatter_json = item.get("frontmatter_json")
-    if not isinstance(frontmatter_json, str):
-        return item
-    normalized = dict(item)
-    normalized["frontmatter_json"] = json.dumps(
-        json.loads(frontmatter_json), ensure_ascii=False, sort_keys=True
-    )
-    return normalized
 
 
 def _ordered(diagnostics: Iterable[Violation]) -> list[Violation]:
@@ -106,35 +39,21 @@ def _ordered(diagnostics: Iterable[Violation]) -> list[Violation]:
     )
 
 
-def _table(records: Sequence[TableRecord], schema: ibis.Schema) -> Table:
-    rows = [record.model_dump() for record in records]
-    return ibis.memtable(rows, schema=schema)
-
-
-def _optional_text(value: object) -> str | None:
-    """Normalize an Ibis/pandas cell into a string or ``None``.
-
-    A null string column round-trips through pandas as float ``nan``, which
-    must not leak into graph node attributes.
-    """
-    return value if isinstance(value, str) else None
-
-
 @dataclass(frozen=True, slots=True)
 class Bundle:
-    """An immutable relational view of one OKF bundle.
+    """An immutable view of one OKF bundle, as the native engine loaded it.
 
-    Deliberately not a Pydantic model: the three table fields are live Ibis
-    query expressions rather than data crossing a boundary, and ``validate``
-    would collide with ``BaseModel.validate``.
+    Deliberately not a Pydantic model: ``validate`` would collide with
+    ``BaseModel.validate``. Its fields are validated models already.
     """
 
     root: Path
-    concepts: Table
-    reserved: Table
-    links: Table
+    concepts: tuple[ConceptRecord, ...]
+    reserved: tuple[ReservedRecord, ...]
+    links: tuple[LinkRecord, ...]
     diagnostics: tuple[Violation, ...]
     markdown_count: int
+    graph_summary: GraphSummary
 
     def validate(self) -> list[Violation]:
         """Return deterministic diagnostics ordered by path, severity, and code."""
@@ -143,11 +62,10 @@ class Bundle:
     @property
     def concept_types(self) -> set[str]:
         """Every producer-defined type observed in the bundle."""
-        column = self.concepts.select("concept_type").execute()["concept_type"]
-        return {value for value in column if isinstance(value, str)}
+        return {concept.concept_type for concept in self.concepts if concept.concept_type}
 
     def compile_types(self, spec_template: str | None = None) -> TypedRelations:
-        """Compile declared concept types into live in-process Ibis relations."""
+        """Compile declared concept types into live in-process relations."""
         return compile_bundle_types(self, spec_template)
 
     @property
@@ -159,24 +77,24 @@ class Bundle:
         """Project concepts and resolved Markdown links into a directed multigraph."""
         nodes = (
             GraphNode(
-                concept_id=row["concept_id"],
-                path=row["path"],
-                type=row["concept_type"],
-                title=_optional_text(row["title"]),
+                concept_id=concept.concept_id,
+                path=concept.path,
+                type=concept.concept_type,
+                title=concept.title,
             )
-            for row in self.concepts.execute().to_dict(orient="records")
+            for concept in self.concepts
         )
-        links = (
+        edges = (
             GraphEdge(
-                source_id=row["source_id"],
-                target_id=row["target_id"],
-                raw_target=row["raw_target"],
-                origin=row["origin"],
+                source_id=link.source_id,
+                target_id=link.target_id,
+                raw_target=link.raw_target,
+                origin=link.origin,
             )
-            for row in self.links.execute().to_dict(orient="records")
-            if isinstance(row["target_id"], str)
+            for link in self.links
+            if link.target_id is not None
         )
-        return BundleGraph.from_records(self.root, nodes, links)
+        return BundleGraph.from_records(self.root, nodes, edges, self.graph_summary)
 
     def to_networkx(self) -> nx.MultiDiGraph:
         """Deprecated alias of ``bundle.graph().to_networkx()``."""
@@ -188,280 +106,31 @@ class Bundle:
         return self.graph().to_networkx()
 
 
-def _load_concept(
-    root: Path,
-    path: Path,
-    known_paths: set[Path],
-    parsed: ParsedDocument | None = None,
-    facts: MarkdownFacts | None = None,
-) -> tuple[ConceptRecord | None, list[LinkRecord], list[Violation]]:
-    relative = path.relative_to(root).as_posix()
-    try:
-        parsed = parsed or parse_document(path)
-    except (DocumentParseError, OSError) as exc:
-        return (
-            None,
-            [],
-            [Violation(code="OKF001", severity=Severity.ERROR, path=relative, message=str(exc))],
-        )
-
-    diagnostics: list[Violation] = []
-    if not parsed.concept_type:
-        diagnostics.append(
-            Violation(
-                code="OKF002",
-                severity=Severity.ERROR,
-                path=relative,
-                message="frontmatter must contain a non-empty string type",
-            )
-        )
-
-    doc_id = concept_id(root, path)
-    links: list[LinkRecord] = []
-    raw_links = [(target, "body") for target in (facts or markdown_facts(parsed.body)).links]
-    resolved_targets: dict[str, Path | None] = {}
-    for raw_target, origin in raw_links:
-        if raw_target not in resolved_targets:
-            resolved_targets[raw_target] = resolve_local_target(root, path, raw_target)
-        resolved = resolved_targets[raw_target]
-        if resolved is None or not has_markdown_suffix(raw_target):
-            continue
-        exists = resolved in known_paths
-        target_id = (
-            concept_id(root, resolved) if exists and not is_reserved_document(resolved) else None
-        )
-        links.append(
-            LinkRecord(
-                source_id=doc_id,
-                raw_target=raw_target,
-                target_id=target_id,
-                exists=exists,
-                origin=origin,
-            )
-        )
-        if not exists:
-            diagnostics.append(
-                Violation(
-                    code="OKF101",
-                    severity=Severity.WARNING,
-                    path=relative,
-                    message=f"local Markdown link does not resolve: {raw_target}",
-                )
-            )
-
-    record = ConceptRecord(
-        concept_id=doc_id,
-        logical_key=doc_id,
-        path=relative,
-        concept_type=parsed.concept_type,
-        title=parsed.title,
-        description=parsed.description,
-        source_digest=parsed.source_digest,
-        parsed_digest=parsed.parsed_digest,
-        frontmatter_json=parsed.frontmatter_json,
-        body=parsed.body,
-    )
-    return record, links, diagnostics
-
-
-def _validate_index(root: Path, path: Path, text: str) -> tuple[str, list[Violation]]:
-    relative = path.relative_to(root).as_posix()
-    diagnostics: list[Violation] = []
-    try:
-        frontmatter, body = split_optional_frontmatter(text)
-    except DocumentParseError as exc:
-        return text, [
-            Violation(code="OKF004", severity=Severity.ERROR, path=relative, message=str(exc))
-        ]
-
-    if frontmatter is not None:
-        if path.parent != root:
-            diagnostics.append(
-                Violation(
-                    code="OKF004",
-                    severity=Severity.ERROR,
-                    path=relative,
-                    message="only the bundle-root index.md may contain frontmatter",
-                )
-            )
-        elif set(frontmatter) - {"okf_version"}:
-            diagnostics.append(
-                Violation(
-                    code="OKF004",
-                    severity=Severity.ERROR,
-                    path=relative,
-                    message="root index.md frontmatter may contain only okf_version",
-                )
-            )
-    facts = markdown_facts(body)
-    if not _has_title(facts):
-        diagnostics.append(
-            Violation(
-                code="OKF005",
-                severity=Severity.ERROR,
-                path=relative,
-                message="index.md must contain at least one level-one section",
-            )
-        )
-    return body, diagnostics
-
-
-def _has_title(facts: MarkdownFacts) -> bool:
-    """Whether parsed Markdown opens a level-one section with actual text."""
-    return any(level == _TITLE_LEVEL and text.strip() for level, text in facts.headings)
-
-
-def _validate_log(root: Path, path: Path, text: str) -> tuple[str, list[Violation]]:
-    relative = path.relative_to(root).as_posix()
-    diagnostics: list[Violation] = []
-    try:
-        frontmatter, body = split_optional_frontmatter(text)
-    except DocumentParseError as exc:
-        return text, [
-            Violation(code="OKF006", severity=Severity.ERROR, path=relative, message=str(exc))
-        ]
-    if frontmatter is not None:
-        diagnostics.append(
-            Violation(
-                code="OKF006",
-                severity=Severity.ERROR,
-                path=relative,
-                message="log.md must not contain frontmatter",
-            )
-        )
-    facts = markdown_facts(body)
-    if not _has_title(facts):
-        diagnostics.append(
-            Violation(
-                code="OKF007",
-                severity=Severity.ERROR,
-                path=relative,
-                message="log.md must contain a level-one title",
-            )
-        )
-
-    parsed_dates: list[date] = []
-    for level, heading in facts.headings:
-        if level != _DATE_LEVEL:
-            continue
-        if _ISO_DATE_RE.fullmatch(heading) is None:
-            diagnostics.append(
-                Violation(
-                    code="OKF008",
-                    severity=Severity.ERROR,
-                    path=relative,
-                    message=f"log date heading must use YYYY-MM-DD: {heading}",
-                )
-            )
-            continue
-        try:
-            parsed_dates.append(date.fromisoformat(heading))
-        except ValueError:
-            diagnostics.append(
-                Violation(
-                    code="OKF008",
-                    severity=Severity.ERROR,
-                    path=relative,
-                    message=f"log date heading is not a real date: {heading}",
-                )
-            )
-    if parsed_dates != sorted(parsed_dates, reverse=True):
-        diagnostics.append(
-            Violation(
-                code="OKF009",
-                severity=Severity.ERROR,
-                path=relative,
-                message="log date groups must be ordered newest first",
-            )
-        )
-    return body, diagnostics
-
-
 def load_bundle(
     root: Path,
     exclude: Sequence[str] = (),
     *,
     rust_core: Path | None = None,
 ) -> Bundle:
-    """Scan a directory and compile its OKF documents into Ibis tables.
+    """Load a bundle through the native binary.
 
     Exclusions come from the bundle's ``.okfignore`` and from ``exclude``,
-    which a caller supplies for a one-off run.
+    which a caller supplies for a one-off run. ``rust_core`` pins a specific
+    binary; by default the one installed with this package is used.
     """
     root = root.resolve()
     if not root.is_dir():
         msg = f"bundle root is not a directory: {root}"
         raise NotADirectoryError(msg)
-
-    if rust_core is not None:
-        payload = rust_load_bundle(root, rust_core, exclude)
-        if not isinstance(payload, dict):
-            message = "invalid okf load response: expected an object"
-            raise ValueError(message)
-        native = cast("_RustBundlePayload", payload)
-        return Bundle(
-            root=Path(native["root"]),
-            concepts=_table(
-                [
-                    ConceptRecord.model_validate(_python_concept_payload(value))
-                    for value in native["concepts"]
-                ],
-                _CONCEPT_SCHEMA,
-            ),
-            reserved=_table(
-                [ReservedRecord.model_validate(value) for value in native["reserved"]],
-                _RESERVED_SCHEMA,
-            ),
-            links=_table(
-                [LinkRecord.model_validate(value) for value in native["links"]], _LINK_SCHEMA
-            ),
-            diagnostics=tuple(Violation.model_validate(value) for value in native["diagnostics"]),
-            markdown_count=native["markdown_count"],
-        )
-
-    paths = discover_markdown(root, ExclusionRules.read(root, exclude))
-    known_paths = {path.resolve() for path in paths}
-    concepts: list[ConceptRecord] = []
-    reserved: list[ReservedRecord] = []
-    links: list[LinkRecord] = []
-    diagnostics: list[Violation] = []
-
-    for path in paths:
-        relative = path.relative_to(root).as_posix()
-        if is_reserved_document(path):
-            try:
-                text = path.read_text(encoding="utf-8")
-            except (UnicodeDecodeError, OSError) as exc:
-                diagnostics.append(
-                    Violation(
-                        code="OKF003",
-                        severity=Severity.ERROR,
-                        path=relative,
-                        message=str(exc),
-                    )
-                )
-                continue
-            if path.name == "index.md":
-                body, reserved_diagnostics = _validate_index(root, path, text)
-            else:
-                body, reserved_diagnostics = _validate_log(root, path, text)
-            diagnostics.extend(reserved_diagnostics)
-            reserved.append(ReservedRecord(path=relative, filename=path.name, body=body))
-            continue
-
-        record, document_links, document_diagnostics = _load_concept(root, path, known_paths)
-        if record is not None:
-            concepts.append(record)
-        links.extend(document_links)
-        diagnostics.extend(document_diagnostics)
-
+    loaded = rust_load_bundle(root, native_binary(rust_core), exclude)
     return Bundle(
-        root=root,
-        concepts=_table(concepts, _CONCEPT_SCHEMA),
-        reserved=_table(reserved, _RESERVED_SCHEMA),
-        links=_table(links, _LINK_SCHEMA),
-        diagnostics=tuple(diagnostics),
-        markdown_count=len(paths),
+        root=Path(loaded.root),
+        concepts=loaded.concepts,
+        reserved=loaded.reserved,
+        links=loaded.links,
+        diagnostics=loaded.diagnostics,
+        markdown_count=loaded.markdown_count,
+        graph_summary=loaded.graph,
     )
 
 
@@ -499,16 +168,15 @@ def validate_path(
         diagnostics.extend(
             required_type_spec_fields(
                 bundle.root,
-                bundle.concepts.execute().to_dict(orient="records"),
+                [concept.model_dump() for concept in bundle.concepts],
                 require_spec,
                 normative=normative_spec,
             )
         )
-    violations = tuple(_ordered(diagnostics))
     return ValidationReport(
         root=bundle.root,
         markdown_count=bundle.markdown_count,
-        concept_count=cast("int", bundle.concepts.count().execute()),
-        reserved_count=cast("int", bundle.reserved.count().execute()),
-        violations=violations,
+        concept_count=len(bundle.concepts),
+        reserved_count=len(bundle.reserved),
+        violations=tuple(_ordered(diagnostics)),
     )

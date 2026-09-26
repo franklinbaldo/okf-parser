@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
-from urllib.parse import SplitResult, unquote, urlsplit
+from urllib.parse import SplitResult, urlsplit
 
 import yaml
 from markdown_it import MarkdownIt
@@ -247,22 +247,3 @@ def looks_like_frontmatter_link(value: str) -> bool:
     the link table.
     """
     return not any(character.isspace() for character in value) and has_markdown_suffix(value)
-
-
-def resolve_local_target(bundle_root: Path, source_path: Path, raw_target: str) -> Path | None:
-    """Resolve one local Markdown target while preventing bundle escape."""
-    split = split_link_target(raw_target)
-    if split is None or split.scheme or split.netloc or not split.path:
-        return None
-
-    decoded = unquote(split.path)
-    candidate = (
-        bundle_root / decoded.lstrip("/")
-        if decoded.startswith("/")
-        else source_path.parent / decoded
-    )
-    resolved = candidate.resolve()
-    root = bundle_root.resolve()
-    if not resolved.is_relative_to(root):
-        return None
-    return resolved

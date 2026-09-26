@@ -1,4 +1,10 @@
-"""Bridge and deterministic discovery for the optional Rust OKF engine."""
+"""Find the native ``okf-parser`` binary and speak its JSON protocol.
+
+The binary is the product (RFC 0024): every OKF rule lives there, and this
+package is a shell over it. Each response carries a ``protocol`` version that
+the models here pin, so a mismatched binary fails loudly instead of being
+misread.
+"""
 
 from __future__ import annotations
 
@@ -10,12 +16,17 @@ import sysconfig
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
+from pydantic import BaseModel, ConfigDict, ValidationError
+
+from okf_parser.graph import GraphSummary
+from okf_parser.models import ConceptRecord, LinkRecord, ReservedRecord, Violation
 from okf_parser.parser import MarkdownFacts
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
-EngineMode = Literal["auto", "native"]
+PROTOCOL_VERSION = 1
+"""The shell/binary protocol this package speaks; see ``rust-core/src/protocol.rs``."""
 
 
 def _binary_name() -> str:
@@ -38,17 +49,11 @@ def packaged_rust_core() -> Path | None:
 
 def resolve_rust_core(
     *,
-    engine: EngineMode = "auto",
     explicit: Path | None = None,
     environ: dict[str, str] | None = None,
     path_lookup: Callable[[str], str | None] = shutil.which,
 ) -> Path | None:
-    """Resolve the best available Rust engine without leaking deployment into callers."""
-    if engine not in {"auto", "native"}:
-        msg = f"unsupported OKF engine mode: {engine}"
-        raise ValueError(msg)
-    if engine == "native":
-        return None
+    """Locate the native binary: explicit, packaged, ``OKF_CORE``, then ``PATH``."""
     if explicit is not None:
         return explicit
 
@@ -65,10 +70,44 @@ def resolve_rust_core(
     return Path(resolved) if resolved else None
 
 
+class NativeBinaryMissingError(RuntimeError):
+    """No ``okf-parser`` binary could be found; the shell cannot work without it."""
+
+    def __init__(self) -> None:
+        """Say where the binary is looked for."""
+        super().__init__(
+            "the native okf-parser binary was not found: reinstall okf-parser, "
+            "or point OKF_CORE at a built binary"
+        )
+
+
+def native_binary(explicit: Path | None = None) -> Path:
+    """Return the binary to call, or fail: there is no Python fallback."""
+    executable = resolve_rust_core(explicit=explicit)
+    if executable is None:
+        raise NativeBinaryMissingError
+    return executable
+
+
+class EngineLoad(BaseModel):
+    """``__engine-load``: one bundle's records, diagnostics and graph summary."""
+
+    model_config = ConfigDict(frozen=True)
+
+    protocol: Literal[1]
+    root: str
+    concepts: tuple[ConceptRecord, ...]
+    reserved: tuple[ReservedRecord, ...]
+    links: tuple[LinkRecord, ...]
+    diagnostics: tuple[Violation, ...]
+    markdown_count: int
+    graph: GraphSummary
+
+
 def rust_load_bundle(
     root: Path, executable: Path, exclude: Sequence[str] = (), *, read_concurrency: int = 32
-) -> object:
-    """Run the end-to-end native engine and return its relational payload."""
+) -> EngineLoad:
+    """Run the native engine and validate its answer against the protocol."""
     command = [
         str(executable),
         "__engine-load",
@@ -83,10 +122,33 @@ def rust_load_bundle(
         message = completed.stderr.strip() or f"okf exited with {completed.returncode}"
         raise RustCoreError(message)
     try:
-        return json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
-        message = f"invalid okf load response: {exc}"
+        return EngineLoad.model_validate(_canonical_frontmatter(json.loads(completed.stdout)))
+    except (json.JSONDecodeError, ValidationError) as exc:
+        message = f"invalid okf load response (protocol {PROTOCOL_VERSION} expected): {exc}"
         raise RustCoreError(message) from exc
+
+
+def _canonical_frontmatter(payload: object) -> object:
+    """Re-serialize each concept's ``frontmatter_json`` with sorted keys.
+
+    The engine emits frontmatter in document order; the public record carries
+    one canonical spelling so equal frontmatter compares equal.
+    """
+    if not isinstance(payload, dict):
+        return payload
+    concepts = payload.get("concepts")
+    if not isinstance(concepts, list):
+        return payload
+    normalized = [_canonical_concept(concept) for concept in concepts]
+    return {**payload, "concepts": normalized}
+
+
+def _canonical_concept(concept: object) -> object:
+    text = concept.get("frontmatter_json") if isinstance(concept, dict) else None
+    if not isinstance(concept, dict) or not isinstance(text, str):
+        return concept
+    canonical = json.dumps(json.loads(text), ensure_ascii=False, sort_keys=True)
+    return {**concept, "frontmatter_json": canonical}
 
 
 class RustCoreError(RuntimeError):

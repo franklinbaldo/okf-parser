@@ -1,10 +1,10 @@
 ---
 type: Documentation
-title: Automatic native engine selection
-description: How okf-parser installs, discovers, and falls back from its Rust engine
+title: Native engine selection
+description: How okf-parser installs and discovers its Rust engine, and where TypeScript falls back
 ---
 
-# Automatic native engine selection
+# Native engine selection
 
 Applications should call the ordinary public loaders:
 
@@ -22,17 +22,22 @@ const bundle = await loadBundle(root);
 
 No application code needs to locate a Rust executable.
 
-With the default `engine="auto"` policy, resolution is deterministic:
+Resolution is deterministic:
 
 1. an explicit `rust_core` / `rustCore` expert override;
 2. a release-matched native engine installed by the Python or npm distribution (`okf-parser` for Python, `okf-core` inside the npm platform package);
 3. the `OKF_CORE` environment override;
-4. the distribution-specific executable on `PATH`;
-5. the portable Python or TypeScript implementation.
+4. the distribution-specific executable on `PATH`.
+
+**Python has no fallback.** The binary is the implementation
+([RFC 0024](../rfcs/0024-rust-native-core.md)); if none is found, `load_bundle`
+raises `NativeBinaryMissingError`. Every answer carries a protocol version, and a
+binary that speaks a different one is rejected rather than misread.
+
+**TypeScript** falls back to its portable implementation after step 4;
+`engine: "native"` selects that implementation explicitly.
 
 If a selected Rust engine starts and fails, the request fails rather than silently changing engines midway through one load.
-
-`engine="native"` means language-native Python or TypeScript and deliberately skips every Rust probe. It is the deterministic escape hatch for tests, unsupported platforms, and environments that do not permit subprocesses.
 
 ## Python packaging
 

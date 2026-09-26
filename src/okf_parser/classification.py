@@ -24,9 +24,7 @@ def classify_path(path: Path, exclude: Sequence[str] = ()) -> dict[str, list[str
     root = path.resolve()
     bundle = load_bundle(root, exclude)
 
-    concept_rows = (
-        bundle.concepts.select("path", "concept_type").execute().to_dict(orient="records")
-    )
+    concept_rows = [concept.model_dump() for concept in bundle.concepts]
     all_concepts = {row["path"] for row in concept_rows if isinstance(row["path"], str)}
     concepts = {
         row["path"]
@@ -37,7 +35,7 @@ def classify_path(path: Path, exclude: Sequence[str] = ()) -> dict[str, list[str
     }
     recorded_reserved = {
         row["path"]
-        for row in bundle.reserved.select("path").execute().to_dict(orient="records")
+        for row in [reserved.model_dump() for reserved in bundle.reserved]
         if isinstance(row["path"], str)
     }
     diagnostic_paths = {item.path for item in bundle.diagnostics}

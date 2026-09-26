@@ -230,16 +230,13 @@ def answer_with_okf_parser(root: Path) -> dict[str, Any]:
     """Answer every question through the public okf-parser API."""
     report = validate_path(root, require_spec="docs/types/{slug}.md")
     bundle = load_bundle(root)
-    concepts = bundle.concepts.execute()
-    links = bundle.links.execute()
     graph = bundle.graph().to_networkx()
 
-    types = sorted({str(value) for value in concepts["concept_type"]})
+    types = sorted({concept.concept_type for concept in bundle.concepts})
     specified = {concept_type.lower() for concept_type in SPEC_TYPES}
-    names = {_stem(value) for value in concepts["concept_id"]}
+    names = {_stem(concept.concept_id) for concept in bundle.concepts}
 
-    resolved = links[links["target_id"].notna()]
-    targets = {_stem(value) for value in resolved["target_id"]}
+    targets = {_stem(link.target_id) for link in bundle.links if link.target_id is not None}
 
     edges = ((_stem(u), _stem(v)) for u, v in graph.edges())
     simple = nx.DiGraph((u, v) for u, v in edges if u in names and v in names)
@@ -249,12 +246,12 @@ def answer_with_okf_parser(root: Path) -> dict[str, Any]:
         "conformant": bool(report.is_conformant),
         "concept_count": int(report.concept_count),
         "type_counts": {
-            concept_type: int((concepts["concept_type"] == concept_type).sum())
+            concept_type: sum(concept.concept_type == concept_type for concept in bundle.concepts)
             for concept_type in types
         },
         "no_inbound": sorted(names - targets),
         "cycles": sorted(sorted(cycle) for cycle in nx.simple_cycles(simple)),
-        "unresolved_links": int(len(links) - len(resolved)),
+        "unresolved_links": sum(link.target_id is None for link in bundle.links),
         "types_without_spec": sorted(t for t in types if t.lower() not in specified),
         "impact_of_deleting_a": sorted(nx.ancestors(simple, "a")),
     }

@@ -13,7 +13,7 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use walkdir::{DirEntry, WalkDir};
 
-use crate::yaml::{canonical_parsed, parse_mapping, sorted_json};
+use crate::yaml::{Frontmatter, canonical_parsed, parse_frontmatter, parse_mapping, sorted_json};
 
 const IGNORED: &[&str] = &[
     ".git",
@@ -81,6 +81,8 @@ struct Loaded {
 struct Parsed {
     record: ConceptRecord,
     facts: Facts,
+    /// YAML tags the frontmatter used that JSON cannot carry (OKF102).
+    lossy_tags: Vec<String>,
 }
 
 fn relative(root: &Path, path: &Path) -> String {
@@ -236,12 +238,16 @@ fn parse_concept(path: String, text: String) -> Result<Parsed, String> {
     let normalized = normalized_newlines(&text);
     let (s, b) = split_source(normalized.as_ref())
         .ok_or("concept must start with YAML frontmatter delimited by ---")?;
-    let map = parse_mapping(s)?;
+    let Frontmatter {
+        mapping: map,
+        lossy_tags,
+    } = parse_frontmatter(s)?;
     let identity = id(&path);
     let kind = field(&map, "type")
         .map(|v| v.trim().into())
         .unwrap_or_default();
     Ok(Parsed {
+        lossy_tags,
         facts: markdown_facts(b),
         record: ConceptRecord {
             concept_id: identity.clone(),
@@ -480,6 +486,17 @@ pub fn load_bundle(
                             "error",
                             &relative,
                             "frontmatter must contain a non-empty string type",
+                        ));
+                    }
+                    if !p.lossy_tags.is_empty() {
+                        diagnostics.push(diag(
+                            "OKF102",
+                            "warning",
+                            &relative,
+                            format!(
+                                "frontmatter uses YAML tags with no JSON representation ({}); values kept as written",
+                                p.lossy_tags.join(", ")
+                            ),
                         ));
                     }
                     facts.push((path, p.facts));
