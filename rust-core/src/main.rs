@@ -34,6 +34,10 @@ enum Command {
         host: String,
         #[arg(long, default_value_t = 8000)]
         port: u16,
+        /// Accept this HTTP `Host` header (repeatable), e.g. the public hostname
+        /// behind a proxy. Loopback names are always accepted.
+        #[arg(long = "allowed-host")]
+        allowed_host: Vec<String>,
         /// Also register the tools that commit changes to the bundle.
         #[arg(long)]
         allow_write: bool,
@@ -71,8 +75,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             transport,
             host,
             port,
+            allowed_host,
             allow_write,
-        } => mcp::serve(transport, &host, port, allow_write)?,
+        } => mcp::serve(transport, &host, port, &allowed_host, allow_write)?,
     }
     Ok(())
 }

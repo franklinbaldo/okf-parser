@@ -44,6 +44,7 @@ pub enum Transport {
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct PathArgs {
     path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -51,27 +52,29 @@ pub struct PathArgs {
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CheckArgs {
     path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     exclude: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     require_spec: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    normative_spec: Option<bool>,
+    #[serde(default)]
+    normative_spec: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     relational_schema: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    classify: Option<bool>,
+    #[serde(default)]
+    classify: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct InventoryArgs {
     path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     exclude: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    digests: Option<bool>,
+    #[serde(default)]
+    digests: bool,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, schemars::JsonSchema)]
@@ -95,12 +98,13 @@ pub enum ZodImport {
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SchemaArgs {
     path: String,
     #[serde(default, rename = "format")]
     schema_format: SchemaFormat,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    infer_types: Option<bool>,
+    #[serde(default)]
+    infer_types: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cast: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -112,6 +116,7 @@ pub struct SchemaArgs {
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ApplyArgs {
     path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -131,13 +136,14 @@ pub struct ApplyArgs {
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct InitArgs {
     path: String,
     spec_template: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     exclude: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    infer_schema: Option<bool>,
+    #[serde(default)]
+    infer_schema: bool,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize, schemars::JsonSchema)]
@@ -150,6 +156,7 @@ pub enum ImportConflictPolicy {
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ImportPreviewArgs {
     source: String,
     path: String,
@@ -157,13 +164,14 @@ pub struct ImportPreviewArgs {
     type_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     id_column: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    overwrite: Option<bool>,
+    #[serde(default)]
+    overwrite: bool,
     #[serde(default)]
     on_conflict: ImportConflictPolicy,
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ImportWriteArgs {
     source: String,
     path: String,
@@ -171,8 +179,8 @@ pub struct ImportWriteArgs {
     type_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     id_column: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    overwrite: Option<bool>,
+    #[serde(default)]
+    overwrite: bool,
     #[serde(default)]
     on_conflict: ImportConflictPolicy,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -180,18 +188,27 @@ pub struct ImportWriteArgs {
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DuckdbExportArgs {
     path: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    database: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    schema: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    overwrite: Option<bool>,
+    #[serde(default = "default_database")]
+    database: String,
+    #[serde(default = "default_schema")]
+    schema: String,
+    #[serde(default)]
+    overwrite: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     exclude: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     spec_template: Option<String>,
+}
+
+fn default_database() -> String {
+    "okf.duckdb".into()
+}
+
+fn default_schema() -> String {
+    "okf".into()
 }
 
 #[derive(Clone)]
@@ -458,10 +475,39 @@ impl ServerHandler for OkfServer {
     }
 }
 
+/// The `Host` header values the HTTP transport accepts.
+///
+/// `bind` is where the socket listens, not what clients call the server: behind
+/// a proxy or on a public hostname the request arrives as `Host:
+/// service.example.com`. rmcp's loopback defaults stay, a concrete bind address
+/// is added (clients may address it directly), an unspecified one (`0.0.0.0`,
+/// `::`) is not, and every `--allowed-host` is added. Validation itself is never
+/// disabled: it is the DNS-rebinding protection.
+pub fn allowed_hosts(defaults: &[String], bind: &str, extra: &[String]) -> Vec<String> {
+    let unspecified = bind
+        .trim_matches(['[', ']'])
+        .parse::<std::net::IpAddr>()
+        .is_ok_and(|ip| ip.is_unspecified());
+    let bind = (!unspecified).then_some(bind);
+    let mut hosts: Vec<String> = Vec::new();
+    for host in defaults
+        .iter()
+        .map(String::as_str)
+        .chain(bind)
+        .chain(extra.iter().map(String::as_str))
+    {
+        if !hosts.iter().any(|known| known == host) {
+            hosts.push(host.to_owned());
+        }
+    }
+    hosts
+}
+
 pub fn serve(
     transport: Transport,
     host: &str,
     port: u16,
+    allowed_host: &[String],
     allow_write: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let python = python::interpreter()?;
@@ -476,9 +522,7 @@ pub fn serve(
             }
             Transport::Http => {
                 let mut config = StreamableHttpServerConfig::default();
-                if !config.allowed_hosts.iter().any(|allowed| allowed == host) {
-                    config.allowed_hosts.push(host.to_owned());
-                }
+                config.allowed_hosts = allowed_hosts(&config.allowed_hosts, host, allowed_host);
                 let service = StreamableHttpService::new(
                     move || Ok(OkfServer::new(allow_write, python.clone())),
                     Arc::new(LocalSessionManager::default()),
@@ -542,6 +586,52 @@ mod tests {
         assert_eq!(
             serde_json::to_value(args).unwrap(),
             json!({"path": "b", "type": "T", "from": "x"})
+        );
+    }
+
+    fn strings(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    #[test]
+    fn allowed_hosts_keep_loopback_and_add_a_concrete_bind_address() {
+        let defaults = strings(&["localhost", "127.0.0.1"]);
+        assert_eq!(
+            allowed_hosts(&defaults, "10.0.0.5", &[]),
+            strings(&["localhost", "127.0.0.1", "10.0.0.5"])
+        );
+        assert_eq!(
+            allowed_hosts(&defaults, "127.0.0.1", &[]),
+            strings(&["localhost", "127.0.0.1"])
+        );
+    }
+
+    #[test]
+    fn allowed_hosts_never_treat_an_unspecified_bind_as_a_host() {
+        let defaults = strings(&["localhost"]);
+        for bind in ["0.0.0.0", "::", "[::]"] {
+            assert_eq!(
+                allowed_hosts(&defaults, bind, &strings(&["svc.example.com"])),
+                strings(&["localhost", "svc.example.com"]),
+                "bind {bind}"
+            );
+        }
+    }
+
+    #[test]
+    fn tool_arguments_reject_unknown_keys() {
+        let error = serde_json::from_value::<ApplyArgs>(json!({"path": "b", "write": true}))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("unknown field `write`"), "{error}");
+    }
+
+    #[test]
+    fn scalar_defaults_are_concrete_not_nullable() {
+        let args: DuckdbExportArgs = serde_json::from_value(json!({"path": "b"})).unwrap();
+        assert_eq!(
+            serde_json::to_value(args).unwrap(),
+            json!({"path": "b", "database": "okf.duckdb", "schema": "okf", "overwrite": false})
         );
     }
 

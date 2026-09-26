@@ -16,6 +16,11 @@ still decides whether commit tools are registered. `graph` is answered
 natively; every other tool runs the CLI's own service function through
 `python -m okf_parser.mcp_bridge`.
 
+The server rejects unknown tool arguments as tool errors, and defaulted flags
+keep concrete, non-nullable schemas. Over HTTP, `--host` is only the bind
+address: the `Host` header is validated separately, and `--allowed-host`
+(repeatable) names the public hostname behind a proxy.
+
 Breaking:
 
 - `fastmcp` is no longer a dependency, and `fastmcp.json` is gone.

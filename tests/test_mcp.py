@@ -6,10 +6,13 @@ exercise ``okf_parser.mcp_bridge``, which the binary delegates unported tools to
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
+import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Self, get_args
 
@@ -238,6 +241,103 @@ def test_delegated_text_result_stays_text(tmp_path: Path) -> None:
     assert result["isError"] is False
     assert "structuredContent" not in result
     assert "z.object" in result["content"][0]["text"]
+
+
+@native
+@pytest.mark.parametrize(
+    ("tool", "arguments"),
+    [
+        ("apply_preview", {"path": ".", "write": True}),
+        ("graph", {"path": ".", "bogus": 1}),
+    ],
+    ids=["delegated", "native"],
+)
+def test_unknown_argument_is_rejected_at_the_native_boundary(
+    tool: str, arguments: JsonObject
+) -> None:
+    with McpSession("--allow-write") as session:
+        result = session.call(tool, arguments)
+
+    assert result["isError"] is True
+    assert "unknown field" in result["content"][0]["text"]
+
+
+@native
+def test_defaulted_scalars_keep_concrete_non_nullable_schemas() -> None:
+    with McpSession("--allow-write") as session:
+        tools = session.tools()
+
+    assert _properties(tools["inventory"])["digests"] == {"type": "boolean", "default": False}
+    export = _properties(tools["duckdb_export"])
+    assert export["database"] == {"type": "string", "default": "okf.duckdb"}
+    assert export["schema"] == {"type": "string", "default": "okf"}
+    assert export["overwrite"] == {"type": "boolean", "default": False}
+    for tool in tools.values():
+        assert tool["inputSchema"]["additionalProperties"] is False, tool["name"]
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def _initialize_over_http(port: int, host_header: str) -> int:
+    """POST an MCP initialize with a chosen ``Host`` header; return the HTTP status."""
+    body = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": {"name": "okf-parser-tests", "version": "0"},
+            },
+        }
+    )
+    deadline = time.monotonic() + 10
+    while True:
+        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+        try:
+            connection.putrequest("POST", "/mcp", skip_host=True)
+            connection.putheader("Host", host_header)
+            connection.putheader("Content-Type", "application/json")
+            connection.putheader("Accept", "application/json, text/event-stream")
+            connection.putheader("Content-Length", str(len(body)))
+            connection.endheaders(body.encode())
+            return connection.getresponse().status
+        except ConnectionRefusedError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.05)
+        finally:
+            connection.close()
+
+
+@native
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [((), 403), (("--allowed-host", "svc.example.com"), 200)],
+    ids=["rejected-by-default", "allowed-explicitly"],
+)
+def test_http_host_validation_is_separate_from_the_bind_address(
+    flags: tuple[str, ...], expected: int
+) -> None:
+    assert _BINARY is not None
+    port = _free_port()
+    server = subprocess.Popen(  # noqa: S603 - fixed argv to the binary under test
+        [str(_BINARY), "serve", "--transport", "http", "--port", str(port), *flags],
+        env={**os.environ, "OKF_PYTHON": sys.executable},
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        assert _initialize_over_http(port, "svc.example.com") == expected
+        assert _initialize_over_http(port, f"127.0.0.1:{port}") == 200
+    finally:
+        server.terminate()
+        server.wait(timeout=10)
 
 
 def test_bridge_accepts_wire_aliases(monkeypatch: pytest.MonkeyPatch) -> None:

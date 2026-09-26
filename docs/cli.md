@@ -275,11 +275,21 @@ MCP tool: `duckdb_export` with `--allow-write`; it also accepts `spec_template`.
 ## `serve`
 
 ```bash
-uv run okf-parser serve [--transport stdio|http] [--host HOST] [--port PORT] [--allow-write]
+uv run okf-parser serve [--transport stdio|http] [--host HOST] [--port PORT] [--allowed-host NAME ...] [--allow-write]
 ```
 
 Runs the MCP server, built into the native binary on `rmcp`. `stdio` is the
-default; `http` serves Streamable HTTP at `http://HOST:PORT/mcp`. The legacy
+default; `http` serves Streamable HTTP at `http://HOST:PORT/mcp`.
+
+`--host` is the bind address; the HTTP `Host` header is validated separately,
+as DNS-rebinding protection. Loopback names and a concrete bind address are
+accepted; behind a proxy or on a public hostname, name it with
+`--allowed-host` (repeatable), e.g.
+`serve --transport http --host 0.0.0.0 --allowed-host mcp.example.com`.
+
+Tool arguments are validated at the server: an unknown key is a tool error,
+and defaulted flags keep concrete, non-nullable schemas (`digests` defaults to
+`false`, `database` to `okf.duckdb`). The legacy
 `sse` transport is gone: the MCP specification deprecated it in favor of
 Streamable HTTP. `graph` is answered natively; every other tool is delegated to
 `python -m okf_parser.mcp_bridge`, which runs the CLI's own service function.

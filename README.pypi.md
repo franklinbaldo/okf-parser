@@ -246,6 +246,7 @@ the target branch before allowing merge.
 ```bash
 uv run okf-parser serve                      # stdio
 uv run okf-parser serve --transport http     # Streamable HTTP on 127.0.0.1:8000/mcp
+uv run okf-parser serve --transport http --host 0.0.0.0 --allowed-host mcp.example.com
 uv run okf-parser serve --allow-write        # also register the commit tools
 ```
 
