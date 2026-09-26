@@ -5,7 +5,12 @@
 # dependencies = [
 # ]
 # ///
-"""Reuse the exact Linux x86_64 executable from a Python wheel in npm-native."""
+"""Reuse the exact Linux x86_64 executable from a Python wheel in npm-native.
+
+The executable links the libduckdb the wheel ships beside it (RFC 0024
+phase 4), so the library travels with it, byte for byte, into the same
+`bin/` directory: the binary's `$ORIGIN` run path finds it there.
+"""
 
 from __future__ import annotations
 
@@ -19,6 +24,7 @@ from pathlib import Path
 
 _WHEEL_SUFFIX = ".data/scripts/okf-parser"
 _NPM_MEMBER = "package/bin/okf-core"
+_LIBRARY = "libduckdb.so"
 
 
 class ArtifactError(ValueError):
@@ -45,32 +51,42 @@ class ArtifactError(ValueError):
         return cls(f"cannot read npm tarball {tarball}: {error}")
 
     @classmethod
+    def missing_library(cls, wheel: Path) -> ArtifactError:
+        """Build an error for a wheel that does not ship its libduckdb."""
+        return cls(f"{wheel}: does not ship {_LIBRARY} beside okf-parser")
+
+    @classmethod
     def mismatch(cls, wheel_sha256: str, npm_sha256: str) -> ArtifactError:
         """Build an error when wheel and npm executables are not identical."""
         return cls(f"native executable mismatch: wheel={wheel_sha256} npm={npm_sha256}")
 
 
-def wheel_executable(wheel: Path) -> bytes:
-    """Return the single packaged Linux executable from a maturin bin wheel."""
+def wheel_payload(wheel: Path) -> tuple[bytes, bytes]:
+    """Return the packaged Linux executable and the libduckdb beside it."""
     try:
         with zipfile.ZipFile(wheel) as archive:
             names = [name for name in archive.namelist() if name.endswith(_WHEEL_SUFFIX)]
             if len(names) != 1:
                 raise ArtifactError.wheel_entries(wheel, names)
-            return archive.read(names[0])
+            library = names[0].rsplit("/", 1)[0] + "/" + _LIBRARY
+            if library not in archive.namelist():
+                raise ArtifactError.missing_library(wheel)
+            return archive.read(names[0]), archive.read(library)
     except (OSError, KeyError, zipfile.BadZipFile) as exc:
         raise ArtifactError.wheel_read(wheel, exc) from exc
 
 
-def npm_executable(tarball: Path) -> bytes:
-    """Return bin/okf-core bytes from one npm-native tarball."""
+def npm_payload(tarball: Path) -> tuple[bytes, bytes]:
+    """Return bin/okf-core and bin/libduckdb.so bytes from one npm-native tarball."""
     try:
         with tarfile.open(tarball, mode="r:gz") as archive:
-            member = archive.getmember(_NPM_MEMBER)
-            file_object = archive.extractfile(member)
-            if file_object is None:
-                raise ArtifactError.npm_member(tarball)
-            return file_object.read()
+            payloads = []
+            for name in (_NPM_MEMBER, _NPM_MEMBER.rsplit("/", 1)[0] + "/" + _LIBRARY):
+                file_object = archive.extractfile(archive.getmember(name))
+                if file_object is None:
+                    raise ArtifactError.npm_member(tarball)
+                payloads.append(file_object.read())
+            return payloads[0], payloads[1]
     except (OSError, KeyError, tarfile.TarError) as exc:
         raise ArtifactError.npm_read(tarball, exc) from exc
 
@@ -81,21 +97,23 @@ def digest(data: bytes) -> str:
 
 
 def extract(wheel: Path, destination: Path) -> str:
-    """Write the wheel executable verbatim to the npm-native staging path."""
-    payload = wheel_executable(wheel)
+    """Write the wheel executable and its libduckdb verbatim into the npm staging dir."""
+    executable, library = wheel_payload(wheel)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_bytes(payload)
-    destination.chmod(destination.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    return digest(payload)
+    for path, payload in ((destination, executable), (destination.parent / _LIBRARY, library)):
+        path.write_bytes(payload)
+        path.chmod(path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    return digest(executable)
 
 
 def verify(wheel: Path, tarball: Path) -> str:
-    """Prove the npm-native executable is byte-identical to the wheel executable."""
-    wheel_payload = wheel_executable(wheel)
-    npm_payload = npm_executable(tarball)
-    if wheel_payload != npm_payload:
-        raise ArtifactError.mismatch(digest(wheel_payload), digest(npm_payload))
-    return digest(wheel_payload)
+    """Prove the npm-native executable and library are byte-identical to the wheel's."""
+    wheel_files = wheel_payload(wheel)
+    npm_files = npm_payload(tarball)
+    for wheel_bytes, npm_bytes in zip(wheel_files, npm_files, strict=True):
+        if wheel_bytes != npm_bytes:
+            raise ArtifactError.mismatch(digest(wheel_bytes), digest(npm_bytes))
+    return digest(wheel_files[0])
 
 
 def _parser() -> argparse.ArgumentParser:

@@ -22,12 +22,11 @@ from okf_parser.models import (
     ValidationReport,
     Violation,
 )
-from okf_parser.relational_schema import validate_relations
+from okf_parser.relational_schema import RelationalSchemaError
 from okf_parser.rust_core import (
     BundleRecords,
-    RustCoreError,
-    call_native,
     native_binary,
+    native_result,
     rust_load_bundle,
 )
 from okf_parser.type_specs import SpecTemplateError
@@ -168,15 +167,6 @@ class CheckReport(BaseModel):
     reserved_count: int
     diagnostics: tuple[Violation, ...]
     classification: Classification | None = None
-    bundle: BundleRecords | None = None
-    """The bundle the report was taken on, when the request asked for it."""
-
-    def loaded(self) -> Bundle:
-        """The bundle this report describes, as a ``Bundle``."""
-        if self.bundle is None:
-            msg = "this check report was requested without its bundle"
-            raise ValueError(msg)
-        return _bundle(self.bundle)
 
 
 class _CheckRequest(BaseModel):
@@ -189,7 +179,7 @@ class _CheckRequest(BaseModel):
     require_spec: str | None
     normative_spec: bool
     classify: bool
-    bundle: bool
+    relational_schema: str | None
 
 
 def check_report(  # noqa: PLR0913 -- the independent public check options.
@@ -199,18 +189,18 @@ def check_report(  # noqa: PLR0913 -- the independent public check options.
     *,
     normative_spec: bool = False,
     classify: bool = False,
-    with_bundle: bool = False,
+    relational_schema: Path | None = None,
 ) -> CheckReport:
-    """Check a bundle natively: diagnostics, spec rules and classification.
+    """Check a bundle natively.
 
-    ``with_bundle`` also returns the loaded bundle (``CheckReport.loaded``),
-    from the same read, for checks the binary does not run itself.
+    Diagnostics, spec rules and classification and, with
+    ``relational_schema`` (relative to the bundle root), declared keys.
     """
     root = path.resolve()
     if not root.is_dir():
         msg = f"bundle root is not a directory: {root}"
         raise NotADirectoryError(msg)
-    response = call_native(
+    result = native_result(
         "__check",
         _CheckRequest(
             path=str(root),
@@ -218,16 +208,11 @@ def check_report(  # noqa: PLR0913 -- the independent public check options.
             require_spec=require_spec,
             normative_spec=normative_spec,
             classify=classify,
-            bundle=with_bundle,
+            relational_schema=None if relational_schema is None else str(relational_schema),
         ),
+        {"spec_template": SpecTemplateError, "relational_schema": RelationalSchemaError},
     )
-    if response.error is not None:
-        if response.error.kind == "spec_template":
-            raise SpecTemplateError(response.error.message)
-        if response.error.kind == "request":
-            raise ValueError(response.error.message)
-        raise RustCoreError(response.error.message)
-    return CheckReport.model_validate(response.result)
+    return CheckReport.model_validate(result)
 
 
 def validate_path(
@@ -240,30 +225,22 @@ def validate_path(
 ) -> ValidationReport:
     """Validate every Markdown file recursively below a path as OKF v0.2.
 
-    The native check answers everything but ``relational_schema``, whose
-    declared relations are still validated through DuckDB (RFC 0024 phase 4).
     ``require_spec`` adds the optional rule that every producer-defined type in
-    use has a specification document at the path its template derives.
+    use has a specification document at the path its template derives;
+    ``relational_schema`` (relative to the bundle root, or absolute) checks the
+    keys and references a trusted SQL file declares.
     """
     report = check_report(
         path,
         exclude,
         require_spec,
         normative_spec=normative_spec,
-        with_bundle=relational_schema is not None,
+        relational_schema=relational_schema,
     )
-    diagnostics = list(report.diagnostics)
-    if relational_schema is not None:
-        schema_path = (
-            relational_schema
-            if relational_schema.is_absolute()
-            else report.root / relational_schema
-        )
-        diagnostics.extend(validate_relations(report.loaded(), schema_path))
     return ValidationReport(
         root=report.root,
         markdown_count=report.markdown_count,
         concept_count=report.concept_count,
         reserved_count=report.reserved_count,
-        violations=tuple(_ordered(diagnostics)),
+        violations=report.diagnostics,
     )

@@ -149,6 +149,15 @@ pub enum Code {
     /// A concept lacks a field its type's specification requires.
     #[serde(rename = "OKF011")]
     Okf011,
+    /// A relational key column is not a single string, or is ambiguous.
+    #[serde(rename = "OKF020")]
+    Okf020,
+    /// A primary key is missing, or a key is duplicated.
+    #[serde(rename = "OKF021")]
+    Okf021,
+    /// A foreign key matches no referenced concept.
+    #[serde(rename = "OKF022")]
+    Okf022,
     /// A local Markdown link does not resolve.
     #[serde(rename = "OKF101")]
     Okf101,
@@ -170,6 +179,9 @@ impl Code {
             Self::Okf009 => "OKF009",
             Self::Okf010 => "OKF010",
             Self::Okf011 => "OKF011",
+            Self::Okf020 => "OKF020",
+            Self::Okf021 => "OKF021",
+            Self::Okf022 => "OKF022",
             Self::Okf101 => "OKF101",
             Self::Okf102 => "OKF102",
         }
@@ -973,6 +985,9 @@ mod tests {
             Code::Okf009,
             Code::Okf010,
             Code::Okf011,
+            Code::Okf020,
+            Code::Okf021,
+            Code::Okf022,
             Code::Okf101,
             Code::Okf102,
         ];

@@ -89,7 +89,16 @@ uv run --script scripts/changelog_notes.py "$(uv run --script scripts/project_ve
 
 The root project uses Maturin as its PEP 517 backend with `bindings = "bin"`. The Python import package and PyPI distribution remain `okf_parser` and `okf-parser`; the sole installed binary target is `okf-parser`.
 
-A platform wheel therefore installs the ordinary Python package behind one `okf-parser` command. That executable declares the whole CLI and MCP surface and answers `check`, `inventory`, `graph`, `init` and the private native-engine operations itself; only the commands that still need DuckDB or the Python formatter are forwarded to the packaged Python module (RFC 0024). Applications do not depend on, import or locate a second Python distribution. `resolve_rust_core()` discovers the same executable from the interpreter scripts directory before consulting explicit environment overrides or `PATH`.
+A platform wheel therefore installs the ordinary Python package behind one `okf-parser` command. That executable declares the whole CLI and MCP surface and answers `check`, `inventory`, `graph`, `init`, `duckdb` and the private native-engine operations itself; only the commands still written in Python are forwarded to the packaged Python module (RFC 0024). Applications do not depend on, import or locate a second Python distribution. `resolve_rust_core()` discovers the same executable from the interpreter scripts directory before consulting explicit environment overrides or `PATH`.
+
+### DuckDB in the wheel
+
+The executable carries DuckDB (RFC 0024 phase 4) in one of two ways:
+
+- **Release wheels and CI** link the library DuckDB itself publishes. `scripts/fetch_libduckdb.py` downloads it for one Rust target, checks it against a pinned SHA-256 (the pins follow the `duckdb` crate in `Cargo.lock`, and a crate bump without new pins fails), cuts a macOS universal library down to the target's slice and exports `DUCKDB_LIB_DIR`; the build runs with `--no-default-features`. `scripts/ship_libduckdb.py` then puts the library into the wheel's `.data/scripts/`, which installers copy next to the executable, where its run path (`$ORIGIN`, `@executable_path`, set in `rust-core/build.rs`) and the Windows DLL search find it. `scripts/check_duckdb_shipped.py` proves every wheel ships exactly the library its executable links, the failure that broke the 0.42.6 macOS and Windows wheels, and each wheel is installed into a fresh environment and run before it is uploaded. Maturin's `auditwheel` is set to `warn`: its repair would move the binary behind a Python shim.
+- **Source builds** (the sdist, `cargo build`) keep the default `bundled` feature and compile DuckDB in, so they need nothing downloaded; it costs about half an hour of C++.
+
+The npm native package carries the same library next to `bin/okf-core`, byte for byte (`scripts/native_from_wheel.py`).
 
 The source distribution contains the Rust sources required to build that same wheel. Publishing a pure-Python selector wheel is deliberately not part of the Python release model.
 

@@ -27,7 +27,7 @@ from okf_parser.models import ConceptRecord, LinkRecord, ReservedRecord, Violati
 from okf_parser.parser import MarkdownFacts
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
 PROTOCOL_VERSION = 1
 """The shell/binary protocol this package speaks; see ``rust-core/src/protocol.rs``."""
@@ -139,18 +139,23 @@ def rust_load_bundle(
         raise RustCoreError(message) from exc
 
 
+type ErrorKind = Literal["request", "spec_template", "declared_schema", "relational_schema", "io"]
+
+
 class NativeError(BaseModel):
     """Why the binary could not answer a command.
 
     ``request`` means the request is invalid for this bundle (the caller's
     fault); ``spec_template`` is the request error of a specification
-    template without ``{slug}``; ``io`` means the filesystem failed
-    underneath the command.
+    template without ``{slug}``; ``declared_schema`` and
+    ``relational_schema`` are a trusted SQL file that failed or declares
+    nothing usable; ``io`` means the filesystem or DuckDB failed underneath
+    the command.
     """
 
     model_config = ConfigDict(frozen=True)
 
-    kind: Literal["request", "spec_template", "io"]
+    kind: ErrorKind
     message: str
 
 
@@ -188,6 +193,30 @@ def call_native(command: str, request: BaseModel, executable: Path | None = None
 
 class RustCoreError(RuntimeError):
     """The optional Rust core failed or returned an invalid response."""
+
+
+def native_result(
+    command: str,
+    request: BaseModel,
+    errors: Mapping[ErrorKind, Callable[[str], Exception]] | None = None,
+) -> dict[str, JsonValue]:
+    """Answer one request, or raise its error.
+
+    The error becomes the exception ``errors`` maps its kind to; unmapped, a
+    ``request`` error is a ``ValueError`` and any other a ``RustCoreError``.
+    """
+    response = call_native(command, request)
+    if response.error is not None:
+        raise_as = (errors or {}).get(response.error.kind)
+        if raise_as is not None:
+            raise raise_as(response.error.message)
+        if response.error.kind == "request":
+            raise ValueError(response.error.message)
+        raise RustCoreError(response.error.message)
+    if response.result is None:
+        msg = f"okf-parser {command} answered with neither a result nor an error"
+        raise RustCoreError(msg)
+    return response.result
 
 
 class _FactsPayload(TypedDict):

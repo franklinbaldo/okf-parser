@@ -138,7 +138,7 @@ def test_parse_declared_schema_supports_joins_and_macros() -> None:
 
 def test_parse_declared_schema_rejects_a_script_that_names_no_such_table() -> None:
     sql = 'CREATE TABLE "Outro" (id VARCHAR);'
-    with pytest.raises(DeclaredSchemaError, match="did not leave behind"):
+    with pytest.raises(DeclaredSchemaError, match="did not create a table"):
         parse_declared_schema(sql, "Rotina")
 
 

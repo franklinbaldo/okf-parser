@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Self, get_args
 
 import pytest
 
-from okf_parser import cli, mcp_bridge
+from okf_parser import mcp_bridge
 from okf_parser.rust_core import packaged_rust_core
 
 if TYPE_CHECKING:
@@ -41,6 +41,8 @@ DEFAULT_TOOLS = {
     "init_preview",
     "import_preview",
 }
+NATIVE_TOOLS = {"check", "inventory", "graph", "init_preview", "init_write", "duckdb_export"}
+"""Answered by the binary itself, never delegated to the bridge."""
 WRITE_TOOLS = {
     "format_write",
     "apply_write",
@@ -231,6 +233,46 @@ def test_native_inventory_tool_counts_types(tmp_path: Path) -> None:
 
 
 @native
+def test_duckdb_export_is_native_and_answers_a_collision_as_data(tmp_path: Path) -> None:
+    (tmp_path / "bundle").mkdir()
+    bundle = _bundle(tmp_path / "bundle")
+    arguments = {"path": str(bundle), "database": str(tmp_path / "knowledge.duckdb")}
+
+    with McpSession("--allow-write") as session:
+        exported = session.call("duckdb_export", arguments)
+        refused = session.call("duckdb_export", arguments)
+
+    assert exported["isError"] is False
+    assert exported["structuredContent"]["concept_count"] == 2
+    assert refused["isError"] is False
+    assert refused["structuredContent"]["existing_tables"] == [
+        "concepts",
+        "links",
+        "reserved",
+        "diagnostics",
+    ]
+    assert "--overwrite" in refused["structuredContent"]["error"]
+
+
+@native
+def test_check_validates_a_relational_schema_natively(tmp_path: Path) -> None:
+    (tmp_path / "a.md").write_text("---\ntype: Node\nkey: k\n---\n", encoding="utf-8")
+    (tmp_path / "b.md").write_text("---\ntype: Node\nkey: k\n---\n", encoding="utf-8")
+    (tmp_path / "okf.schema.sql").write_text(
+        "CREATE TABLE Node (key VARCHAR UNIQUE);", encoding="utf-8"
+    )
+
+    with McpSession() as session:
+        result = session.call(
+            "check", {"path": str(tmp_path), "relational_schema": "okf.schema.sql"}
+        )
+
+    assert result["isError"] is False
+    assert result["structuredContent"]["conformant"] is False
+    assert [item["code"] for item in result["structuredContent"]["diagnostics"]] == ["OKF021"]
+
+
+@native
 def test_delegated_tool_answers_through_the_python_bridge(tmp_path: Path) -> None:
     bundle = _bundle(tmp_path)
 
@@ -290,7 +332,7 @@ def test_defaulted_scalars_keep_concrete_non_nullable_schemas() -> None:
 
     assert _properties(tools["inventory"])["digests"] == {"type": "boolean", "default": False}
     export = _properties(tools["duckdb_export"])
-    assert export["database"] == {"type": "string", "default": "okf.duckdb"}
+    assert export["database"] == {"type": "string", "default": "knowledge.duckdb"}
     assert export["schema"] == {"type": "string", "default": "okf"}
     assert export["overwrite"] == {"type": "boolean", "default": False}
     for tool in tools.values():
@@ -384,13 +426,12 @@ def test_bridge_accepts_wire_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_bridge_rejects_arguments_a_tool_does_not_take() -> None:
     with pytest.raises(ValueError, match="unexpected_keyword_argument"):
         mcp_bridge.run_tool_call(
-            mcp_bridge.ToolCall(tool="check", arguments={"path": ".", "write": True})
+            mcp_bridge.ToolCall(tool="format_check", arguments={"path": ".", "write": True})
         )
 
 
 def test_bridge_serves_every_tool_the_native_server_may_delegate() -> None:
-    # `inventory` and `graph` are answered natively and never delegated.
-    assert set(mcp_bridge.TOOLS) == (DEFAULT_TOOLS | WRITE_TOOLS) - {"inventory", "graph"}
+    assert set(mcp_bridge.TOOLS) == (DEFAULT_TOOLS | WRITE_TOOLS) - NATIVE_TOOLS
     assert set(get_args(mcp_bridge.ToolName.__value__)) == set(mcp_bridge.TOOLS)
 
 
@@ -412,37 +453,6 @@ def test_apply_preview_and_write_share_service_with_only_commit_bit_changed(
 
     preview = mcp_bridge.mcp_apply_preview("bundle", sql="UPDATE x SET y = 1")
     written = mcp_bridge.mcp_apply_write("bundle", sql="UPDATE x SET y = 1")
-
-    assert preview == {"written": False}
-    assert written == {"written": True}
-    assert calls[0] | {"write": True} == calls[1]
-
-
-def test_init_preview_and_write_share_service_with_only_commit_bit_changed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[dict[str, object]] = []
-
-    def fake_init_bundle(
-        path: str,
-        spec_template: str,
-        exclude: object,
-        **kwargs: object,
-    ) -> dict[str, object]:
-        calls.append(
-            {
-                "path": path,
-                "spec_template": spec_template,
-                "exclude": exclude,
-                **kwargs,
-            }
-        )
-        return {"written": bool(kwargs["write"])}
-
-    monkeypatch.setattr(mcp_bridge, "init_bundle", fake_init_bundle)
-
-    preview = mcp_bridge.mcp_init_preview("bundle", "types/{type}.md", infer_schema=True)
-    written = mcp_bridge.mcp_init_write("bundle", "types/{type}.md", infer_schema=True)
 
     assert preview == {"written": False}
     assert written == {"written": True}
@@ -492,17 +502,3 @@ def test_import_preview_and_write_share_service_with_review_binding_on_commit(
         }
         == calls[1]
     )
-
-
-def test_duckdb_export_preserves_cli_collision_payload(monkeypatch: pytest.MonkeyPatch) -> None:
-    def collide(*_args: object, **_kwargs: object) -> dict[str, object]:
-        schema_name = "okf"
-        raise cli.BundleExportError(schema_name, ("concepts", "links"))
-
-    monkeypatch.setattr(cli, "export_duckdb", collide)
-
-    payload = mcp_bridge.mcp_duckdb_export("bundle")
-
-    assert payload["schema"] == "okf"
-    assert payload["existing_tables"] == ["concepts", "links"]
-    assert "pass overwrite=True" in str(payload["error"])

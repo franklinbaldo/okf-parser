@@ -1,31 +1,96 @@
-//! The read-only commands answered natively, shared by the CLI and MCP.
+//! The commands answered natively, shared by the CLI and MCP.
 //!
 //! Each returns a typed report; the CLI renders it as sorted, indented JSON
-//! and MCP as structured content. `check --relational-schema` and
-//! `init --infer-schema` still need DuckDB and are delegated to Python until
-//! phase 4 (RFC 0024).
+//! and MCP as structured content.
 
 use std::path::Path;
 use std::{fmt, io};
 
-use okf_engine::check::{self, CheckError, CheckReport, Inventory, READ_CONCURRENCY, SpecRules};
-use okf_engine::specs::{Scaffold, SpecTemplate, SpecTemplateError, scaffold_missing_specs};
-use okf_engine::{ConceptGraph, GraphSummary, LoadError, load_bundle};
+use okf_db::export::{ExportError, ExportOptions, ExportReport, export_bundle};
+use okf_db::infer::{InferError, scaffold_starter_schemas};
+use okf_db::relational::{RelationalSchemaError, load_relational_schema, validate_relations};
+use okf_engine::check::{
+    self, CheckError, CheckReport, Inventory, READ_CONCURRENCY, SpecRules, check_loaded,
+};
+use okf_engine::specs::{
+    Scaffold, SpecTemplate, SpecTemplateError, commit_scaffold, plan_scaffold,
+};
+use okf_engine::{ConceptGraph, GraphSummary, LoadError, Severity, load_bundle};
 use serde::Serialize;
 use serde_json::Value;
+
+/// Why `check` could not produce a report.
+#[derive(Debug)]
+pub enum CheckFailure {
+    Check(CheckError),
+    Relational(RelationalSchemaError),
+}
+
+impl fmt::Display for CheckFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Check(error) => error.fmt(f),
+            Self::Relational(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for CheckFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Check(error) => Some(error),
+            Self::Relational(error) => Some(error),
+        }
+    }
+}
+
+impl From<CheckError> for CheckFailure {
+    fn from(error: CheckError) -> Self {
+        Self::Check(error)
+    }
+}
+
+/// The check options beyond the bundle itself.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CheckOptions<'a> {
+    pub require_spec: Option<&'a str>,
+    pub normative_spec: bool,
+    pub classify: bool,
+    /// The bundle's relational schema (`okf.schema.sql`), relative to its root.
+    pub relational_schema: Option<&'a Path>,
+}
 
 pub fn check(
     path: &Path,
     exclude: &[String],
-    require_spec: Option<&str>,
-    normative_spec: bool,
-    classify: bool,
-) -> Result<CheckReport, CheckError> {
-    let rules = SpecRules {
-        require_spec,
-        normative: normative_spec,
+    options: CheckOptions<'_>,
+) -> Result<CheckReport, CheckFailure> {
+    let Some(relational) = options.relational_schema else {
+        let rules = SpecRules {
+            require_spec: options.require_spec,
+            normative: options.normative_spec,
+        };
+        return Ok(check::check(path, exclude, rules, options.classify)?);
     };
-    check::check(path, exclude, rules, classify)
+    let template = options
+        .require_spec
+        .map(SpecTemplate::new)
+        .transpose()
+        .map_err(CheckError::from)?;
+    let data = load_bundle(path, exclude, READ_CONCURRENCY).map_err(CheckError::from)?;
+    let mut report = check_loaded(&data, template, options.normative_spec, options.classify)
+        .map_err(CheckError::from)?;
+    let schema = load_relational_schema(&Path::new(&data.root).join(relational))
+        .map_err(CheckFailure::Relational)?;
+    report
+        .diagnostics
+        .extend(validate_relations(&data, &schema));
+    check::order(&mut report.diagnostics);
+    report.conformant = !report
+        .diagnostics
+        .iter()
+        .any(|item| item.severity == Severity::Error);
+    Ok(report)
 }
 
 pub fn inventory(path: &Path, exclude: &[String], digests: bool) -> Result<Inventory, LoadError> {
@@ -56,6 +121,7 @@ pub enum InitError {
     Load(LoadError),
     SpecTemplate(SpecTemplateError),
     Io(io::Error),
+    Infer(InferError),
 }
 
 impl fmt::Display for InitError {
@@ -64,6 +130,7 @@ impl fmt::Display for InitError {
             Self::Load(error) => error.fmt(f),
             Self::SpecTemplate(error) => error.fmt(f),
             Self::Io(error) => error.fmt(f),
+            Self::Infer(error) => error.fmt(f),
         }
     }
 }
@@ -74,27 +141,89 @@ impl std::error::Error for InitError {
             Self::Load(error) => Some(error),
             Self::SpecTemplate(error) => Some(error),
             Self::Io(error) => Some(error),
+            Self::Infer(error) => Some(error),
         }
     }
 }
 
-/// `init` without `--infer-schema`: `{"specs": ...}`.
+/// `init`: `{"specs": ...}`, plus `"schemas"` with `--infer-schema`.
 #[derive(Debug, Serialize)]
 pub struct InitReport {
     pub specs: Scaffold,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub schemas: Option<Scaffold>,
 }
 
-/// Plan, or with `write` create, a stub for every type in use lacking a spec.
-pub fn init_specs(
+impl InitReport {
+    /// Whether a derived-path collision blocked part of the scaffold.
+    pub fn collided(&self) -> bool {
+        !self.specs.collisions.is_empty()
+            || self
+                .schemas
+                .as_ref()
+                .is_some_and(|schemas| !schemas.collisions.is_empty())
+    }
+}
+
+/// Plan, or with `write` create, a stub for every type in use lacking a
+/// spec and, with `infer_schema`, a starter `.schema.sql` for every type
+/// lacking a declaration. Both read one load of the bundle.
+pub fn init(
     path: &Path,
     exclude: &[String],
     spec_template: &str,
     write: bool,
-) -> Result<Scaffold, InitError> {
+    infer_schema: bool,
+) -> Result<InitReport, InitError> {
     let template = SpecTemplate::new(spec_template).map_err(InitError::SpecTemplate)?;
     let data = load_bundle(path, exclude, READ_CONCURRENCY).map_err(InitError::Load)?;
+    let root = Path::new(&data.root);
     let types = data.concepts.iter().map(|c| c.concept_type.as_str());
-    scaffold_missing_specs(Path::new(&data.root), types, template, write).map_err(InitError::Io)
+    let plan = plan_scaffold(root, types, template);
+    let schemas = infer_schema
+        .then(|| scaffold_starter_schemas(&data, template, write))
+        .transpose()
+        .map_err(InitError::Infer)?;
+    let specs = commit_scaffold(root, plan, write).map_err(InitError::Io)?;
+    Ok(InitReport { specs, schemas })
+}
+
+/// What `okf-parser duckdb` answers. Refusing to replace existing tables is
+/// an answer the caller can act on, not a failure.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum ExportAnswer {
+    Exported(ExportReport),
+    Refused {
+        error: String,
+        schema: String,
+        existing_tables: Vec<String>,
+    },
+}
+
+impl ExportAnswer {
+    pub fn refused(&self) -> bool {
+        matches!(self, Self::Refused { .. })
+    }
+}
+
+/// `okf-parser duckdb`: the bundle as tables in a DuckDB database.
+pub fn export(path: &Path, options: &ExportOptions<'_>) -> Result<ExportAnswer, ExportError> {
+    match export_bundle(path, options) {
+        Ok(report) => Ok(ExportAnswer::Exported(report)),
+        Err(ExportError::Collision { schema, tables }) => {
+            let error = ExportError::Collision {
+                schema: schema.clone(),
+                tables: tables.clone(),
+            };
+            Ok(ExportAnswer::Refused {
+                error: error.to_string(),
+                schema,
+                existing_tables: tables,
+            })
+        }
+        Err(error) => Err(error),
+    }
 }
 
 /// Whether the caller, not the environment, is at fault for a load failure.

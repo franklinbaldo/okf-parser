@@ -13,11 +13,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+      # Link DuckDB's prebuilt library instead of compiling it; the crates'
+      # `bundled` default stays for source builds.
+      - name: Fetch the pinned prebuilt libduckdb
+        run: uv run --script scripts/fetch_libduckdb.py --github-env --runtime
       - name: Check workspace formatting
         run: cargo fmt --all --manifest-path Cargo.toml --check
       - name: Reject Rust warnings and Clippy findings
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked --no-default-features -- -D warnings
       - name: Test semantic engine
         run: cargo test --locked --manifest-path Cargo.toml -p okf-engine
+      - name: Test DuckDB layer
+        run: cargo test --locked --no-default-features --manifest-path Cargo.toml -p okf-db
       - name: Test CLI facade
-        run: cargo test --locked --manifest-path Cargo.toml -p okf-core
+        run: cargo test --locked --no-default-features --manifest-path Cargo.toml -p okf-core

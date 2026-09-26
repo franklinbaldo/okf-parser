@@ -7,14 +7,14 @@ from typing import TYPE_CHECKING
 
 import duckdb
 
-from okf_parser.duckdb import attach_okf
 from okf_parser.materialization import materialize_sqlite_hot
+from okf_parser.service import export_duckdb
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 
-def test_sqlite_target_consumes_attach_okf_relations(tmp_path: Path) -> None:
+def test_sqlite_target_consumes_exported_relations(tmp_path: Path) -> None:
     bundle = tmp_path / "bundle"
     bundle.mkdir()
     (bundle / "a.md").write_text(
@@ -26,10 +26,11 @@ def test_sqlite_target_consumes_attach_okf_relations(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    connection = duckdb.connect()
+    database = tmp_path / "knowledge.duckdb"
+    export_duckdb(str(bundle), str(database))
+    connection = duckdb.connect(database)
     destination = tmp_path / "hot.sqlite"
     try:
-        attach_okf(connection, bundle)
         connection.execute("INSTALL sqlite")
         connection.execute("LOAD sqlite")
         materialize_sqlite_hot(connection, destination)

@@ -1,5 +1,5 @@
 [workspace]
-members = ["okf-engine", "rust-core"]
+members = ["okf-engine", "okf-db", "rust-core"]
 exclude = ["duckdb-extension"]
 resolver = "3"
 

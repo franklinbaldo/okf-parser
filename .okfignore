@@ -12,3 +12,8 @@
 # of them non-conformant on purpose. tests/test_upstream_conformance.py loads
 # each one from its own root; see conformance/README.md.
 /conformance/upstream/
+
+# Cargo's build output. Some crates (rust_decimal, under the duckdb crate)
+# generate Markdown there; none of it belongs to the knowledge bundle.
+/target/
+/duckdb-extension/target/

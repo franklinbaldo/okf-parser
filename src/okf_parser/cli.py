@@ -1,9 +1,8 @@
 """Expose the commands the native binary has not taken over yet, through Cyclopts.
 
 The binary (``rust-core/src/main.rs``) answers ``check``, ``inventory``,
-``graph``, ``init`` and ``serve`` itself and passes every other command line
-here. ``check --relational-schema`` and ``init --infer-schema`` still need
-DuckDB, so the binary passes those here too (RFC 0024 phase 4).
+``graph``, ``init``, ``duckdb`` and ``serve`` itself and passes every other
+command line here (RFC 0024).
 """
 
 from __future__ import annotations
@@ -12,18 +11,14 @@ import json
 import sys
 from dataclasses import dataclass
 from importlib.metadata import version as _package_version
-from typing import Annotated, Literal, cast
+from typing import Annotated, Literal
 
 from cyclopts import App, Parameter
 
-from okf_parser.duckdb import BundleExportError
 from okf_parser.service import (
     apply_bundle,
-    check_bundle,
     check_format,
-    export_duckdb,
     import_bundle,
-    init_bundle,
     schema_bundle,
     write_format,
 )
@@ -69,28 +64,6 @@ app = App(
 )
 
 
-@app.command
-def check(
-    path: str,
-    *,
-    exclude: RepeatableStrings = None,
-    require_spec: str | None = None,
-    normative_spec: bool = False,
-    relational_schema: str | None = None,
-    classify: bool = False,
-) -> CliResult[JsonPayload]:
-    """Validate a bundle including its declared relations (`--relational-schema`)."""
-    payload = check_bundle(
-        path,
-        exclude or (),
-        require_spec,
-        normative_spec=normative_spec,
-        classify=classify,
-        relational_schema=relational_schema,
-    )
-    return CliResult(payload, 0 if payload["conformant"] else 1)
-
-
 @app.command(name="import")
 def import_command(  # each argument is an independent public CLI flag.
     source: str,
@@ -116,25 +89,6 @@ def import_command(  # each argument is an independent public CLI flag.
     )
     failed = bool(payload["duplicate_ids"]) or bool(payload["conflicting_existing"])
     return CliResult(payload, 1 if failed else 0)
-
-
-@app.command
-def init(
-    path: str,
-    *,
-    spec_template: str,
-    exclude: RepeatableStrings = None,
-    write: bool = False,
-    infer_schema: bool = False,
-) -> CliResult[JsonPayload]:
-    """Scaffold a missing specification document, and optionally a starter `.schema.sql`."""
-    payload = init_bundle(
-        path, spec_template, exclude or (), write=write, infer_schema=infer_schema
-    )
-    specs = cast("dict[str, object]", payload["specs"])
-    schemas = cast("dict[str, object]", payload["schemas"]) if infer_schema else None
-    has_collisions = bool(specs["collisions"]) or bool(schemas and schemas["collisions"])
-    return CliResult(payload, 1 if has_collisions else 0)
 
 
 @app.command
@@ -205,55 +159,6 @@ def apply(  # each argument is an independent public CLI flag.
         spec_template=spec_template,
     )
     return CliResult(payload, 0 if payload["succeeded"] else 1)
-
-
-def _duckdb_export_payload(
-    path: str,
-    database: str,
-    schema: str,
-    *,
-    overwrite: bool,
-    exclude: RepeatableStrings,
-    spec_template: str | None,
-) -> JsonPayload:
-    """Return the shared DuckDB export payload, including known collision errors."""
-    try:
-        return export_duckdb(
-            path,
-            database,
-            schema,
-            overwrite=overwrite,
-            exclude=exclude or (),
-            spec_template=spec_template,
-        )
-    except BundleExportError as exc:
-        return {
-            "error": str(exc),
-            "schema": exc.schema_name,
-            "existing_tables": list(exc.tables),
-        }
-
-
-@app.command(name="duckdb")
-def duckdb_command(
-    path: str,
-    database: str = "okf.duckdb",
-    schema: str = "okf",
-    *,
-    overwrite: bool = False,
-    exclude: RepeatableStrings = None,
-    spec_template: str | None = None,
-) -> CliResult[JsonPayload]:
-    """Materialize an OKF bundle into a DuckDB database file."""
-    payload = _duckdb_export_payload(
-        path,
-        database,
-        schema,
-        overwrite=overwrite,
-        exclude=exclude,
-        spec_template=spec_template,
-    )
-    return CliResult(payload, exit_code=1 if "error" in payload else 0)
 
 
 @app.command

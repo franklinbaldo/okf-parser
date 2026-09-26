@@ -2,10 +2,9 @@
 
 The MCP protocol itself (transports, tool schemas, effect annotations) lives
 in the Rust binary (``rust-core/src/mcp.rs``, built on ``rmcp``), which also
-answers ``check``, ``inventory``, ``graph`` and ``init_*`` natively. Tools
-whose logic still needs DuckDB or the Python formatter are answered here
-(``check`` only with ``relational_schema``, ``init_*`` only with
-``infer_schema``): the binary pipes
+answers ``check``, ``inventory``, ``graph``, ``init_*`` and
+``duckdb_export`` natively. The tools whose logic is still Python are
+answered here: the binary pipes
 ``{"tool": ..., "arguments": {...}}`` to ``python -m okf_parser.mcp_bridge``
 and relays the JSON this module prints.
 """
@@ -18,45 +17,24 @@ from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, validate_call
 
-from okf_parser.cli import (
+# `validate_call` resolves these annotations when a tool runs, so they are
+# runtime imports.
+from okf_parser.cli import (  # noqa: TC001
     ImportConflictPolicy,
     RepeatableStrings,
     SchemaFormat,
     ZodImport,
-    _duckdb_export_payload,
 )
 from okf_parser.service import (
     apply_bundle,
-    check_bundle,
     check_format,
     import_bundle,
-    init_bundle,
     schema_bundle,
     write_format,
 )
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-
-
-def mcp_check(
-    path: str,
-    exclude: RepeatableStrings = None,
-    require_spec: str | None = None,
-    *,
-    normative_spec: bool = False,
-    relational_schema: str | None = None,
-    classify: bool = False,
-) -> dict[str, object]:
-    """Validate a bundle including its declared relations (`relational_schema`)."""
-    return check_bundle(
-        path,
-        exclude or (),
-        require_spec,
-        normative_spec=normative_spec,
-        classify=classify,
-        relational_schema=relational_schema,
-    )
 
 
 def mcp_schema(
@@ -136,40 +114,6 @@ def mcp_apply_write(
     )
 
 
-def mcp_init_preview(
-    path: str,
-    spec_template: str,
-    exclude: RepeatableStrings = None,
-    *,
-    infer_schema: bool = False,
-) -> dict[str, object]:
-    """Plan missing specification files without creating them."""
-    return init_bundle(
-        path,
-        spec_template,
-        exclude or (),
-        write=False,
-        infer_schema=infer_schema,
-    )
-
-
-def mcp_init_write(
-    path: str,
-    spec_template: str,
-    exclude: RepeatableStrings = None,
-    *,
-    infer_schema: bool = False,
-) -> dict[str, object]:
-    """Create missing specification files using the existing scaffold service."""
-    return init_bundle(
-        path,
-        spec_template,
-        exclude or (),
-        write=True,
-        infer_schema=infer_schema,
-    )
-
-
 def mcp_import_preview(
     source: str,
     path: str,
@@ -219,52 +163,24 @@ def mcp_format_write(path: str, exclude: RepeatableStrings = None) -> dict[str, 
     return write_format(path, exclude or ())
 
 
-def mcp_duckdb_export(
-    path: str,
-    database: str = "okf.duckdb",
-    schema: str = "okf",
-    *,
-    overwrite: bool = False,
-    exclude: RepeatableStrings = None,
-    spec_template: str | None = None,
-) -> dict[str, object]:
-    """Materialize the bundle into a persistent DuckDB database."""
-    return _duckdb_export_payload(
-        path,
-        database,
-        schema,
-        overwrite=overwrite,
-        exclude=exclude,
-        spec_template=spec_template,
-    )
-
-
 type ToolName = Literal[
-    "check",
     "schema",
     "format_check",
     "apply_preview",
-    "init_preview",
     "import_preview",
     "format_write",
     "apply_write",
-    "init_write",
     "import_write",
-    "duckdb_export",
 ]
 
 TOOLS: dict[ToolName, Callable[..., object]] = {
-    "check": mcp_check,
     "schema": mcp_schema,
     "format_check": mcp_format_check,
     "apply_preview": mcp_apply_preview,
-    "init_preview": mcp_init_preview,
     "import_preview": mcp_import_preview,
     "format_write": mcp_format_write,
     "apply_write": mcp_apply_write,
-    "init_write": mcp_init_write,
     "import_write": mcp_import_write,
-    "duckdb_export": mcp_duckdb_export,
 }
 """Every tool the native server may delegate, keyed by its MCP name."""
 

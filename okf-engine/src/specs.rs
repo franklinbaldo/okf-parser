@@ -166,7 +166,7 @@ fn casefold(text: &str) -> String {
 }
 
 /// Python's `str.splitlines`: every Unicode line boundary, `\r\n` as one.
-fn split_lines(text: &str) -> impl Iterator<Item = &str> {
+pub fn split_lines(text: &str) -> impl Iterator<Item = &str> {
     let mut rest = text;
     std::iter::from_fn(move || {
         if rest.is_empty() {

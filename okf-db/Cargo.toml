@@ -1,0 +1,18 @@
+[package]
+name = "okf-db"
+version = "0.48.0"
+edition = "2024"
+license = "MIT"
+description = "OKF bundles as DuckDB tables: export, declared types and relational checks"
+
+[features]
+default = ["bundled"]
+# Compile DuckDB, with its JSON and Parquet extensions, into the crate. Turn
+# it off to link an external libduckdb (or, in a loadable extension, the host).
+bundled = ["duckdb/bundled", "duckdb/json", "duckdb/parquet"]
+
+[dependencies]
+duckdb = "~1.10504.0"
+okf-engine = { path = "../okf-engine", version = "0.48.0" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

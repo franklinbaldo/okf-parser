@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING, cast
 
 from okf_parser.service import init_bundle
-from okf_parser.spec_scaffold import scaffold_missing_declared_schemas
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -23,6 +23,25 @@ def scaffold_missing_specs(
             f"---\ntype: {concept_type}\n---\n", encoding="utf-8"
         )
     return cast("dict[str, object]", init_bundle(str(root), template, write=write)["specs"])
+
+
+def scaffold_missing_declared_schemas(
+    root: Path,
+    template: str,
+    documents: dict[str, list[dict[str, object]]],
+    *,
+    write: bool = False,
+) -> dict[str, object]:
+    """Write `documents` as a bundle and propose starter schemas through ``init``."""
+    index = 0
+    for frontmatters in documents.values():
+        for frontmatter in frontmatters:
+            # JSON is YAML flow syntax, so it is valid frontmatter as is.
+            text = f"---\n{json.dumps(frontmatter, ensure_ascii=False)}\n---\n"
+            (root / f"document-{index}.md").write_text(text, encoding="utf-8")
+            index += 1
+    payload = init_bundle(str(root), template, write=write, infer_schema=True)
+    return cast("dict[str, object]", payload["schemas"])
 
 
 def test_dry_run_reports_would_create_and_writes_nothing(tmp_path: Path) -> None:

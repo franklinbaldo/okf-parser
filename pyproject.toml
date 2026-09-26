@@ -103,7 +103,6 @@ runtime-evaluated-base-classes = ["pydantic.BaseModel"]
 "src/okf_parser/apply.py" = ["BLE001", "PLR0913", "S608"]
 "src/okf_parser/bundle_import.py" = ["PLR0913", "S608"]
 "src/okf_parser/declared_schema.py" = ["S608"]
-"src/okf_parser/duckdb.py" = ["PLR0913"]
 "src/okf_parser/graphql_adapter.py" = ["PLR0913"]
 "src/okf_parser/typed_tables.py" = ["S608"]
 "src/okf_parser/cli.py" = ["A002", "PLR0913", "T201"]
@@ -133,4 +132,8 @@ python-packages = ["okf_parser"]
 strip = true
 locked = true
 sdist-generator = "git"
+# Release wheels link DuckDB's prebuilt library and ship it next to the
+# executable themselves (scripts/ship_libduckdb.py); maturin's repair would
+# instead move the binary behind a Python shim. Warn keeps the audit visible.
+auditwheel = "warn"
 exclude = [{ path = ".github/**", format = "sdist" }]

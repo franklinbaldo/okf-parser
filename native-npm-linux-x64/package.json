@@ -5,7 +5,7 @@
   "license": "MIT",
   "os": ["linux"],
   "cpu": ["x64"],
-  "files": ["bin/okf-core", "README.md"],
+  "files": ["bin/okf-core", "bin/libduckdb.so", "README.md"],
   "bin": {
     "okf-core": "bin/okf-core"
   },

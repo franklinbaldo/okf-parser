@@ -29,7 +29,7 @@ shown, in addition to any `.okfignore`; see
 ## `check`
 
 ```bash
-uv run okf-parser check path/to/bundle [--exclude PATTERN]... [--require-spec TEMPLATE] [--normative-spec] [--classify]
+uv run okf-parser check path/to/bundle [--exclude PATTERN]... [--require-spec TEMPLATE] [--normative-spec] [--relational-schema PATH] [--classify]
 ```
 
 Validates every Markdown file recursively as OKF v0.2. Exits `1` only when
@@ -45,8 +45,15 @@ cross-links or missing type specifications.
   `reserved`, `ignored`, and `invalid_or_untyped` paths. This explains the
   existing strict check; it does not enable a second strictness mode. Ignored
   paths are those removed by valid `.okfignore` or `--exclude` rules.
+- `--relational-schema PATH` — run the bundle's trusted relational schema
+  (usually `okf.schema.sql`, relative to the bundle root; RFC 0007) and check
+  the keys it declares, one concept type per table: `OKF020` (a key column is
+  not a single string, or two frontmatter keys spell it), `OKF021` (a missing
+  primary key or a duplicate key) and `OKF022` (a foreign key matching no
+  concept). A schema that fails to run is a command error, not a diagnostic.
 
-MCP tool: `check` with the same optional `classify` argument.
+MCP tool: `check` with the same optional `classify` and `relational_schema`
+arguments.
 
 ## `import`
 
@@ -88,8 +95,12 @@ Scaffolds missing type specification documents at paths derived from
 `TEMPLATE`. The template must contain `{slug}`.
 
 - `--spec-template TEMPLATE` — for example `docs/types/{slug}.md`.
-- `--infer-schema` — also scaffold a starter `.schema.sql` beside each missing
-  specification, inferred from the bundle's observed fields.
+- `--infer-schema` — also propose a starter `.schema.sql` beside each type's
+  specification when it has none, reported under `schemas`. Each scalar field
+  gets the narrowest of `BOOLEAN`, `BIGINT`, `DOUBLE`, `DATE` and
+  `TIMESTAMPTZ` that every observed value casts into cleanly (`VARCHAR`
+  otherwise); a field that is always a list or mapping becomes `JSON`, and a
+  field mixing both is left out.
 - `--write` — create the planned files. Without it the command is a dry run.
 
 Exits `1` when a planned specification or schema path collides with an existing
@@ -255,10 +266,15 @@ MCP tools: `apply_preview`; `apply_write` with `--allow-write`. Both accept `spe
 uv run okf-parser duckdb path/to/bundle [database] [schema] [--overwrite] [--spec-template TEMPLATE] [--exclude PATTERN]...
 ```
 
-Materializes the bundle's concepts and links into a DuckDB database file.
+Materializes the bundle into a DuckDB database, in one transaction: tables
+`concepts`, `links`, `reserved` and `diagnostics` in `schema`. The binary
+carries its own DuckDB; no DuckDB installation is needed.
 
-- `database` — positional, defaults to `okf.duckdb`.
-- `schema` — positional, defaults to `okf`.
+- `database` — positional, defaults to `knowledge.duckdb`; `:memory:` also works.
+  (Not `okf.duckdb`: DuckDB names the database after the file, and a database
+  `okf` would make `okf.concepts` ambiguous against the schema `okf`.)
+- `schema` — positional, defaults to `okf`: letters, digits and `_`, not
+  starting with a digit.
 - `--overwrite` — replace existing tables in that schema instead of failing.
 - `--spec-template TEMPLATE` — execute each present sibling `.schema.sql` and
   materialize declared concept types into a second `{schema}_types` schema.
@@ -266,9 +282,10 @@ Materializes the bundle's concepts and links into a DuckDB database file.
   `TRY_CAST` projection; types without a declaration remain available only in
   the complete untyped `concepts` table.
 
-On a name collision without `--overwrite`, exits `1` with
-`{"error", "schema", "existing_tables"}` in the payload instead of raising.
-The MCP `duckdb_export` tool preserves that same structured collision payload.
+On a name collision without `--overwrite`, nothing is written and the command
+exits `1` with `{"error", "schema", "existing_tables"}`; `error` says how to
+proceed. The MCP `duckdb_export` tool answers the same collision payload as a
+result, not a tool error.
 
 MCP tool: `duckdb_export` with `--allow-write`; it also accepts `spec_template`.
 
@@ -289,12 +306,11 @@ accepted; behind a proxy or on a public hostname, name it with
 
 Tool arguments are validated at the server: an unknown key is a tool error,
 and defaulted flags keep concrete, non-nullable schemas (`digests` defaults to
-`false`, `database` to `okf.duckdb`). The legacy
+`false`, `database` to `knowledge.duckdb`). The legacy
 `sse` transport is gone: the MCP specification deprecated it in favor of
-Streamable HTTP. `check`, `inventory`, `graph`, `init_preview` and `init_write` are
-answered natively by `okf-engine`. The tools that still need DuckDB or the Python
-formatter (`schema`, `format_*`, `apply_*`, `import_*`, `duckdb_export`, plus `check`
-with `relational_schema` and `init_*` with `infer_schema`) are delegated to
+Streamable HTTP. `check`, `inventory`, `graph`, `init_preview`, `init_write` and
+`duckdb_export` are answered natively by the binary. The tools still written in
+Python (`schema`, `format_*`, `apply_*`, `import_*`) are delegated to
 `python -m okf_parser.mcp_bridge`, which runs the CLI's own service function.
 The interpreter is the one installed next to the binary; set `OKF_PYTHON` to
 point a binary outside any Python environment at one. The default

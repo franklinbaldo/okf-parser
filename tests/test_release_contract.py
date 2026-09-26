@@ -79,11 +79,18 @@ def _write_source(root: Path, *, protocol_version: str = VERSION) -> None:
     )
     (root / "rust-core" / "src").mkdir(parents=True)
     (root / "okf-engine" / "src").mkdir(parents=True)
+    (root / "okf-db" / "src").mkdir(parents=True)
     (root / "rust-core" / "Cargo.toml").write_text(
         "[package]\n"
         'name = "okf-core"\n'
         f'version = "{VERSION}"\n'
         "\n[dependencies]\n"
+        f'okf-db = {{ path = "../okf-db", version = "{VERSION}" }}\n'
+        f'okf-engine = {{ path = "../okf-engine", version = "{VERSION}" }}\n',
+        encoding="utf-8",
+    )
+    (root / "okf-db" / "Cargo.toml").write_text(
+        f'[package]\nname = "okf-db"\nversion = "{VERSION}"\n\n[dependencies]\n'
         f'okf-engine = {{ path = "../okf-engine", version = "{VERSION}" }}\n',
         encoding="utf-8",
     )
@@ -364,10 +371,22 @@ def test_verify_source_rejects_stale_internal_crate_dependency(tmp_path: Path) -
     _write_source(tmp_path)
     (tmp_path / "rust-core" / "Cargo.toml").write_text(
         f'[package]\nname = "okf-core"\nversion = "{VERSION}"\n\n[dependencies]\n'
+        f'okf-db = {{ path = "../okf-db", version = "{VERSION}" }}\n'
         'okf-engine = { path = "../okf-engine", version = "0.39.1" }\n',
         encoding="utf-8",
     )
     with pytest.raises(ContractError, match="internal okf-engine dependency"):
+        verify_source(tmp_path)
+
+
+def test_verify_source_rejects_a_stale_database_crate_pin(tmp_path: Path) -> None:
+    _write_source(tmp_path)
+    (tmp_path / "okf-db" / "Cargo.toml").write_text(
+        f'[package]\nname = "okf-db"\nversion = "{VERSION}"\n\n[dependencies]\n'
+        'okf-engine = { path = "../okf-engine", version = "0.39.1" }\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ContractError, match="okf-db internal okf-engine dependency"):
         verify_source(tmp_path)
 
 
