@@ -117,7 +117,7 @@ def format_path(
     # failure mid-scan cannot leave the tree half-rewritten.
     if write:
         for markdown_path, formatted in pending:
-            markdown_path.write_text(formatted, encoding="utf-8")
+            markdown_path.write_text(formatted, encoding="utf-8", newline="\n")
 
     return FormatReport(
         markdown_count=len(paths),

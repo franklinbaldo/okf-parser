@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from okf_parser.spec_scaffold import scaffold_missing_declared_schemas, scaffold_missing_specs
 
 if TYPE_CHECKING:
-    from pathlib import Path
+    import pytest
 
 TEMPLATE = "docs/types/{slug}.md"
 
@@ -42,6 +43,50 @@ def test_existing_document_is_never_overwritten(tmp_path: Path) -> None:
 
     assert result == {"created": [], "would_create": [], "collisions": [], "written": True}
     assert spec.read_text(encoding="utf-8") == "---\ntype: Spec\n---\n\n# Custom\n"
+
+
+def _recorded_newline_kwargs(monkeypatch: pytest.MonkeyPatch) -> list[str | None]:
+    """Patch `Path.write_text` to record its `newline` kwarg on every call (#259)."""
+    recorded: list[str | None] = []
+    real_write_text = Path.write_text
+
+    def recording_write_text(
+        self: Path,
+        data: str,
+        encoding: str | None = None,
+        errors: str | None = None,
+        newline: str | None = None,
+    ) -> int:
+        recorded.append(newline)
+        return real_write_text(self, data, encoding=encoding, errors=errors, newline=newline)
+
+    monkeypatch.setattr(Path, "write_text", recording_write_text)
+    return recorded
+
+
+def test_stub_document_is_always_written_with_lf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorded = _recorded_newline_kwargs(monkeypatch)
+
+    scaffold_missing_specs(tmp_path, {"Rotina"}, TEMPLATE, write=True)
+
+    assert recorded == ["\n"]
+    assert b"\r\n" not in (tmp_path / "docs/types/rotina.md").read_bytes()
+
+
+def test_declared_schema_stub_is_always_written_with_lf(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    documents: dict[str, list[dict[str, object]]] = {
+        "Rotina": [{"type": "Rotina", "custo": "10.50"}]
+    }
+    recorded = _recorded_newline_kwargs(monkeypatch)
+
+    scaffold_missing_declared_schemas(tmp_path, TEMPLATE, documents, write=True)
+
+    assert recorded == ["\n"]
+    assert b"\r\n" not in (tmp_path / "docs/types/rotina.schema.sql").read_bytes()
 
 
 def test_derived_path_collision_blocks_every_write_for_the_call(tmp_path: Path) -> None:
