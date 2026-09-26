@@ -99,7 +99,15 @@ documented, idempotent format is. The formatter's tests pin idempotence and
 the rules OKF depends on (frontmatter preserved byte-for-byte, protected
 blocks untouched), not mdformat's incidental choices.
 
-### 4. The CLI is clap
+### 4. YAML goes through maintained libraries, not hand-written code
+
+Reading uses `yaml-rust2`'s event parser. Writing uses libraries too:
+`yaml-edit` (lossless, comment- and style-preserving) for edits to existing
+frontmatter, which is what ruamel.yaml does today, and a serializer
+(`serde_yaml_ng` or `saphyr`) for frontmatter of new documents. No emitter or
+format-preserving editor is written by hand.
+
+### 5. The CLI is clap
 
 Every command moves into the binary's clap CLI as its handler is ported.
 Until then the binary keeps delegating unported commands to
@@ -168,7 +176,7 @@ Streamable HTTP. `graph` is native; other tools are delegated to
 `python -m okf_parser.mcp_bridge`. FastMCP and NetworkX left the runtime
 dependencies (92 → 34 packages).
 
-### Phase 2 — the shell protocol; `Bundle` as records
+### Phase 2 — the shell protocol; `Bundle` as records (0.47.0)
 
 - A versioned JSON protocol between shell and binary, generalizing
   `__engine-load`.
@@ -180,15 +188,26 @@ dependencies (92 → 34 packages).
 - Consumers inside the package read records instead of ibis tables. ibis stays
   a dependency only for the modules phase 4 replaces.
 
-### Phase 3 — handlers without SQL
+### Phase 3 — the write engine, then handlers without SQL
 
-`check`, `inventory`, `classify`, `init`, `import`, and `schema` (JSON Schema,
-Zod, generated Pydantic source) move into the binary, and their MCP tools stop
-delegating. PyYAML and ruamel.yaml leave with the last Python writer.
+Writes move first, because every writer shares one protocol: snapshot the
+bundle, stage and validate a candidate, recheck freshness, replace files
+atomically. That engine lives in `okf-engine/src/write.rs` and needs no
+DuckDB.
+
+- **3a (0.47.0):** the write engine and the single-concept body `edit`, which
+  now runs entirely in the binary (`__edit`).
+- **3b:** `check`, `inventory` and `classify` as native commands and MCP tools.
+- **3c:** the non-SQL `apply` paths (type and field renames) and `dumps`, on
+  the write engine. ruamel.yaml leaves.
+
+`import`, `init --infer-schema` and SQL `apply` read or infer through DuckDB,
+so they move in phase 4, not here. PyYAML leaves with the last Python reader.
 
 ### Phase 4 — DuckDB in Rust
 
-`Bundle.sql()`, `apply`, DuckDB export, full-text search and relational schema
+`Bundle.sql()`, SQL `apply`, `import`, schema inference (`init --infer-schema`,
+`schema --infer-types`), DuckDB export, full-text search and relational schema
 validation run on the `duckdb` crate. ibis, pandas, numpy, pyarrow and the
 Python `duckdb` package leave. RFC 0010's extension shares the same Rust code.
 

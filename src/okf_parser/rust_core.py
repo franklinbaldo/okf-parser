@@ -16,7 +16,7 @@ import sysconfig
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, TypedDict, cast
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
 from okf_parser.graph import GraphSummary
 from okf_parser.models import ConceptRecord, LinkRecord, ReservedRecord, Violation
@@ -149,6 +149,50 @@ def _canonical_concept(concept: object) -> object:
         return concept
     canonical = json.dumps(json.loads(text), ensure_ascii=False, sort_keys=True)
     return {**concept, "frontmatter_json": canonical}
+
+
+class NativeError(BaseModel):
+    """Why the binary could not answer a command.
+
+    ``request`` means the request is invalid for this bundle (the caller's
+    fault); ``io`` means the filesystem failed underneath the command.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    kind: Literal["request", "io"]
+    message: str
+
+
+class NativeResponse(BaseModel):
+    """A command's answer under protocol 1: exactly one of ``result`` or ``error``."""
+
+    model_config = ConfigDict(frozen=True)
+
+    protocol: Literal[1]
+    result: dict[str, JsonValue] | None = None
+    error: NativeError | None = None
+
+
+def call_native(command: str, request: BaseModel, executable: Path | None = None) -> NativeResponse:
+    """Send one JSON request to a hidden binary command and validate the answer."""
+    completed = subprocess.run(  # noqa: S603 - fixed argv to the packaged binary
+        [str(native_binary(executable)), command],
+        input=request.model_dump_json(),
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if completed.returncode != 0:
+        message = completed.stderr.strip() or f"okf-parser {command} exited {completed.returncode}"
+        raise RustCoreError(message)
+    try:
+        return NativeResponse.model_validate_json(completed.stdout)
+    except ValidationError as exc:
+        message = (
+            f"invalid okf-parser {command} response (protocol {PROTOCOL_VERSION} expected): {exc}"
+        )
+        raise RustCoreError(message) from exc
 
 
 class RustCoreError(RuntimeError):

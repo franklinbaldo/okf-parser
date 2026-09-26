@@ -15,7 +15,7 @@ use walkdir::{DirEntry, WalkDir};
 
 use crate::yaml::{Frontmatter, canonical_parsed, parse_frontmatter, parse_mapping, sorted_json};
 
-const IGNORED: &[&str] = &[
+pub(crate) const IGNORED: &[&str] = &[
     ".git",
     ".mypy_cache",
     ".pytest_cache",
@@ -78,8 +78,8 @@ struct Loaded {
     relative: String,
     content: Result<String, String>,
 }
-struct Parsed {
-    record: ConceptRecord,
+pub(crate) struct Parsed {
+    pub(crate) record: ConceptRecord,
     facts: Facts,
     /// YAML tags the frontmatter used that JSON cannot carry (OKF102).
     lossy_tags: Vec<String>,
@@ -91,12 +91,12 @@ fn relative(root: &Path, path: &Path) -> String {
         .to_string_lossy()
         .replace('\\', "/")
 }
-fn markdown(path: &Path) -> bool {
+pub(crate) fn markdown(path: &Path) -> bool {
     path.file_name()
         .and_then(|v| v.to_str())
         .is_some_and(|v| v.to_ascii_lowercase().ends_with(".md"))
 }
-fn reserved(path: &Path) -> bool {
+pub(crate) fn reserved(path: &Path) -> bool {
     matches!(
         path.file_name().and_then(|v| v.to_str()),
         Some("index.md" | "log.md")
@@ -108,7 +108,7 @@ fn traversable(entry: &DirEntry) -> bool {
             && (!entry.file_type().is_dir()
                 || !IGNORED.contains(&entry.file_name().to_string_lossy().as_ref())))
 }
-fn exclusions(root: &Path, patterns: &[String]) -> Result<Gitignore, String> {
+pub(crate) fn exclusions(root: &Path, patterns: &[String]) -> Result<Gitignore, String> {
     let mut builder = GitignoreBuilder::new(root);
     let file = root.join(".okfignore");
     if file.is_file()
@@ -185,7 +185,7 @@ fn delimiter(line: &str) -> bool {
     let v = v.strip_suffix('\r').unwrap_or(v);
     v.starts_with("---") && v[3..].trim_matches([' ', '\t']).is_empty()
 }
-fn split_source(text: &str) -> Option<(&str, &str)> {
+pub(crate) fn split_source(text: &str) -> Option<(&str, &str)> {
     let value = text.strip_prefix('\u{feff}').unwrap_or(text);
     let opening = value.find('\n')?;
     if !delimiter(&value[..=opening]) {
@@ -227,14 +227,14 @@ fn id(path: &str) -> String {
 fn hash(prefix: &str, value: &str) -> String {
     format!("{prefix}{:x}", Sha256::digest(value.as_bytes()))
 }
-fn normalized_newlines(text: &str) -> Cow<'_, str> {
+pub(crate) fn normalized_newlines(text: &str) -> Cow<'_, str> {
     if text.as_bytes().contains(&b'\r') {
         Cow::Owned(text.replace("\r\n", "\n").replace('\r', "\n"))
     } else {
         Cow::Borrowed(text)
     }
 }
-fn parse_concept(path: String, text: String) -> Result<Parsed, String> {
+pub(crate) fn parse_concept(path: String, text: String) -> Result<Parsed, String> {
     let normalized = normalized_newlines(&text);
     let (s, b) = split_source(normalized.as_ref())
         .ok_or("concept must start with YAML frontmatter delimited by ---")?;

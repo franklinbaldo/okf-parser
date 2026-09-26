@@ -29,6 +29,8 @@ from okf_parser.spec_scaffold import scaffold_missing_declared_schemas, scaffold
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from pydantic import JsonValue
+
     from okf_parser.schema_contract import ZodImport
 
 
@@ -248,7 +250,7 @@ def preview_concept_edit(
     body: str,
     expected_source_digest: str,
     exclude: Sequence[str] = (),
-) -> dict[str, object]:
+) -> dict[str, JsonValue]:
     """Preview one conflict-safe Markdown body replacement."""
     return _preview_concept_edit(path, concept_id, body, expected_source_digest, exclude=exclude)
 
@@ -259,7 +261,7 @@ def write_concept_edit(
     body: str,
     expected_source_digest: str,
     exclude: Sequence[str] = (),
-) -> dict[str, object]:
+) -> dict[str, JsonValue]:
     """Commit one conflict-safe Markdown body replacement."""
     return _write_concept_edit(path, concept_id, body, expected_source_digest, exclude=exclude)
 

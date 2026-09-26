@@ -144,3 +144,10 @@ def test_edit_uses_canonical_linear_frontmatter_boundaries(tmp_path: Path) -> No
     assert written.startswith(b"\xef\xbb\xbf---\r\n")
     assert b"title: Kept\r\n" in written
     assert written.endswith(b"---\r\nnew\r\n")
+
+
+def test_an_unknown_concept_is_an_edit_error(tmp_path: Path) -> None:
+    (tmp_path / "a.md").write_text("---\ntype: Note\n---\n# A\n", encoding="utf-8")
+
+    with pytest.raises(EditError, match="concept does not exist exactly once: missing"):
+        preview_concept_edit(str(tmp_path), "missing", "# B\n", "digest")

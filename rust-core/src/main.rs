@@ -19,6 +19,9 @@ struct Cli {
 enum Command {
     #[command(name = "__engine-facts", hide = true)]
     Facts,
+    /// Preview or commit a single-concept body edit (JSON request on stdin).
+    #[command(name = "__edit", hide = true)]
+    Edit,
     #[command(name = "__engine-load", hide = true)]
     Load {
         root: PathBuf,
@@ -62,6 +65,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
                 .collect();
             serde_json::to_writer(io::stdout().lock(), &facts)?;
         }
+        Command::Edit => {
+            let mut input = String::new();
+            io::stdin().read_to_string(&mut input)?;
+            serde_json::to_writer(io::stdout().lock(), &protocol::edit(&input)?)?;
+        }
         Command::Load {
             root,
             exclude,
@@ -92,7 +100,7 @@ fn python_cli() -> Result<ExitStatus, Box<dyn std::error::Error>> {
 fn main() {
     let internal = matches!(
         std::env::args().nth(1).as_deref(),
-        Some("__engine-facts" | "__engine-load" | "serve")
+        Some("__engine-facts" | "__engine-load" | "__edit" | "serve")
     );
     if internal {
         if let Err(error) = run() {
