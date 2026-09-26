@@ -230,9 +230,10 @@ Python `duckdb` package leave.
 
 DuckDB is the only engine: DataFusion is not adopted, and Arrow is not a
 dependency. Results cross to Python as records; an Arrow export may come
-later as an optional extra. The binary compiles DuckDB in (`bundled`) so a
-wheel needs nothing installed; linking the official prebuilt `libduckdb`
-instead, to shorten builds, is a packaging change that does not touch code.
+later as an optional extra. Release wheels link the official prebuilt
+`libduckdb` and ship it next to the executable, with the download pinned by
+SHA-256; source builds compile DuckDB in (`bundled`). Either way a wheel needs
+nothing installed. See docs/releasing.md.
 
 - **4a (0.48.0):** a new `okf-db` crate. `okf-parser duckdb` (the base
   tables and RFC 0006 typed tables, in one transaction),

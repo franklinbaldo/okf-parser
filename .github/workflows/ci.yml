@@ -16,24 +16,31 @@ jobs:
   rust-core:
     name: Rust core
     runs-on: ubuntu-latest
+    env:
+      # Link DuckDB's prebuilt library instead of compiling it (see
+      # scripts/fetch_libduckdb.py); `bundled` stays the source-build default.
+      MATURIN_PEP517_ARGS: --no-default-features
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Check formatting
-        run: cargo fmt --manifest-path rust-core/Cargo.toml --check
-
-      - name: Run tests
-        run: cargo test --locked --manifest-path rust-core/Cargo.toml
-
-      - name: Build release MVP
-        run: cargo build --release --locked --manifest-path rust-core/Cargo.toml
 
       - name: Install uv
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           version: "0.11.21"
           python-version: "3.12"
+
+      - name: Fetch the pinned prebuilt libduckdb
+        run: uv run --script scripts/fetch_libduckdb.py --github-env --runtime
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path rust-core/Cargo.toml --check
+
+      - name: Run tests
+        run: cargo test --locked --no-default-features --manifest-path rust-core/Cargo.toml
+
+      - name: Build release MVP
+        run: cargo build --release --locked --no-default-features --manifest-path rust-core/Cargo.toml
 
       - name: Install Python dependencies
         run: uv sync --frozen
@@ -144,6 +151,8 @@ jobs:
 
   quality:
     runs-on: ubuntu-latest
+    env:
+      MATURIN_PEP517_ARGS: --no-default-features
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -153,6 +162,9 @@ jobs:
         with:
           version: "0.11.21"
           python-version: "3.12"
+
+      - name: Fetch the pinned prebuilt libduckdb
+        run: uv run --script scripts/fetch_libduckdb.py --github-env --runtime
 
       - name: Install locked dependencies
         run: uv sync --frozen --all-groups

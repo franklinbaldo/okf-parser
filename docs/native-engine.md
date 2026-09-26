@@ -43,11 +43,18 @@ If a selected Rust engine starts and fails, the request fails rather than silent
 
 `okf-parser` is the only Python distribution and `okf-parser` is its only installed entry point. The platform wheel uses that executable for the whole CLI: it answers `check`, `inventory`, `graph`, `init`, `duckdb`, the `serve` MCP command and the private Rust-engine operations natively, and passes only the commands still written in Python to the Python CLI; there is no separate `okf-parser-native` PyPI project or runtime dependency. Maturin installs the executable into the active interpreter's scripts directory, which the loader checks directly, so virtual environments work without deployment-specific paths.
 
-A source installation builds that same executable as part of building the `okf-parser` wheel. Release automation must test both the platform wheel and source distribution as fresh consumers before publication.
+A source installation builds that same executable as part of building the `okf-parser` wheel, compiling DuckDB in (the default `bundled` feature, about half an hour of C++). Platform wheels instead ship DuckDB's own prebuilt library next to the executable (see [releasing](releasing.md#duckdb-in-the-wheel)). For a quick local build, do what CI does:
+
+```bash
+eval "$(uv run --script scripts/fetch_libduckdb.py --runtime | sed 's/^/export /')"
+MATURIN_PEP517_ARGS=--no-default-features uv sync
+```
+
+Release automation must test both the platform wheel and source distribution as fresh consumers before publication.
 
 ## npm packaging
 
-`@franklinbaldo/okf-parser` declares platform packages as optional dependencies. The first supported target is `@franklinbaldo/okf-parser-native-linux-x64`, which contains the release-matched executable under `bin/okf-core`. The TypeScript resolver discovers that package directly from `node_modules` before consulting environment overrides.
+`@franklinbaldo/okf-parser` declares platform packages as optional dependencies. The first supported target is `@franklinbaldo/okf-parser-native-linux-x64`, which contains the release-matched executable under `bin/okf-core` and, beside it, the `libduckdb.so` it links. The TypeScript resolver discovers that package directly from `node_modules` before consulting environment overrides.
 
 Installing with `--omit=optional`, or running on a platform for which no native companion is published, keeps the same `loadBundle()` API and uses the portable TypeScript implementation.
 

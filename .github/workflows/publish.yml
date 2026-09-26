@@ -75,17 +75,29 @@ jobs:
           version: "0.11.21"
           python-version: "3.12"
 
+      - name: Fetch the pinned prebuilt libduckdb
+        run: uv run --script scripts/fetch_libduckdb.py --target "${{ matrix.target }}-unknown-linux-gnu" --github-env
+
       - name: Build manylinux wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           maturin-version: v1.14.1
           target: ${{ matrix.target }}
           manylinux: 2_28
-          args: --release --locked --out dist --compatibility pypi
+          docker-options: --env DUCKDB_LIB_DIR --env DUCKDB_INCLUDE_DIR
+          args: --release --locked --no-default-features --out dist --compatibility pypi
 
-      - name: Prove the executable does not link DuckDB
+      - name: Ship libduckdb beside the executable
         shell: bash
-        run: uv run --script scripts/check_no_duckdb_link.py dist/*.whl
+        run: |
+          set -euo pipefail
+          # The manylinux container writes dist/ as root.
+          if [ "$RUNNER_OS" = Linux ]; then sudo chown -R "$(id -u):$(id -g)" dist; fi
+          uv run --script scripts/ship_libduckdb.py --library "$DUCKDB_LIBRARY" dist/*.whl
+
+      - name: Prove the wheel ships the libduckdb it links
+        shell: bash
+        run: uv run --script scripts/check_duckdb_shipped.py dist/*.whl
 
       - name: Install and exercise the wheel
         shell: bash
@@ -137,16 +149,28 @@ jobs:
           version: "0.11.21"
           python-version: "3.12"
 
+      - name: Fetch the pinned prebuilt libduckdb
+        shell: bash
+        run: uv run --script scripts/fetch_libduckdb.py --target x86_64-pc-windows-msvc --github-env
+
       - name: Build Windows wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           maturin-version: v1.14.1
           target: x64
-          args: --release --locked --out dist --compatibility pypi
+          args: --release --locked --no-default-features --out dist --compatibility pypi
 
-      - name: Prove the executable does not link DuckDB
+      - name: Ship libduckdb beside the executable
         shell: bash
-        run: uv run --script scripts/check_no_duckdb_link.py dist/*.whl
+        run: |
+          set -euo pipefail
+          # The manylinux container writes dist/ as root.
+          if [ "$RUNNER_OS" = Linux ]; then sudo chown -R "$(id -u):$(id -g)" dist; fi
+          uv run --script scripts/ship_libduckdb.py --library "$DUCKDB_LIBRARY" dist/*.whl
+
+      - name: Prove the wheel ships the libduckdb it links
+        shell: bash
+        run: uv run --script scripts/check_duckdb_shipped.py dist/*.whl
 
       - name: Install and exercise the wheel
         shell: bash
@@ -206,16 +230,27 @@ jobs:
           version: "0.11.21"
           python-version: "3.12"
 
+      - name: Fetch the pinned prebuilt libduckdb
+        run: uv run --script scripts/fetch_libduckdb.py --target "${{ matrix.target }}-apple-darwin" --github-env
+
       - name: Build macOS wheel
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
           maturin-version: v1.14.1
           target: ${{ matrix.target }}
-          args: --release --locked --out dist --compatibility pypi
+          args: --release --locked --no-default-features --out dist --compatibility pypi
 
-      - name: Prove the executable does not link DuckDB
+      - name: Ship libduckdb beside the executable
         shell: bash
-        run: uv run --script scripts/check_no_duckdb_link.py dist/*.whl
+        run: |
+          set -euo pipefail
+          # The manylinux container writes dist/ as root.
+          if [ "$RUNNER_OS" = Linux ]; then sudo chown -R "$(id -u):$(id -g)" dist; fi
+          uv run --script scripts/ship_libduckdb.py --library "$DUCKDB_LIBRARY" dist/*.whl
+
+      - name: Prove the wheel ships the libduckdb it links
+        shell: bash
+        run: uv run --script scripts/check_duckdb_shipped.py dist/*.whl
 
       - name: Install and exercise the wheel
         shell: bash

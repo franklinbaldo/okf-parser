@@ -6,8 +6,8 @@ title: duckdb, relational checks and starter schemas run in the binary
 # duckdb, relational checks and starter schemas run in the binary
 
 Phase 4a of [RFC 0024](../../rfcs/0024-rust-native-core.md). The binary now
-carries DuckDB itself (the `duckdb` crate, with its JSON and Parquet
-extensions), in a new `okf-db` crate, and answers these without Python:
+carries DuckDB itself, through the `duckdb` crate in a new `okf-db` crate, and
+answers these without Python:
 
 - `okf-parser duckdb` and the MCP `duckdb_export` tool. `--help` now
   documents the command. The export runs in one transaction: a refused
@@ -40,6 +40,9 @@ Starter schemas no longer type a field `BOOLEAN` because its values are
 `1`/`0` or `t`/`f`, which DuckDB also casts to booleans: only `true` and
 `false`, in any case, make a boolean, so a `1`/`0` field is `BIGINT`.
 
-Timestamps in typed tables are still stored as UTC instants. The binary's
-DuckDB has no ICU extension, so a `TIMESTAMPTZ` without an offset is read
-as UTC, as before, regardless of any session time zone.
+Wheels ship DuckDB's own prebuilt library (with its JSON, Parquet and ICU
+extensions) next to the `okf-parser` executable, pinned by SHA-256 and
+checked on every platform before upload; the npm native package carries it
+too. Building from source compiles DuckDB in instead. Typed-table timestamps
+are still cast in UTC, so a `TIMESTAMPTZ` without an offset means the same
+instant in every session.

@@ -14,7 +14,9 @@ WORKFLOWS = (
 )
 PEP723_HELPERS = (
     "changelog_notes.py",
-    "check_no_duckdb_link.py",
+    "check_duckdb_shipped.py",
+    "fetch_libduckdb.py",
+    "ship_libduckdb.py",
     "release_contract.py",
     "native_from_wheel.py",
     "registry_state.py",

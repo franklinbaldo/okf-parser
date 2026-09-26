@@ -9,10 +9,17 @@ description = "Native OKF CLI and compatibility adapters"
 name = "okf-parser"
 path = "src/main.rs"
 
+[features]
+default = ["bundled"]
+# Compile DuckDB into the binary. Release wheels turn it off and link the
+# official prebuilt libduckdb instead (DUCKDB_DOWNLOAD_LIB=1), shipped next
+# to the executable; see build.rs and docs/releasing.md.
+bundled = ["okf-db/bundled"]
+
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 clap = { version = "4", features = ["derive"] }
-okf-db = { path = "../okf-db", version = "0.48.0" }
+okf-db = { path = "../okf-db", version = "0.48.0", default-features = false }
 okf-engine = { path = "../okf-engine", version = "0.48.0" }
 rmcp = { version = "3.4", features = ["server", "transport-io", "macros", "transport-streamable-http-server"] }
 schemars = "1"
