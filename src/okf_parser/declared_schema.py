@@ -8,10 +8,10 @@ declared path would be a second fact free to disagree with the first.
 ``.schema.sql`` is trusted DuckDB SQL, not a restricted data format: CTAS,
 joins, `read_csv`/`read_json`, macros, temp tables, generated columns -
 anything a dedicated DuckDB connection accepts is accepted here too, run
-whole. Nothing in this module inspects statement shape or type; only the
-*post-condition* is checked afterward, against the connection's own
-catalog: exactly one non-temporary table named for the concept type must
-exist, with a queryable schema. Auxiliary tables the script created along
+whole by the native binary (``okf-db/src/declared.rs``). Nothing inspects
+statement shape or type; only the *post-condition* is checked afterward,
+against the connection's own catalog: exactly one non-temporary table named
+for the concept type must exist, with a queryable schema. Auxiliary tables the script created along
 the way are not part of the contract and are ignored. Never run this
 against a `.schema.sql` from a bundle you would not otherwise trust to
 execute arbitrary code - it carries the same power as a Makefile or a
@@ -21,19 +21,16 @@ migration script, not the safety of a JSON Schema document.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
-import duckdb
+from pydantic import BaseModel, ConfigDict
 
 from okf_parser.duckdb_types import logical_type_from_catalog
+from okf_parser.rust_core import native_result
 from okf_parser.type_specs import spec_relative_path
 
 if TYPE_CHECKING:
     from okf_parser.duckdb_types import DuckDBLogicalType
-    from okf_parser.schema_lexemes import CastKind
-
-
-type StarterKind = Literal["string", "boolean", "integer", "number", "date", "datetime", "json"]
 
 
 class DeclaredSchemaError(ValueError):
@@ -64,192 +61,59 @@ def declared_schema_relative_path(spec_template: str, concept_type: str) -> str 
     return f"{stem}.schema.sql"
 
 
-def _duckdb_identifier_key(identifier: str) -> str:
-    """Fold ASCII letters the same way DuckDB resolves quoted identifiers."""
-    return "".join(chr(ord(char) + 32) if "A" <= char <= "Z" else char for char in identifier)
+class _DeclaredSchemaRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    sql: str
+    concept_type: str
+
+
+class _CatalogType(BaseModel):
+    sql: str
+    precision: int | None = None
+    scale: int | None = None
+
+
+class _Column(BaseModel):
+    name: str
+    logical_type: _CatalogType
+    comment: str | None = None
+
+
+class _Declared(BaseModel):
+    table_name: str
+    columns: list[_Column]
+    table_comment: str | None = None
 
 
 def parse_declared_schema(sql_text: str, concept_type: str) -> DeclaredSchema:
     """Run a `.schema.sql` script whole, then check only its post-condition.
 
-    The whole file is handed to one dedicated in-memory connection in a
-    single `execute()` call - DuckDB's own parser, binder, and planner
-    decide what it means and in what order its statements run; nothing here
-    re-derives or restricts that. Afterward, the connection's own catalog
-    (`duckdb_tables()`, `duckdb_columns()`) must show exactly one
-    non-temporary table whose identifier resolves as `concept_type` - table
-    identity follows DuckDB's ASCII case-insensitive identifier semantics,
-    while the authored spelling read back from the catalog is preserved.
-    Any other table the script created (a staging table, a join source) is
-    simply not looked at.
+    The binary hands the whole file to one dedicated in-memory DuckDB
+    connection; DuckDB's own parser, binder, and planner decide what it means.
+    Afterward the catalog must show exactly one non-temporary table whose
+    identifier resolves as `concept_type` (DuckDB's ASCII case-insensitive
+    identifier rules; the authored spelling is kept). Any other table the
+    script created is not looked at.
     """
-    con = duckdb.connect()
-    try:
-        try:
-            con.execute(sql_text)
-        except duckdb.Error as exc:
-            message = f"declared schema script failed: {exc}"
-            raise DeclaredSchemaError(message) from exc
-
-        catalog_tables = con.execute(
-            "SELECT database_oid, schema_oid, table_oid, table_name, comment "
-            "FROM duckdb_tables() WHERE NOT temporary"
-        ).fetchall()
-        expected_key = _duckdb_identifier_key(concept_type)
-        tables = [
-            row for row in catalog_tables if _duckdb_identifier_key(str(row[3])) == expected_key
-        ]
-        if not tables:
-            message = f"declared schema script did not leave behind a table named {concept_type!r}"
-            raise DeclaredSchemaError(message)
-        if len(tables) > 1:
-            message = f"declared schema script left more than one table named {concept_type!r}"
-            raise DeclaredSchemaError(message)
-        database_oid, schema_oid, table_oid, table_name, table_comment = tables[0]
-
-        columns = con.execute(
-            "SELECT column_name, data_type, comment, numeric_precision, numeric_scale "
-            "FROM duckdb_columns() "
-            "WHERE database_oid = ? AND schema_oid = ? AND table_oid = ? "
-            "ORDER BY column_index",
-            [database_oid, schema_oid, table_oid],
-        ).fetchall()
-    finally:
-        con.close()
-
-    return DeclaredSchema(
-        table_name=table_name,
-        columns={
-            row[0]: logical_type_from_catalog(
-                row[1], numeric_precision=row[3], numeric_scale=row[4]
-            )
-            for row in columns
-        },
-        table_comment=table_comment,
-        column_comments={row[0]: row[2] for row in columns if row[2] is not None},
+    result = native_result(
+        "__declared-schema",
+        _DeclaredSchemaRequest(sql=sql_text, concept_type=concept_type),
+        {"declared_schema": DeclaredSchemaError},
     )
-
-
-_DUCKDB_TYPE_FOR_KIND: dict[StarterKind, str] = {
-    "string": "VARCHAR",
-    "boolean": "BOOLEAN",
-    "integer": "BIGINT",
-    "number": "DOUBLE",
-    "date": "DATE",
-    "datetime": "TIMESTAMPTZ",
-    "json": "JSON",
-}
-
-# Narrowest to widest: the first type every observed value TRY_CASTs into
-# cleanly wins. BOOLEAN before the numeric types so "true"/"false" isn't
-# swallowed by some future numeric-ish cast; DATE before TIMESTAMPTZ so a
-# column of pure dates doesn't widen just because DuckDB *can* also read a
-# date as a timestamp.
-#
-# `roundtrip` marks a candidate where DuckDB's own TRY_CAST is lossy rather
-# than rejecting: `TRY_CAST('10.50' AS BIGINT)` rounds to 11 instead of
-# failing, and `TRY_CAST('2026-01-15T09:30:00Z' AS DATE)` silently drops the
-# time. That normalization is valid for an explicitly declared physical type,
-# because decision 5 preserves the raw value beside it, but starter inference
-# should not invent such a narrowing. For those candidates a value only counts
-# as infer-clean when
-# formatting the cast result back to text reproduces the original string
-# exactly; DOUBLE and TIMESTAMPTZ don't lose information relative to the
-# narrower candidates already tried before them, so a plain non-null check
-# is enough.
-_INFERENCE_CANDIDATES: tuple[tuple[str, CastKind, bool], ...] = (
-    ("BOOLEAN", "boolean", False),
-    ("BIGINT", "integer", True),
-    ("DOUBLE", "number", False),
-    ("DATE", "date", True),
-    ("TIMESTAMPTZ", "datetime", False),
-)
-
-
-def _quote(identifier: str) -> str:
-    return '"' + identifier.replace('"', '""') + '"'
-
-
-def infer_kinds_via_duckdb(columns: dict[str, list[str | None]]) -> dict[str, CastKind]:
-    """Infer every column's tightest kind in one vectorized DuckDB pass, via `TRY_CAST`.
-
-    Starter inference is intentionally more conservative than declared-type
-    materialization: a candidate type wins only when every non-null observed
-    value fits it. Decision 5 no longer uses this as a runtime gate — declared
-    columns use per-value `TRY_CAST` — but an inferred starter schema should not
-    propose a narrow type from a mixed column without an author choosing it.
-    One `CREATE TABLE` and one bulk insert hold every column at once, and
-    one `SELECT` computes every column's every candidate in a single
-    DuckDB round trip - column-at-a-time aggregates, not a Python loop
-    issuing its own query per column per candidate. A column with at least
-    one non-null value always gets a kind - `"string"` when no narrower
-    candidate fits every value - so it is `"string"`, never `None`, that
-    means "no meaningful narrowing." Only a column with nothing but `None`s
-    (or no rows at all) is omitted entirely; the caller decides what a
-    genuinely empty column means.
-    """
-    if not columns:
-        return {}
-    con = duckdb.connect()
-    try:
-        column_defs = ", ".join(f"{_quote(name)} VARCHAR" for name in columns)
-        con.execute(f"CREATE TABLE t ({column_defs})")
-        # `strict=True` is the row-count check: every column must align to
-        # the same document sequence, or zip raises rather than silently
-        # truncating to the shortest column.
-        rows = list(zip(*columns.values(), strict=True))
-        if rows:
-            placeholders = ", ".join(["?"] * len(columns))
-            con.executemany(f"INSERT INTO t VALUES ({placeholders})", rows)
-
-        def cast_count_expr(column: str, duckdb_type: str, *, roundtrip: bool) -> str:
-            cast_expr = f"TRY_CAST({_quote(column)} AS {duckdb_type})"
-            if not roundtrip:
-                return f"count({cast_expr})"
-            return f"count(*) FILTER (WHERE CAST({cast_expr} AS VARCHAR) = {_quote(column)})"
-
-        select_list = ", ".join(
-            f"count({_quote(name)}) AS {_quote(f'{name}__n')}, "
-            + ", ".join(
-                f"{cast_count_expr(name, duckdb_type, roundtrip=roundtrip)} AS "
-                f"{_quote(f'{name}__{kind}')}"
-                for duckdb_type, kind, roundtrip in _INFERENCE_CANDIDATES
+    declared = _Declared.model_validate(result)
+    return DeclaredSchema(
+        table_name=declared.table_name,
+        columns={
+            column.name: logical_type_from_catalog(
+                column.logical_type.sql,
+                numeric_precision=column.logical_type.precision,
+                numeric_scale=column.logical_type.scale,
             )
-            for name in columns
-        )
-        cursor = con.execute(f"SELECT {select_list} FROM t")
-        (values,) = cursor.fetchall()
-        counts = dict(zip((c[0] for c in cursor.description), values, strict=True))
-
-        kinds: dict[str, CastKind] = {}
-        for name in columns:
-            non_null = counts[f"{name}__n"]
-            if not non_null:
-                continue
-            kinds[name] = "string"
-            for _, kind, _roundtrip in _INFERENCE_CANDIDATES:
-                if counts[f"{name}__{kind}"] == non_null:
-                    kinds[name] = kind
-                    break
-        return kinds
-    finally:
-        con.close()
-
-
-def render_starter_schema_sql(concept_type: str, columns: dict[str, StarterKind]) -> str | None:
-    """Render a starter `CREATE TABLE` from inferred column kinds, or ``None`` for no columns.
-
-    A one-way trip out of decision 5a's closed type set (`schema
-    --infer-types`'s own vocabulary), never a round trip through DuckDB's
-    catalog the way `parse_declared_schema` is - so column order here is
-    simply the caller's, not read back from a live table.
-    """
-    if not columns:
-        return None
-
-    lines = [
-        f"    {_quote(name)} {_DUCKDB_TYPE_FOR_KIND[kind]}"
-        for name, kind in sorted(columns.items())
-    ]
-    body = ",\n".join(lines)
-    return f"CREATE TABLE {_quote(concept_type)} (\n{body}\n);\n"
+            for column in declared.columns
+        },
+        table_comment=declared.table_comment,
+        column_comments={
+            column.name: column.comment for column in declared.columns if column.comment is not None
+        },
+    )

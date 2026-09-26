@@ -7,12 +7,11 @@ from typing import TYPE_CHECKING
 import duckdb
 
 from okf_parser.bundle import validate_path
-from okf_parser.cli import check as check_command
 from okf_parser.cli import format_command
 from okf_parser.discovery import discover_markdown
 from okf_parser.exclusion import EXCLUSION_FILENAME, ExclusionRules
 from okf_parser.formatting import format_path
-from okf_parser.service import export_duckdb
+from okf_parser.service import check_bundle, export_duckdb
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -89,10 +88,10 @@ def test_an_excluded_file_is_never_rewritten(tmp_path: Path) -> None:
 def test_check_accepts_repeated_exclude_options(tmp_path: Path) -> None:
     _mixed_repository(tmp_path)
 
-    result = check_command(str(tmp_path), exclude=["vendor", "/*.md"])
+    payload = check_bundle(str(tmp_path), exclude=["vendor", "/*.md"])
 
-    assert result.exit_code == 0
-    assert result.payload["concept_count"] == 2
+    assert payload["conformant"]
+    assert payload["concept_count"] == 2
 
 
 def test_format_accepts_repeated_exclude_options(tmp_path: Path) -> None:

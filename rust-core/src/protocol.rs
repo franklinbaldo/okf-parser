@@ -12,12 +12,14 @@ use okf_engine::write::{
 use serde_json::{Map, Value};
 use std::path::PathBuf;
 
-use okf_engine::check::{CheckReport, READ_CONCURRENCY, check_loaded};
-use okf_engine::specs::{Scaffold, SpecTemplate};
-use okf_engine::{BundleData, ConceptGraph, GraphSummary, LoadError, load_bundle};
+use okf_db::declared::{DeclaredSchema, parse_declared_schema};
+use okf_db::export::{ExportError, ExportOptions};
+use okf_db::relational::{RelationalSchema, RelationalSchemaError, parse_relational_schema};
+use okf_engine::check::{CheckError, CheckReport};
+use okf_engine::{BundleData, ConceptGraph, GraphSummary, LoadError};
 use serde::{Deserialize, Serialize};
 
-use crate::commands::InitError;
+use crate::commands::{CheckFailure, CheckOptions, ExportAnswer, InitError, InitReport};
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
@@ -204,78 +206,143 @@ struct CheckRequest {
     normative_spec: bool,
     #[serde(default)]
     classify: bool,
-    /// Also return the loaded bundle, so the caller's own checks (the
-    /// DuckDB relational validation) see the snapshot the report describes.
     #[serde(default)]
-    bundle: bool,
+    relational_schema: Option<PathBuf>,
 }
 
-/// A bundle's records and graph summary, as `__engine-load` answers them.
-#[derive(Serialize)]
-pub struct LoadedBundle {
-    #[serde(flatten)]
-    data: BundleData,
-    graph: GraphSummary,
-}
+impl ProtocolError {
+    fn from_check(error: &CheckFailure) -> Self {
+        match error {
+            CheckFailure::Check(CheckError::SpecTemplate(_)) => Self::spec_template(error),
+            CheckFailure::Check(CheckError::Load(load)) => Self::from_load(load),
+            CheckFailure::Relational(RelationalSchemaError::Script(_)) => {
+                Self::relational_schema(error)
+            }
+            CheckFailure::Relational(RelationalSchemaError::Read { .. }) => Self::request(error),
+            CheckFailure::Relational(_) => Self::relational_schema(error),
+        }
+    }
 
-/// The `__check` answer: the report, and on request the bundle it was taken on.
-#[derive(Serialize)]
-pub struct CheckAnswer {
-    #[serde(flatten)]
-    report: CheckReport,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    bundle: Option<LoadedBundle>,
-}
+    fn relational_schema(error: &dyn std::error::Error) -> Self {
+        Self {
+            kind: "relational_schema",
+            message: error.to_string(),
+        }
+    }
 
-fn check_once(request: &CheckRequest) -> Result<CheckAnswer, ProtocolError> {
-    let template = request
-        .require_spec
-        .as_deref()
-        .map(SpecTemplate::new)
-        .transpose()
-        .map_err(|error| ProtocolError::spec_template(&error))?;
-    let data = load_bundle(&request.path, &request.exclude, READ_CONCURRENCY)
-        .map_err(|error| ProtocolError::from_load(&error))?;
-    let report = check_loaded(&data, template, request.normative_spec, request.classify)
-        .map_err(|error| ProtocolError::from_load(&error))?;
-    let bundle = request.bundle.then(|| LoadedBundle {
-        graph: ConceptGraph::from_bundle(&data).summary(),
-        data,
-    });
-    Ok(CheckAnswer { report, bundle })
+    fn declared_schema(error: &dyn std::error::Error) -> Self {
+        Self {
+            kind: "declared_schema",
+            message: error.to_string(),
+        }
+    }
 }
 
 /// `__check`: the native check report, for the Python shell's `validate_path`.
-pub fn check(request: &str) -> Result<Response<CheckAnswer>, serde_json::Error> {
+pub fn check(request: &str) -> Result<Response<CheckReport>, serde_json::Error> {
     let request: CheckRequest = serde_json::from_str(request)?;
-    Ok(check_once(&request).into())
+    let options = CheckOptions {
+        require_spec: request.require_spec.as_deref(),
+        normative_spec: request.normative_spec,
+        classify: request.classify,
+        relational_schema: request.relational_schema.as_deref(),
+    };
+    let outcome = crate::commands::check(&request.path, &request.exclude, options)
+        .map_err(|error| ProtocolError::from_check(&error));
+    Ok(outcome.into())
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct InitSpecsRequest {
+struct InitRequest {
     path: PathBuf,
     spec_template: String,
     #[serde(default)]
     exclude: Vec<String>,
     #[serde(default)]
     write: bool,
+    #[serde(default)]
+    infer_schema: bool,
 }
 
-/// `__init-specs`: the specification scaffold, for `init --infer-schema`.
-pub fn init_specs(request: &str) -> Result<Response<Scaffold>, serde_json::Error> {
-    let request: InitSpecsRequest = serde_json::from_str(request)?;
-    let outcome = crate::commands::init_specs(
+/// `__init`: the specification scaffold and, on request, starter schemas.
+pub fn init(request: &str) -> Result<Response<InitReport>, serde_json::Error> {
+    let request: InitRequest = serde_json::from_str(request)?;
+    let outcome = crate::commands::init(
         &request.path,
         &request.exclude,
         &request.spec_template,
         request.write,
+        request.infer_schema,
     )
     .map_err(|error| match &error {
         InitError::SpecTemplate(_) => ProtocolError::spec_template(&error),
         InitError::Load(load) => ProtocolError::from_load(load),
-        InitError::Io(_) => ProtocolError::io(&error),
+        InitError::Io(_) | InitError::Infer(_) => ProtocolError::io(&error),
     });
+    Ok(outcome.into())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExportRequest {
+    path: PathBuf,
+    database: String,
+    schema: String,
+    #[serde(default)]
+    overwrite: bool,
+    #[serde(default)]
+    exclude: Vec<String>,
+    #[serde(default)]
+    spec_template: Option<String>,
+}
+
+/// `__export-duckdb`: `Bundle`'s DuckDB export for the Python API.
+pub fn export_duckdb(request: &str) -> Result<Response<ExportAnswer>, serde_json::Error> {
+    let request: ExportRequest = serde_json::from_str(request)?;
+    let options = ExportOptions {
+        database: &request.database,
+        schema: &request.schema,
+        overwrite: request.overwrite,
+        exclude: &request.exclude,
+        spec_template: request.spec_template.as_deref(),
+    };
+    let outcome = crate::commands::export(&request.path, &options).map_err(|error| match &error {
+        ExportError::SpecTemplate(_) => ProtocolError::spec_template(&error),
+        ExportError::Load(load) => ProtocolError::from_load(load),
+        ExportError::Declared(_) => ProtocolError::declared_schema(&error),
+        ExportError::Db(_) => ProtocolError::io(&error),
+        _ => ProtocolError::request(&error),
+    });
+    Ok(outcome.into())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeclaredSchemaRequest {
+    sql: String,
+    concept_type: String,
+}
+
+/// `__declared-schema`: run one `.schema.sql` and read its table back.
+pub fn declared_schema(request: &str) -> Result<Response<DeclaredSchema>, serde_json::Error> {
+    let request: DeclaredSchemaRequest = serde_json::from_str(request)?;
+    let outcome = parse_declared_schema(&request.sql, &request.concept_type)
+        .map_err(|error| ProtocolError::declared_schema(&error));
+    Ok(outcome.into())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelationalSchemaRequest {
+    sql: String,
+}
+
+/// `__relational-schema`: run one relational schema and read its keys back.
+pub fn relational_schema(request: &str) -> Result<Response<RelationalSchema>, serde_json::Error> {
+    let request: RelationalSchemaRequest = serde_json::from_str(request)?;
+    let outcome = parse_relational_schema(&request.sql)
+        .map_err(|error| ProtocolError::relational_schema(&error));
     Ok(outcome.into())
 }
 
@@ -519,24 +586,90 @@ mod tests {
         let value = serde_json::to_value(check(check_request).unwrap()).unwrap();
         assert_eq!(value["error"]["kind"], "request");
         let init_request = r#"{"path": "/definitely/not/a/bundle", "spec_template": "{slug}.md"}"#;
-        let value = serde_json::to_value(init_specs(init_request).unwrap()).unwrap();
+        let value = serde_json::to_value(init(init_request).unwrap()).unwrap();
         assert_eq!(value["error"]["kind"], "request");
     }
 
-    #[test]
-    fn a_check_can_return_the_snapshot_it_describes() {
-        let root = std::env::temp_dir().join(format!("okf-protocol-check-{}", std::process::id()));
+    fn bundle(name: &str, files: &[(&str, &str)]) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("okf-protocol-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(root.join("a.md"), "---\ntype: Note\n---\n").unwrap();
-        let request = serde_json::json!({"path": root, "bundle": true}).to_string();
+        for (path, text) in files {
+            std::fs::write(root.join(path), text).unwrap();
+        }
+        root
+    }
+
+    #[test]
+    fn a_check_runs_the_relational_schema_natively() {
+        let root = bundle(
+            "relational",
+            &[
+                ("a.md", "---\ntype: Book\nisbn: '1'\n---\n"),
+                ("b.md", "---\ntype: Book\nisbn: '1'\n---\n"),
+                ("okf.schema.sql", "CREATE TABLE Book (isbn VARCHAR UNIQUE);"),
+            ],
+        );
+        let request =
+            serde_json::json!({"path": root, "relational_schema": "okf.schema.sql"}).to_string();
         let value = serde_json::to_value(check(&request).unwrap()).unwrap();
+        let broken = serde_json::json!({"path": root, "relational_schema": "missing.sql"});
+        let missing = serde_json::to_value(check(&broken.to_string()).unwrap()).unwrap();
+        std::fs::write(root.join("bad.sql"), "CREATE TABLE (").unwrap();
+        let script = serde_json::json!({"path": root, "relational_schema": "bad.sql"});
+        let failed = serde_json::to_value(check(&script.to_string()).unwrap()).unwrap();
         std::fs::remove_dir_all(&root).unwrap();
         let result = &value["result"];
-        assert_eq!(result["concept_count"], 1);
-        assert_eq!(result["bundle"]["concepts"][0]["concept_id"], "a");
-        assert_eq!(result["bundle"]["root"], result["root"]);
-        assert_eq!(result["bundle"]["graph"]["nodes"], 1);
+        assert_eq!(result["conformant"], false);
+        assert_eq!(result["diagnostics"][0]["code"], "OKF021");
+        assert_eq!(result["diagnostics"][0]["path"], "b.md");
+        assert_eq!(missing["error"]["kind"], "request");
+        assert_eq!(failed["error"]["kind"], "relational_schema");
+    }
+
+    #[test]
+    fn schemas_are_read_back_from_the_catalog() {
+        let declared = serde_json::json!({
+            "sql": "CREATE TABLE note (due DATE, n DECIMAL(9,2));", "concept_type": "Note"
+        });
+        let value = serde_json::to_value(declared_schema(&declared.to_string()).unwrap()).unwrap();
+        assert_eq!(value["result"]["table_name"], "note");
+        assert_eq!(
+            value["result"]["columns"][1]["logical_type"]["precision"],
+            9
+        );
+        let missing = serde_json::json!({"sql": "SELECT 1;", "concept_type": "Note"});
+        let value = serde_json::to_value(declared_schema(&missing.to_string()).unwrap()).unwrap();
+        assert_eq!(value["error"]["kind"], "declared_schema");
+        let relational = serde_json::json!({
+            "sql": "CREATE TABLE a (k VARCHAR PRIMARY KEY); \
+                    CREATE TABLE b (r VARCHAR REFERENCES a(k));"
+        });
+        let value =
+            serde_json::to_value(relational_schema(&relational.to_string()).unwrap()).unwrap();
+        assert_eq!(value["result"]["keys"][0]["primary"], true);
+        assert_eq!(value["result"]["foreign_keys"][0]["referenced_table"], "a");
+    }
+
+    #[test]
+    fn an_export_refusal_is_a_result_with_the_existing_tables() {
+        let root = bundle("export", &[("a.md", "---\ntype: Note\n---\n")]);
+        let database = root.join("out.duckdb");
+        let request = serde_json::json!({
+            "path": root, "database": database, "schema": "okf"
+        })
+        .to_string();
+        let first = serde_json::to_value(export_duckdb(&request).unwrap()).unwrap();
+        let second = serde_json::to_value(export_duckdb(&request).unwrap()).unwrap();
+        let bad = serde_json::json!({"path": root, "database": database, "schema": "1x"});
+        let invalid = serde_json::to_value(export_duckdb(&bad.to_string()).unwrap()).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(first["result"]["concept_count"], 1);
+        assert_eq!(
+            second["result"]["existing_tables"],
+            serde_json::json!(["concepts", "links", "reserved", "diagnostics"])
+        );
+        assert_eq!(invalid["error"]["kind"], "request");
     }
 
     #[test]

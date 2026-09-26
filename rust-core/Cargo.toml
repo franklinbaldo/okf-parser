@@ -12,6 +12,7 @@ path = "src/main.rs"
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 clap = { version = "4", features = ["derive"] }
+okf-db = { path = "../okf-db", version = "0.48.0" }
 okf-engine = { path = "../okf-engine", version = "0.48.0" }
 rmcp = { version = "3.4", features = ["server", "transport-io", "macros", "transport-streamable-http-server"] }
 schemars = "1"

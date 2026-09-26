@@ -386,7 +386,7 @@ fn stage_sibling(path: &Path, bytes: &[u8]) -> io::Result<PathBuf> {
 /// if another writer created `path` in the meantime, so the file appears
 /// complete or not at all. A filesystem without hard links falls back to an
 /// exclusive `create_new`.
-pub(crate) fn create_exclusive(path: &Path, bytes: &[u8]) -> io::Result<bool> {
+pub fn create_exclusive(path: &Path, bytes: &[u8]) -> io::Result<bool> {
     let staged = stage_sibling(path, bytes)?;
     let linked = fs::hard_link(&staged, path);
     let _ = fs::remove_file(&staged);

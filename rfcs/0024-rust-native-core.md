@@ -218,15 +218,35 @@ DuckDB.
   `__render`, in one batch. Every edit and render is parsed back and must
   mean exactly what was intended. `write_support.py` and ruamel.yaml leave.
 
-The DuckDB half of `apply`, `import`'s reading and `init --infer-schema` move
-in phase 4. PyYAML leaves with the last Python reader.
+The DuckDB half of `apply` and `import`'s reading move in phase 4.
+PyYAML leaves with the last Python reader.
 
 ### Phase 4 — DuckDB in Rust
 
 `Bundle.sql()`, SQL `apply`, `import`, schema inference (`init --infer-schema`,
 `schema --infer-types`), DuckDB export, full-text search and relational schema
 validation run on the `duckdb` crate. ibis, pandas, numpy, pyarrow and the
-Python `duckdb` package leave. RFC 0010's extension shares the same Rust code.
+Python `duckdb` package leave.
+
+DuckDB is the only engine: DataFusion is not adopted, and Arrow is not a
+dependency. Results cross to Python as records; an Arrow export may come
+later as an optional extra. The binary compiles DuckDB in (`bundled`) so a
+wheel needs nothing installed; linking the official prebuilt `libduckdb`
+instead, to shorten builds, is a packaging change that does not touch code.
+
+- **4a (0.48.0):** a new `okf-db` crate. `okf-parser duckdb` (the base
+  tables and RFC 0006 typed tables, in one transaction),
+  `check --relational-schema` (`OKF020`-`OKF022`) and
+  `init --infer-schema` run natively, in the CLI and in MCP.
+  `__declared-schema` and `__relational-schema` run a trusted SQL file and
+  hand its catalog back, so the Python modules still reading declarations
+  (`schema`, typed relations, `apply`) no longer run DuckDB for that.
+  `duckdb.py`, `spec_scaffold.py` and the Python relational checks leave.
+- **4b:** `Bundle.sql()` answers records (`columns`, `rows`) from the
+  binary; `compile_types()`/`TypedRelations` and ibis leave.
+- **4c:** the DuckDB half of `apply`, and `import`'s reading.
+- **4d:** full-text search; pandas, numpy, pyarrow and the Python `duckdb`
+  package leave.
 
 ### Phase 5 — the Rust formatter
 

@@ -279,29 +279,34 @@ favor of `bundle.graph().to_networkx()`.
 
 ## DuckDB
 
-`okf-parser` is a regular uv-managed Python app; the DuckDB integration is part
-of the same package, not a native C++ subproject:
+The binary carries its own DuckDB, so exporting a bundle needs nothing else
+installed:
+
+```bash
+uv run okf-parser duckdb knowledge/ knowledge.duckdb
+```
+
+or, from Python:
 
 ```python
 import duckdb
 
-from okf_parser.duckdb import attach_okf
+from okf_parser.service import export_duckdb
 
-connection = duckdb.connect("knowledge.duckdb")
-attach_okf(connection, "knowledge/")
+export_duckdb("knowledge/", "knowledge.duckdb")
 
-connection.sql("""
+duckdb.sql("""
     SELECT concept_type, count(*)
-    FROM okf.concepts
+    FROM 'knowledge.duckdb'.okf.concepts
     GROUP BY concept_type
 """).show()
 ```
 
-The call creates `okf.concepts`, `okf.links`, `okf.reserved`, and
-`okf.diagnostics` as ordinary DuckDB tables. Materializing twice into the same
-schema raises `BundleExportError` rather than clobbering an earlier export; pass
-`overwrite=True` (or `--overwrite` on the command line) to replace the four
-tables.
+The export creates `okf.concepts`, `okf.links`, `okf.reserved`, and
+`okf.diagnostics` as ordinary DuckDB tables, in one transaction. Exporting
+twice into the same schema raises `BundleExportError` rather than clobbering an
+earlier export; pass `overwrite=True` (or `--overwrite` on the command line) to
+replace the tables.
 
 ## Python API
 
@@ -358,7 +363,7 @@ report = validate_path(Path("knowledge"), require_spec=".okf/specs/{slug}.md")
 - stable concept IDs derived from paths;
 - Markdown-link extraction and resolution;
 - typed records for concepts, reserved documents, and links, and DuckDB tables
-  through `attach_okf`;
+  through `okf-parser duckdb`;
 - a native graph summary, with an optional NetworkX projection for traversal,
   cycles, components, and impact;
 - aggregated validation reports.

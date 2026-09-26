@@ -351,12 +351,17 @@ def _verify_rust_crates(root: Path, version: str) -> None:
 
     docs/releasing.md lists "the Rust crate version" among what verify-source
     requires, but nothing read any Cargo.toml and okf-engine silently drifted
-    to 0.39.1 while the workspace published 0.45.0 (issue #172). rust-core
-    additionally pins okf-engine as an internal path dependency, so all three
-    numbers must move together.
+    to 0.39.1 while the workspace published 0.45.0 (issue #172). The crates
+    also pin each other as internal path dependencies (rust-core on okf-db
+    and okf-engine, okf-db on okf-engine), so every number must move together.
     """
-    for crate_root, name in ((root / "okf-engine", "okf-engine"), (root / "rust-core", "okf-core")):
-        path = crate_root / "Cargo.toml"
+    crates = (
+        ("okf-engine", "okf-engine", ()),
+        ("okf-db", "okf-db", ("okf-engine",)),
+        ("rust-core", "okf-core", ("okf-db", "okf-engine")),
+    )
+    for directory, name, internal in crates:
+        path = root / directory / "Cargo.toml"
         try:
             manifest = tomllib.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
@@ -364,10 +369,16 @@ def _verify_rust_crates(root: Path, version: str) -> None:
         package = _mapping(manifest.get("package"), f"{path} [package]")
         if _string(package, "version", str(path)) != version:
             _fail(f"{name} crate version must be {version}")
-    dependencies = _mapping(manifest.get("dependencies"), "rust-core/Cargo.toml dependencies")
-    internal = _mapping(dependencies.get("okf-engine"), "rust-core okf-engine dependency")
-    if _string(internal, "version", "rust-core okf-engine dependency") != version:
-        _fail(f"rust-core internal okf-engine dependency must be {version}")
+        if not internal:
+            continue
+        dependencies = _mapping(
+            manifest.get("dependencies"), f"{directory}/Cargo.toml dependencies"
+        )
+        for dependency in internal:
+            label = f"{directory} {dependency} dependency"
+            pinned = _mapping(dependencies.get(dependency), label)
+            if _string(pinned, "version", label) != version:
+                _fail(f"{directory} internal {dependency} dependency must be {version}")
 
 
 def verify_source(root: Path, tag: str | None = None) -> SourceContract:

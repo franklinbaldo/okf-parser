@@ -1,11 +1,10 @@
 //! `okf-parser serve`: the effect-aware MCP server (RFC 0008, RFC 0024).
 //!
 //! The protocol, the tool schemas and the effect annotations live here. A tool
-//! is answered natively once its logic exists in `okf-engine`: `check`,
-//! `inventory`, `graph` and `init_*`. The tools that still need DuckDB or the
-//! Python formatter (and `check` with `relational_schema`, `init_*` with
-//! `infer_schema`) are delegated to `python -m okf_parser.mcp_bridge`, which
-//! runs the same service function the Python CLI does.
+//! is answered natively once its logic exists in Rust: `check`, `inventory`,
+//! `graph`, `init_*` and `duckdb_export`. The others (`schema`, `format_*`,
+//! `apply_*`, `import_*`) are delegated to `python -m okf_parser.mcp_bridge`,
+//! which runs the same service function the Python CLI does.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -21,6 +20,8 @@ use rmcp::{ServerHandler, ServiceExt, schemars, tool, tool_handler, tool_router}
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
+
+use okf_db::export::ExportOptions;
 
 use crate::{commands, python};
 
@@ -207,7 +208,7 @@ pub struct DuckdbExportArgs {
 }
 
 fn default_database() -> String {
-    "okf.duckdb".into()
+    "knowledge.duckdb".into()
 }
 
 fn default_schema() -> String {
@@ -291,20 +292,16 @@ impl std::error::Error for BridgeError {
 }
 
 impl OkfServer {
-    /// `init_preview`/`init_write`: native, unless `infer_schema` needs DuckDB.
+    /// `init_preview`/`init_write`.
     async fn init(&self, args: InitArgs, write: bool) -> CallToolResult {
-        if args.infer_schema {
-            let tool = if write { "init_write" } else { "init_preview" };
-            return self.delegate(tool, args).await;
-        }
         native(move || {
-            commands::init_specs(
+            commands::init(
                 &args.path,
                 exclude(&args.exclude),
                 &args.spec_template,
                 write,
+                args.infer_schema,
             )
-            .map(|specs| commands::InitReport { specs })
         })
         .await
     }
@@ -380,17 +377,14 @@ impl OkfServer {
         )
     )]
     async fn check(&self, Parameters(args): Parameters<CheckArgs>) -> CallToolResult {
-        if args.relational_schema.is_some() {
-            return self.delegate("check", args).await;
-        }
         native(move || {
-            commands::check(
-                &args.path,
-                exclude(&args.exclude),
-                args.require_spec.as_deref(),
-                args.normative_spec,
-                args.classify,
-            )
+            let options = commands::CheckOptions {
+                require_spec: args.require_spec.as_deref(),
+                normative_spec: args.normative_spec,
+                classify: args.classify,
+                relational_schema: args.relational_schema.as_deref(),
+            };
+            commands::check(&args.path, exclude(&args.exclude), options)
         })
         .await
     }
@@ -554,7 +548,17 @@ impl OkfServer {
         &self,
         Parameters(args): Parameters<DuckdbExportArgs>,
     ) -> CallToolResult {
-        self.delegate("duckdb_export", args).await
+        native(move || {
+            let options = ExportOptions {
+                database: &args.database,
+                schema: &args.schema,
+                overwrite: args.overwrite,
+                exclude: exclude(&args.exclude),
+                spec_template: args.spec_template.as_deref(),
+            };
+            commands::export(&args.path, &options)
+        })
+        .await
     }
 }
 
@@ -724,7 +728,7 @@ mod tests {
         let args: DuckdbExportArgs = serde_json::from_value(json!({"path": "b"})).unwrap();
         assert_eq!(
             serde_json::to_value(args).unwrap(),
-            json!({"path": "b", "database": "okf.duckdb", "schema": "okf", "overwrite": false})
+            json!({"path": "b", "database": "knowledge.duckdb", "schema": "okf", "overwrite": false})
         );
     }
 

@@ -4,8 +4,8 @@ Not RFC 0007's writeback: RFC 0007 is specifically the DuckDB-catalog-back-
 to-frontmatter problem RFC 0006 deferred to it, over a bundle that already
 exists. This is the opposite direction and a different system: an external
 tabular source becomes a *new* bundle of concept documents, symmetric with
-`okf_parser.duckdb`, which already goes from an existing bundle to DuckDB
-tables. DuckDB's own replacement scan (`FROM '<source>'`) resolves CSV,
+`okf-parser duckdb`, which goes from an existing bundle to DuckDB tables.
+DuckDB's own replacement scan (`FROM '<source>'`) resolves CSV,
 Parquet, and (ND)JSON by extension with no format-specific flag; a source it
 cannot open on its own surfaces as DuckDB's own error, unchanged.
 """

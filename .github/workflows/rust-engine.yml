@@ -19,5 +19,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Test semantic engine
         run: cargo test --locked --manifest-path Cargo.toml -p okf-engine
+      - name: Test DuckDB layer
+        run: cargo test --locked --manifest-path Cargo.toml -p okf-db
       - name: Test CLI facade
         run: cargo test --locked --manifest-path Cargo.toml -p okf-core

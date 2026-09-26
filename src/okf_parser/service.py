@@ -5,28 +5,23 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-import duckdb
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from okf_parser.apply import apply_bundle as _apply_bundle
 from okf_parser.bundle import check_report
 from okf_parser.bundle_import import import_bundle as _import_bundle
-from okf_parser.duckdb import attach_okf
+from okf_parser.declared_schema import DeclaredSchemaError
 from okf_parser.edit import preview_concept_edit as _preview_concept_edit
 from okf_parser.edit import write_concept_edit as _write_concept_edit
 from okf_parser.formatting import FormatReport, format_path
 from okf_parser.graphql_adapter import export_graphql_sdl
-from okf_parser.models import Severity
-from okf_parser.relational_schema import validate_relations
-from okf_parser.rust_core import RustCoreError, call_native
+from okf_parser.rust_core import native_result
 from okf_parser.schema_export import (
     RefsMode,
     export_json_schema,
     export_pydantic_source,
     export_zod_schema,
 )
-from okf_parser.schema_export import documents_by_type as _documents_by_type
-from okf_parser.spec_scaffold import scaffold_missing_declared_schemas
 from okf_parser.type_specs import SpecTemplateError
 
 if TYPE_CHECKING:
@@ -37,8 +32,8 @@ if TYPE_CHECKING:
     from okf_parser.schema_contract import ZodImport
 
 
-class _InitSpecsRequest(BaseModel):
-    """The ``__init-specs`` request the binary validates."""
+class _InitRequest(BaseModel):
+    """The ``__init`` request the binary validates."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -46,30 +41,7 @@ class _InitSpecsRequest(BaseModel):
     spec_template: str
     exclude: list[str]
     write: bool
-
-
-def _native_init_specs(
-    path: str, spec_template: str, exclude: Sequence[str], *, write: bool
-) -> dict[str, JsonValue]:
-    response = call_native(
-        "__init-specs",
-        _InitSpecsRequest(
-            path=str(Path(path).resolve()),
-            spec_template=spec_template,
-            exclude=list(exclude),
-            write=write,
-        ),
-    )
-    if response.error is not None:
-        if response.error.kind == "spec_template":
-            raise SpecTemplateError(response.error.message)
-        if response.error.kind == "request":
-            raise ValueError(response.error.message)
-        raise RustCoreError(response.error.message)
-    if response.result is None:
-        msg = "okf-parser __init-specs answered with neither a result nor an error"
-        raise RustCoreError(msg)
-    return response.result
+    infer_schema: bool
 
 
 def init_bundle(
@@ -79,21 +51,24 @@ def init_bundle(
     *,
     write: bool = False,
     infer_schema: bool = False,
-) -> dict[str, object]:
-    """Scaffold a missing specification document, and optionally a starter `.schema.sql`.
+) -> dict[str, JsonValue]:
+    """Scaffold missing specification documents, and optionally starter `.schema.sql`s.
 
-    The specification stubs are scaffolded natively; `infer_schema` adds the
-    DuckDB-backed `schema --infer-types` inference that proposes a starter
-    declaration for whichever types still lack a `.schema.sql`, never
-    touching a file that already exists.
+    `infer_schema` proposes a starter declaration, typed from the values the
+    documents use, for each type that still lacks one; existing files are
+    never touched.
     """
-    specs = _native_init_specs(path, spec_template, exclude, write=write)
-    if not infer_schema:
-        return {"specs": specs}
-    root = Path(path).resolve()
-    observed = _documents_by_type(path, exclude)
-    schemas = scaffold_missing_declared_schemas(root, spec_template, observed, write=write)
-    return {"specs": specs, "schemas": schemas}
+    return native_result(
+        "__init",
+        _InitRequest(
+            path=str(Path(path).resolve()),
+            spec_template=spec_template,
+            exclude=list(exclude),
+            write=write,
+            infer_schema=infer_schema,
+        ),
+        {"spec_template": SpecTemplateError},
+    )
 
 
 def import_bundle(  # each argument is an independent public CLI flag.
@@ -129,36 +104,16 @@ def check_bundle(
     classify: bool = False,
     relational_schema: str | None = None,
 ) -> dict[str, object]:
-    """Validate a bundle with declared relations (`check --relational-schema`).
-
-    Every other check runs natively; this adds the DuckDB-backed relational
-    diagnostics to the native report until RFC 0024 phase 4.
-    """
+    """Validate a bundle, optionally with its declared relations, as the CLI reports it."""
     report = check_report(
         Path(path),
         exclude,
         require_spec,
         normative_spec=normative_spec,
         classify=classify,
-        with_bundle=relational_schema is not None,
+        relational_schema=None if relational_schema is None else Path(relational_schema),
     )
-    diagnostics = list(report.diagnostics)
-    if relational_schema is not None:
-        schema = Path(relational_schema)
-        schema_path = schema if schema.is_absolute() else report.root / schema
-        diagnostics.extend(validate_relations(report.loaded(), schema_path))
-    diagnostics.sort(key=lambda item: (item.path, item.severity.value, item.code, item.message))
-    payload: dict[str, object] = {
-        "root": str(report.root),
-        "conformant": not any(item.severity is Severity.ERROR for item in diagnostics),
-        "markdown_count": report.markdown_count,
-        "concept_count": report.concept_count,
-        "reserved_count": report.reserved_count,
-        "diagnostics": [item.model_dump(mode="json") for item in diagnostics],
-    }
-    if report.classification is not None:
-        payload["classification"] = report.classification.model_dump(mode="json")
-    return payload
+    return report.model_dump(mode="json", exclude_none=True)
 
 
 def schema_bundle(  # service mirrors the independent public schema flags.
@@ -290,6 +245,35 @@ def write_concept_edit(
     return _write_concept_edit(path, concept_id, body, expected_source_digest, exclude=exclude)
 
 
+class BundleExportError(ValueError):
+    """Raised when an export would replace tables and ``overwrite`` is off."""
+
+    def __init__(self, message: str, schema_name: str, tables: tuple[str, ...]) -> None:
+        """Record which schema already holds which of the bundle's tables."""
+        self.schema_name = schema_name
+        self.tables = tables
+        super().__init__(message)
+
+
+class _ExportRequest(BaseModel):
+    """The ``__export-duckdb`` request the binary validates."""
+
+    model_config = ConfigDict(frozen=True, serialize_by_alias=True)
+
+    path: str
+    database: str
+    schema_name: str = Field(serialization_alias="schema")
+    overwrite: bool
+    exclude: list[str]
+    spec_template: str | None
+
+
+class _ExportRefusal(BaseModel):
+    error: str
+    schema_name: str = Field(alias="schema")
+    existing_tables: tuple[str, ...]
+
+
 def export_duckdb(
     path: str,
     database: str,
@@ -298,18 +282,27 @@ def export_duckdb(
     overwrite: bool = False,
     exclude: Sequence[str] = (),
     spec_template: str | None = None,
-) -> dict[str, object]:
-    """Materialize an OKF bundle into a DuckDB database file."""
-    connection = duckdb.connect(database)
-    try:
-        result = attach_okf(
-            connection,
-            path,
-            schema=schema,
+) -> dict[str, JsonValue]:
+    """Materialize an OKF bundle into a DuckDB database file.
+
+    ``concepts``, ``links``, ``reserved`` and ``diagnostics`` land in
+    ``schema``; with ``spec_template``, each declared type gets a typed table
+    in ``{schema}_types``. Existing tables are replaced only with
+    ``overwrite``; otherwise :class:`BundleExportError` names them.
+    """
+    result = native_result(
+        "__export-duckdb",
+        _ExportRequest(
+            path=str(Path(path).resolve()),
+            database=database,
+            schema_name=schema,
             overwrite=overwrite,
-            exclude=exclude,
+            exclude=list(exclude),
             spec_template=spec_template,
-        )
-    finally:
-        connection.close()
-    return {**result, "database": str(Path(database).resolve())}
+        ),
+        {"spec_template": SpecTemplateError, "declared_schema": DeclaredSchemaError},
+    )
+    if "existing_tables" in result:
+        refusal = _ExportRefusal.model_validate(result)
+        raise BundleExportError(refusal.error, refusal.schema_name, refusal.existing_tables)
+    return result

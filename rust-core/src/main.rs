@@ -11,10 +11,11 @@ use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 
 use mcp::Transport;
+use okf_db::export::ExportOptions;
 /// The command line is declared here in full, so `--help` lists every public
-/// command. Commands that still need Python (DuckDB or the Python formatter,
-/// RFC 0024 phases 4-5) are declared as pass-through: their arguments, `--help`
-/// included, go to the Python CLI unparsed.
+/// command. Commands that still need Python (RFC 0024 phases 4-6) are declared
+/// as pass-through: their arguments, `--help` included, go to the Python CLI
+/// unparsed.
 #[derive(Parser)]
 #[command(
     name = "okf-parser",
@@ -36,9 +37,18 @@ enum Command {
     /// Check a bundle for the Python shell (JSON request on stdin).
     #[command(name = "__check", hide = true)]
     CheckRequest,
-    /// Scaffold type specifications for the Python shell (JSON request on stdin).
-    #[command(name = "__init-specs", hide = true)]
-    InitSpecsRequest,
+    /// Scaffold specifications and starter schemas (JSON request on stdin).
+    #[command(name = "__init", hide = true)]
+    InitRequest,
+    /// Export a bundle into DuckDB for the Python API (JSON request on stdin).
+    #[command(name = "__export-duckdb", hide = true)]
+    ExportRequest,
+    /// Run a `.schema.sql` and read its declared table (JSON request on stdin).
+    #[command(name = "__declared-schema", hide = true)]
+    DeclaredSchema,
+    /// Run a relational schema and read its keys (JSON request on stdin).
+    #[command(name = "__relational-schema", hide = true)]
+    RelationalSchema,
     /// Snapshot a bundle for the Python apply planner (JSON request on stdin).
     #[command(name = "__apply-snapshot", hide = true)]
     ApplySnapshot,
@@ -59,17 +69,19 @@ enum Command {
     /// Validate every Markdown file recursively as OKF v0.2.
     Check {
         path: PathBuf,
-        #[arg(long)]
+        /// Skip files matching this gitignore-style pattern (repeatable).
+        #[arg(long, value_name = "PATTERN")]
         exclude: Vec<String>,
         /// Require every type in use to have the document this template derives.
-        #[arg(long)]
+        #[arg(long, value_name = "TEMPLATE")]
         require_spec: Option<String>,
         /// Report the specification rules as errors instead of warnings.
         #[arg(long)]
         normative_spec: bool,
-        /// Validate declared relations (answered by the Python engine).
-        #[arg(long)]
-        relational_schema: Option<String>,
+        /// Check the keys and references declared in this SQL file (usually
+        /// `okf.schema.sql`, relative to the bundle): OKF020-OKF022.
+        #[arg(long, value_name = "PATH")]
+        relational_schema: Option<PathBuf>,
         /// Explain how each candidate Markdown file participated.
         #[arg(long)]
         classify: bool,
@@ -91,13 +103,17 @@ enum Command {
     /// Scaffold missing specification documents, and optionally a starter `.schema.sql`.
     Init {
         path: PathBuf,
-        #[arg(long)]
+        /// Where each type's specification lives, e.g. `specs/{slug}.md`.
+        #[arg(long, value_name = "TEMPLATE")]
         spec_template: String,
-        #[arg(long)]
+        /// Skip files matching this gitignore-style pattern (repeatable).
+        #[arg(long, value_name = "PATTERN")]
         exclude: Vec<String>,
+        /// Create the files; without it, only report what would be created.
         #[arg(long)]
         write: bool,
-        /// Also propose a starter `.schema.sql` (answered by the Python engine).
+        /// Also propose a starter `.schema.sql` beside each spec that lacks
+        /// one, typed from the values the documents use.
         #[arg(long)]
         infer_schema: bool,
     },
@@ -114,8 +130,29 @@ enum Command {
     #[command(disable_help_flag = true)]
     Apply(Delegated),
     /// Materialize an OKF bundle into a DuckDB database file.
-    #[command(disable_help_flag = true)]
-    Duckdb(Delegated),
+    #[command(
+        after_help = "Tables: concepts, links, reserved and diagnostics in SCHEMA; with \
+        --spec-template, one table per declared type in SCHEMA_types."
+    )]
+    Duckdb {
+        path: PathBuf,
+        /// The DuckDB database to write: a file, or `:memory:`.
+        #[arg(default_value = "knowledge.duckdb")]
+        database: String,
+        /// The schema that receives the tables.
+        #[arg(default_value = "okf")]
+        schema: String,
+        /// Replace tables the schema already has instead of refusing.
+        #[arg(long)]
+        overwrite: bool,
+        /// Skip files matching this gitignore-style pattern (repeatable).
+        #[arg(long, value_name = "PATTERN")]
+        exclude: Vec<String>,
+        /// Run each type's `.schema.sql` beside the spec this template derives
+        /// and write its typed table into `{schema}_types`.
+        #[arg(long, value_name = "TEMPLATE")]
+        spec_template: Option<String>,
+    },
     /// List opt-in OKF type packs registered by installed package metadata.
     #[command(disable_help_flag = true)]
     Packs(Delegated),
@@ -184,8 +221,20 @@ fn run() -> Outcome {
         Command::CheckRequest => {
             serde_json::to_writer(io::stdout().lock(), &protocol::check(&stdin_text()?)?)?;
         }
-        Command::InitSpecsRequest => {
-            serde_json::to_writer(io::stdout().lock(), &protocol::init_specs(&stdin_text()?)?)?;
+        Command::InitRequest => {
+            serde_json::to_writer(io::stdout().lock(), &protocol::init(&stdin_text()?)?)?;
+        }
+        Command::ExportRequest => {
+            let response = protocol::export_duckdb(&stdin_text()?)?;
+            serde_json::to_writer(io::stdout().lock(), &response)?;
+        }
+        Command::DeclaredSchema => {
+            let response = protocol::declared_schema(&stdin_text()?)?;
+            serde_json::to_writer(io::stdout().lock(), &response)?;
+        }
+        Command::RelationalSchema => {
+            let response = protocol::relational_schema(&stdin_text()?)?;
+            serde_json::to_writer(io::stdout().lock(), &response)?;
         }
         Command::ApplySnapshot => {
             let response = protocol::apply_snapshot(&stdin_text()?)?;
@@ -205,18 +254,10 @@ fn run() -> Outcome {
             let data = engine::load_bundle(&root, &exclude, read_concurrency)?;
             serde_json::to_writer(io::stdout().lock(), &protocol::LoadResponse::new(&data))?;
         }
-        Command::Check {
-            relational_schema: Some(_),
-            ..
-        }
-        | Command::Init {
-            infer_schema: true, ..
-        }
-        | Command::Import(_)
+        Command::Import(_)
         | Command::Schema(_)
         | Command::Format(_)
         | Command::Apply(_)
-        | Command::Duckdb(_)
         | Command::Packs(_)
         | Command::AddPack(_) => return python_cli(),
         Command::Check {
@@ -224,16 +265,16 @@ fn run() -> Outcome {
             exclude,
             require_spec,
             normative_spec,
-            relational_schema: None,
+            relational_schema,
             classify,
         } => {
-            let report = commands::check(
-                &path,
-                &exclude,
-                require_spec.as_deref(),
+            let options = commands::CheckOptions {
+                require_spec: require_spec.as_deref(),
                 normative_spec,
                 classify,
-            )?;
+                relational_schema: relational_schema.as_deref(),
+            };
+            let report = commands::check(&path, &exclude, options)?;
             let code = i32::from(!report.conformant);
             return print(&report, code);
         }
@@ -248,11 +289,30 @@ fn run() -> Outcome {
             spec_template,
             exclude,
             write,
-            infer_schema: false,
+            infer_schema,
         } => {
-            let specs = commands::init_specs(&path, &exclude, &spec_template, write)?;
-            let code = i32::from(!specs.collisions.is_empty());
-            return print(&commands::InitReport { specs }, code);
+            let report = commands::init(&path, &exclude, &spec_template, write, infer_schema)?;
+            let code = i32::from(report.collided());
+            return print(&report, code);
+        }
+        Command::Duckdb {
+            path,
+            database,
+            schema,
+            overwrite,
+            exclude,
+            spec_template,
+        } => {
+            let options = ExportOptions {
+                database: &database,
+                schema: &schema,
+                overwrite,
+                exclude: &exclude,
+                spec_template: spec_template.as_deref(),
+            };
+            let answer = commands::export(&path, &options)?;
+            let code = i32::from(answer.refused());
+            return print(&answer, code);
         }
         Command::Serve {
             transport,
