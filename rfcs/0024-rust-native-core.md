@@ -243,9 +243,16 @@ nothing installed. See docs/releasing.md.
   hand its catalog back, so the Python modules still reading declarations
   (`schema`, typed relations, `apply`) no longer run DuckDB for that.
   `duckdb.py`, `spec_scaffold.py` and the Python relational checks leave.
-- **4b:** `Bundle.sql()` answers records (`columns`, `rows`) from the
-  binary; `compile_types()`/`TypedRelations` and ibis leave.
-- **4c:** the DuckDB half of `apply`, and `import`'s reading.
+- **4b (0.48.0):** `Bundle.sql(query, spec_template=, limit=)` answers
+  records (`columns` with their DuckDB types, `rows`) from the binary
+  (`__sql`), over the snapshot the `Bundle` holds; values are read back by
+  column type (`Decimal`, `date`, nested lists, structs and maps). The same
+  query surface is the `okf-parser sql` command and the read-only MCP `sql`
+  tool, which realize "graph as SQL". The query's connection has external
+  access disabled and locked, and runs only one statement that `DESCRIBE`
+  accepts. `compile_types()`/`TypedRelations` leave; ibis stays until 4c,
+  for `apply` alone.
+- **4c:** the DuckDB half of `apply`, and `import`'s reading; ibis leaves.
 - **4d:** full-text search; pandas, numpy, pyarrow and the Python `duckdb`
   package leave.
 

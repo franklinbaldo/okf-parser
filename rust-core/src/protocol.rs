@@ -14,6 +14,7 @@ use std::path::PathBuf;
 
 use okf_db::declared::{DeclaredSchema, parse_declared_schema};
 use okf_db::export::{ExportError, ExportOptions};
+use okf_db::query::{QueryError, QueryOptions, QueryResult, query_bundle};
 use okf_db::relational::{RelationalSchema, RelationalSchemaError, parse_relational_schema};
 use okf_engine::check::{CheckError, CheckReport};
 use okf_engine::{BundleData, ConceptGraph, GraphSummary, LoadError};
@@ -314,6 +315,40 @@ pub fn export_duckdb(request: &str) -> Result<Response<ExportAnswer>, serde_json
         ExportError::Db(_) => ProtocolError::io(&error),
         _ => ProtocolError::request(&error),
     });
+    Ok(outcome.into())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SqlRequest {
+    /// The records of the `Bundle` being queried, exactly as `__engine-load`
+    /// answered them, so the query sees the caller's snapshot.
+    bundle: BundleData,
+    query: String,
+    #[serde(default)]
+    spec_template: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+/// `__sql`: one read-only query over a loaded bundle, for `Bundle.sql()`.
+pub fn sql(request: &str) -> Result<Response<QueryResult>, serde_json::Error> {
+    let request: SqlRequest = serde_json::from_str(request)?;
+    let options = QueryOptions {
+        spec_template: request.spec_template.as_deref(),
+        limit: request.limit,
+    };
+    let outcome =
+        query_bundle(&request.bundle, &request.query, options).map_err(|error| match &error {
+            QueryError::SpecTemplate(_) => ProtocolError::spec_template(&error),
+            QueryError::Declared(_) => ProtocolError::declared_schema(&error),
+            QueryError::Query(_) | QueryError::NotAQuery => ProtocolError {
+                kind: "query",
+                message: error.to_string(),
+            },
+            QueryError::Typed(_) => ProtocolError::request(&error),
+            QueryError::Db(_) => ProtocolError::io(&error),
+        });
     Ok(outcome.into())
 }
 
@@ -625,6 +660,23 @@ mod tests {
         assert_eq!(result["diagnostics"][0]["path"], "b.md");
         assert_eq!(missing["error"]["kind"], "request");
         assert_eq!(failed["error"]["kind"], "relational_schema");
+    }
+
+    #[test]
+    fn sql_runs_over_the_snapshot_it_is_given() {
+        let request = serde_json::json!({
+            "bundle": {
+                "root": "/nowhere", "concepts": [], "reserved": [], "links": [],
+                "diagnostics": [], "markdown_count": 0, "graph": {"nodes": 0}
+            },
+            "query": "SELECT count(*) AS n FROM concepts"
+        });
+        let value = serde_json::to_value(sql(&request.to_string()).unwrap()).unwrap();
+        assert_eq!(value["result"]["rows"], serde_json::json!([[0]]));
+        assert_eq!(value["result"]["columns"][0]["type"], "BIGINT");
+        let broken = serde_json::json!({"bundle": request["bundle"], "query": "SELEC 1"});
+        let value = serde_json::to_value(sql(&broken.to_string()).unwrap()).unwrap();
+        assert_eq!(value["error"]["kind"], "query");
     }
 
     #[test]

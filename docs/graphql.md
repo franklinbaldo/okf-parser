@@ -1,13 +1,13 @@
 ---
 type: Documentation
 title: Embedded GraphQL read adapter
-description: Deterministic SDL and host-owned read-only GraphQL execution over OKF TypeContract and Ibis relations
+description: Deterministic SDL and host-owned read-only GraphQL execution over OKF TypeContract and bundle records
 ---
 
 # Embedded GraphQL read adapter
 
 GraphQL is an optional **read adapter** over the same OKF semantics used by the
-parser, TypeContract, RFC 0006 typed relations and DuckDB/Ibis surfaces. It is not
+parser, TypeContract, RFC 0006 typed tables and DuckDB surfaces. It is not
 another schema implementation and it does not own Markdown parsing or writes.
 
 ## Deterministic SDL
@@ -88,9 +88,9 @@ and `offset` must be non-negative. This keeps pagination deterministic and
 bounded. General typed field filtering is intentionally a later #56 milestone;
 the adapter does not interpolate arbitrary GraphQL input into SQL.
 
-The adapter reads generic concept identity/source data from canonical Ibis
-relations. When `spec_template` is supplied, declared RFC 0006 values are read
-through the public `Bundle.compile_types()` API rather than private DuckDB tables.
+The adapter reads generic concept identity/source data from the bundle's
+records. When `spec_template` is supplied, declared RFC 0006 values are read
+through the public `Bundle.sql()` API rather than private DuckDB tables.
 
 ## Scalar policy
 
@@ -119,7 +119,7 @@ Browser
   -> Astro SSR / Actions
   -> application gateway
   -> GraphQLReadAdapter
-  -> OKF Bundle / TypeContract / Ibis
+  -> OKF Bundle / TypeContract / Bundle.sql()
 ```
 
 The host can create a fresh adapter for each live read when filesystem changes

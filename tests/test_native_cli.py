@@ -126,7 +126,7 @@ def test_top_level_help_lists_native_and_delegated_commands() -> None:
     )
 
     listed = {line.split()[0] for line in completed.stdout.splitlines() if line.startswith("  ")}
-    native = {"check", "inventory", "graph", "init", "duckdb", "serve"}
+    native = {"check", "sql", "inventory", "graph", "init", "duckdb", "serve"}
     delegated = {"import", "schema", "format", "apply", "packs", "add-pack"}
     assert native | delegated <= listed
     assert not any(name.startswith("__") for name in listed)

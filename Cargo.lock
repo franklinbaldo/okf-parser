@@ -1584,6 +1584,7 @@ dependencies = [
 name = "okf-db"
 version = "0.48.0"
 dependencies = [
+ "chrono",
  "duckdb",
  "okf-engine",
  "serde",

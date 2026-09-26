@@ -260,6 +260,35 @@ including validation or write-conflict failures.
 
 MCP tools: `apply_preview`; `apply_write` with `--allow-write`. Both accept `spec_template`.
 
+## `sql`
+
+```bash
+uv run okf-parser sql path/to/bundle "QUERY" [--spec-template TEMPLATE] [--limit N] [--exclude PATTERN]...
+```
+
+Runs one read-only SQL query over the bundle and prints `{"columns", "rows",
+"truncated"}`. The tables are the ones `duckdb` exports: `concepts`, `links`,
+`reserved` and `diagnostics` (schema `okf`) and, with `--spec-template`, one per
+declared type (schema `okf_types`), all on the search path, so
+`FROM concepts` and `FROM Rotina` both work. For example, the concepts nothing
+links to:
+
+```bash
+uv run okf-parser sql knowledge "SELECT path FROM concepts c WHERE NOT EXISTS (SELECT 1 FROM links l WHERE l.target_id = c.concept_id)"
+```
+
+The query cannot read files, reach the network, load extensions or change
+settings, and must be a single query (`SELECT`, `WITH`, `FROM ...`,
+`VALUES`); anything else is an error. Each column carries its DuckDB `type`.
+Values are JSON: `DECIMAL` and `HUGEINT` as strings, dates and times as ISO 8601
+(`TIMESTAMP WITH TIME ZONE` with `+00:00`), `BLOB` as hex, lists as arrays,
+structs as objects and maps as `[key, value]` pairs. `--limit` caps the rows and
+sets `truncated` when it cut any.
+
+MCP tool: `sql`, read-only, with `limit` defaulting to and capped at 1000.
+The Python API is `Bundle.sql()`, which reads the values back as `Decimal`,
+`date`, `datetime`, `bytes` and so on.
+
 ## `duckdb`
 
 ```bash
@@ -308,8 +337,8 @@ Tool arguments are validated at the server: an unknown key is a tool error,
 and defaulted flags keep concrete, non-nullable schemas (`digests` defaults to
 `false`, `database` to `knowledge.duckdb`). The legacy
 `sse` transport is gone: the MCP specification deprecated it in favor of
-Streamable HTTP. `check`, `inventory`, `graph`, `init_preview`, `init_write` and
-`duckdb_export` are answered natively by the binary. The tools still written in
+Streamable HTTP. `check`, `inventory`, `graph`, `sql`, `init_preview`,
+`init_write` and `duckdb_export` are answered natively by the binary. The tools still written in
 Python (`schema`, `format_*`, `apply_*`, `import_*`) are delegated to
 `python -m okf_parser.mcp_bridge`, which runs the CLI's own service function.
 The interpreter is the one installed next to the binary; set `OKF_PYTHON` to

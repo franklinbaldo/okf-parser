@@ -29,13 +29,15 @@ from okf_parser.rust_core import (
     native_result,
     rust_load_bundle,
 )
+from okf_parser.sql import query_bundle
 from okf_parser.type_specs import SpecTemplateError
-from okf_parser.typed_relations import TypedRelations, compile_bundle_types
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
 
     import networkx as nx
+
+    from okf_parser.sql import SqlResult
 
 
 def _ordered(diagnostics: Iterable[Violation]) -> list[Violation]:
@@ -71,9 +73,23 @@ class Bundle:
         """Every producer-defined type observed in the bundle."""
         return {concept.concept_type for concept in self.concepts if concept.concept_type}
 
-    def compile_types(self, spec_template: str | None = None) -> TypedRelations:
-        """Compile declared concept types into live in-process relations."""
-        return compile_bundle_types(self, spec_template)
+    def sql(
+        self,
+        query: str,
+        *,
+        spec_template: str | None = None,
+        limit: int | None = None,
+    ) -> SqlResult:
+        """Run one read-only SQL query over this bundle.
+
+        The tables are the ones ``okf-parser duckdb`` exports, built from this
+        snapshot: ``concepts``, ``links``, ``reserved`` and ``diagnostics``
+        and, with ``spec_template``, one table per declared type (RFC 0006) in
+        ``okf_types``; all are on the search path. The query cannot read
+        files, reach the network or change settings. Values come back as
+        Python values by their DuckDB type (``Decimal``, ``date``, ...).
+        """
+        return query_bundle(self, query, spec_template=spec_template, limit=limit)
 
     @property
     def is_conformant(self) -> bool:
