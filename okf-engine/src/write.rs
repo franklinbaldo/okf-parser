@@ -11,11 +11,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
-use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
+use std::{fmt, fs};
 
 use ignore::gitignore::Gitignore;
 use serde::{Deserialize, Serialize};
@@ -23,7 +23,8 @@ use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
 use crate::engine::{
-    IGNORED, concept_identity, exclusions, load_bundle, markdown, normalized_newlines, reserved,
+    BundlePath, Code, ExclusionError, LoadError, NonUtf8Path, Severity, concept_identity,
+    exclusions, ignored_directory, load_bundle, markdown, normalized_newlines, reserved,
     split_source,
 };
 
@@ -34,19 +35,100 @@ const LOCK_FILE: &str = ".okf-write.lock";
 
 /// A write that could not be attempted at all, as opposed to one that was
 /// attempted and refused (validation or conflict), which is a result.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug)]
 pub enum WriteError {
-    /// The request itself is invalid for this bundle.
-    Request(String),
+    /// The bundle root named by the request cannot be resolved.
+    RootUnreadable {
+        path: PathBuf,
+        source: io::Error,
+    },
+    /// The request's exclusion patterns are not valid gitignore rules.
+    Exclusions(ExclusionError),
+    /// No concept, or more than one, has the requested id.
+    UnknownConcept(String),
+    /// The staged candidate no longer has exactly one concept with the id.
+    CandidateLost(String),
     /// A file changed while the snapshot was reading it; retrying may succeed.
-    ChangedDuringRead { path: String },
+    ChangedDuringRead {
+        path: String,
+    },
+    /// A bundle file has no UTF-8 name, so a write cannot account for it.
+    NonUtf8Path(PathBuf),
+    /// Loading the live or the staged bundle failed.
+    Load(LoadError),
+    Walk(walkdir::Error),
     /// The filesystem failed underneath the write.
-    Io(String),
+    Io(io::Error),
+}
+
+impl WriteError {
+    /// Whether the request is at fault (retrying the same request cannot
+    /// help) rather than the environment.
+    pub fn is_request(&self) -> bool {
+        matches!(
+            self,
+            Self::RootUnreadable { .. }
+                | Self::Exclusions(_)
+                | Self::UnknownConcept(_)
+                | Self::CandidateLost(_)
+                | Self::ChangedDuringRead { .. }
+                | Self::NonUtf8Path(_)
+        )
+    }
+}
+
+impl fmt::Display for WriteError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RootUnreadable { path, source } => {
+                write!(
+                    f,
+                    "bundle root is not readable: {}: {source}",
+                    path.display()
+                )
+            }
+            Self::Exclusions(error) => error.fmt(f),
+            Self::UnknownConcept(id) => write!(f, "concept does not exist exactly once: {id}"),
+            Self::CandidateLost(id) => write!(
+                f,
+                "candidate concept does not exist exactly once after staging: {id}"
+            ),
+            Self::ChangedDuringRead { path } => {
+                write!(f, "file changed while it was being read: {path}")
+            }
+            Self::NonUtf8Path(path) => write!(f, "path is not valid UTF-8: {}", path.display()),
+            Self::Load(error) => error.fmt(f),
+            Self::Walk(error) => error.fmt(f),
+            Self::Io(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for WriteError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::RootUnreadable { source, .. } => Some(source),
+            Self::Exclusions(error) => Some(error),
+            Self::Load(error) => Some(error),
+            Self::Walk(error) => Some(error),
+            Self::Io(error) => Some(error),
+            Self::UnknownConcept(_)
+            | Self::CandidateLost(_)
+            | Self::ChangedDuringRead { .. }
+            | Self::NonUtf8Path(_) => None,
+        }
+    }
 }
 
 impl From<io::Error> for WriteError {
     fn from(error: io::Error) -> Self {
-        Self::Io(error.to_string())
+        Self::Io(error)
+    }
+}
+
+impl From<NonUtf8Path> for WriteError {
+    fn from(NonUtf8Path(path): NonUtf8Path) -> Self {
+        Self::NonUtf8Path(path)
     }
 }
 
@@ -136,7 +218,7 @@ pub struct BundleSnapshot {
 ///
 /// Excluded directories are pruned unless the exclusion rules contain a
 /// negation, which could re-include something below them.
-fn visible_files(root: &Path, rules: &Gitignore) -> io::Result<Vec<(PathBuf, String)>> {
+fn visible_files(root: &Path, rules: &Gitignore) -> Result<Vec<(PathBuf, String)>, WriteError> {
     let prunes = rules.num_whitelists() == 0;
     let mut files = Vec::new();
     let walker = WalkDir::new(root).follow_links(false).into_iter();
@@ -150,27 +232,21 @@ fn visible_files(root: &Path, rules: &Gitignore) -> io::Result<Vec<(PathBuf, Str
         if !entry.file_type().is_dir() {
             return true;
         }
-        let name = entry.file_name().to_string_lossy();
-        let relative = entry.path().strip_prefix(root).unwrap_or(entry.path());
-        if IGNORED.contains(&name.as_ref()) {
+        if ignored_directory(entry.file_name()) {
             return false;
         }
+        let relative = entry.path().strip_prefix(root).unwrap_or(entry.path());
         !prunes
             || !rules
                 .matched_path_or_any_parents(relative, true)
                 .is_ignore()
     }) {
-        let entry = entry.map_err(io::Error::other)?;
+        let entry = entry.map_err(WriteError::Walk)?;
         if entry.depth() == 1 && entry.file_name() == LOCK_FILE {
             continue;
         }
         if entry.file_type().is_file() {
-            let relative = entry
-                .path()
-                .strip_prefix(root)
-                .unwrap_or(entry.path())
-                .to_string_lossy()
-                .replace('\\', "/");
+            let relative = BundlePath::new(root, entry.path())?.into_string();
             files.push((entry.into_path(), relative));
         }
     }
@@ -179,7 +255,7 @@ fn visible_files(root: &Path, rules: &Gitignore) -> io::Result<Vec<(PathBuf, Str
 }
 
 fn exclusion_rules(root: &Path, exclude: &[String]) -> Result<Gitignore, WriteError> {
-    exclusions(root, exclude).map_err(WriteError::Request)
+    exclusions(root, exclude).map_err(WriteError::Exclusions)
 }
 
 /// One parse of the bytes: split once, identify from the split, keep the split.
@@ -375,22 +451,22 @@ fn build_candidate_tree(
     Ok(())
 }
 
-pub type DiagnosticKey = (String, String, String);
+pub type DiagnosticKey = (Code, String, String);
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ValidationItem {
-    pub code: String,
+    pub code: Code,
     pub path: String,
     pub message: String,
 }
 
 /// The normative (error) diagnostics of a bundle, as comparable keys.
 pub fn error_keys(root: &Path, exclude: &[String]) -> Result<BTreeSet<DiagnosticKey>, WriteError> {
-    let data = load_bundle(root, exclude, READ_CONCURRENCY).map_err(WriteError::Io)?;
+    let data = load_bundle(root, exclude, READ_CONCURRENCY).map_err(WriteError::Load)?;
     Ok(data
         .diagnostics
         .into_iter()
-        .filter(|item| item.severity == "error")
+        .filter(|item| item.severity == Severity::Error)
         .map(|item| (item.code, item.path, item.message))
         .collect())
 }
@@ -402,7 +478,7 @@ fn new_errors(
     candidate
         .difference(baseline)
         .map(|(code, path, message)| ValidationItem {
-            code: code.clone(),
+            code: *code,
             path: path.clone(),
             message: message.clone(),
         })
@@ -533,22 +609,20 @@ pub struct EditReport {
 
 /// Replace one concept's Markdown body, previewing or committing it.
 pub fn edit_concept(request: &EditRequest) -> Result<EditReport, WriteError> {
-    let root = request.path.canonicalize().map_err(|error| {
-        WriteError::Request(format!(
-            "bundle root is not readable: {}: {error}",
-            request.path.display()
-        ))
-    })?;
+    let root = request
+        .path
+        .canonicalize()
+        .map_err(|source| WriteError::RootUnreadable {
+            path: request.path.clone(),
+            source,
+        })?;
     let snapshot = snapshot_bundle(&root, &request.exclude)?;
     let mut matches = snapshot
         .concepts
         .iter()
         .filter(|concept| concept.concept_id == request.concept_id);
     let (Some(concept), None) = (matches.next(), matches.next()) else {
-        return Err(WriteError::Request(format!(
-            "concept does not exist exactly once: {}",
-            request.concept_id
-        )));
+        return Err(WriteError::UnknownConcept(request.concept_id.clone()));
     };
 
     let report = |candidate: Digests, outcome| EditReport {
@@ -586,18 +660,15 @@ pub fn edit_concept(request: &EditRequest) -> Result<EditReport, WriteError> {
     let candidate_root = staging.0.join("bundle");
     fs::create_dir(&candidate_root)?;
     build_candidate_tree(&root, &candidate_root, &candidates, &request.exclude)?;
-    let staged =
-        load_bundle(&candidate_root, &request.exclude, READ_CONCURRENCY).map_err(WriteError::Io)?;
+    let staged = load_bundle(&candidate_root, &request.exclude, READ_CONCURRENCY)
+        .map_err(WriteError::Load)?;
     drop(staging);
     let mut staged_matches = staged
         .concepts
         .iter()
         .filter(|record| record.concept_id == request.concept_id);
     let (Some(record), None) = (staged_matches.next(), staged_matches.next()) else {
-        return Err(WriteError::Request(format!(
-            "candidate concept does not exist exactly once after staging: {}",
-            request.concept_id
-        )));
+        return Err(WriteError::CandidateLost(request.concept_id.clone()));
     };
     let candidate = Digests {
         source: record.source_digest.clone(),
@@ -606,8 +677,8 @@ pub fn edit_concept(request: &EditRequest) -> Result<EditReport, WriteError> {
     let candidate_errors: BTreeSet<DiagnosticKey> = staged
         .diagnostics
         .iter()
-        .filter(|item| item.severity == "error")
-        .map(|item| (item.code.clone(), item.path.clone(), item.message.clone()))
+        .filter(|item| item.severity == Severity::Error)
+        .map(|item| (item.code, item.path.clone(), item.message.clone()))
         .collect();
 
     let invalid = new_errors(&candidate_errors, &baseline_errors);
@@ -737,7 +808,7 @@ mod tests {
         let WriteOutcome::Invalid(items) = outcome else {
             panic!("expected a validation failure, got {outcome:?}");
         };
-        assert_eq!(items[0].code, "OKF002");
+        assert_eq!(items[0].code, Code::Okf002);
         assert_eq!(fs::read_to_string(dir.0.join("a.md")).unwrap(), original);
     }
 
@@ -876,9 +947,25 @@ mod tests {
         let dir = bundle(&[("a.md", "---\ntype: Note\n---\n")]);
         let mut edit = request(&dir.0, "x", "d".into(), false);
         edit.concept_id = "missing".into();
-        assert_eq!(
-            edit_concept(&edit).unwrap_err(),
-            WriteError::Request("concept does not exist exactly once: missing".into())
+        let error = edit_concept(&edit).unwrap_err();
+        assert!(
+            matches!(&error, WriteError::UnknownConcept(id) if id == "missing"),
+            "{error:?}"
+        );
+        assert!(error.is_request());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_non_utf8_file_name_is_refused_not_replaced() {
+        use std::os::unix::ffi::OsStrExt;
+        let dir = bundle(&[("a.md", "---\ntype: Note\n---\n# A\n")]);
+        let name = std::ffi::OsStr::from_bytes(b"image-\xff.png");
+        fs::write(dir.0.join(name), b"x").unwrap();
+        let error = snapshot_bundle(&dir.0, &[]).err().unwrap();
+        assert!(
+            matches!(&error, WriteError::NonUtf8Path(path) if path.file_name() == Some(name)),
+            "{error:?}"
         );
     }
 }

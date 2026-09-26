@@ -39,22 +39,18 @@ pub struct ProtocolError {
 }
 
 impl ProtocolError {
-    /// The shell-facing wording of an engine error, for a command named `command`.
-    fn from_write(error: WriteError, command: &str) -> Self {
-        match error {
-            WriteError::Request(message) => Self {
-                kind: "request",
-                message,
-            },
-            WriteError::ChangedDuringRead { path } => Self {
-                kind: "request",
-                message: format!("file changed while {command} was reading it: {path}"),
-            },
-            WriteError::Io(message) => Self {
-                kind: "io",
-                message,
-            },
-        }
+    /// The shell-facing form of an engine error, for a command named `command`.
+    /// `kind` says whether the request (`request`) or the environment (`io`)
+    /// is at fault; only this layer turns errors into prose.
+    fn from_write(error: &WriteError, command: &str) -> Self {
+        let kind = if error.is_request() { "request" } else { "io" };
+        let message = match error {
+            WriteError::ChangedDuringRead { path } => {
+                format!("file changed while {command} was reading it: {path}")
+            }
+            other => other.to_string(),
+        };
+        Self { kind, message }
     }
 }
 
@@ -152,7 +148,7 @@ pub fn edit(request: &str) -> Result<Response<EditResult>, serde_json::Error> {
     let request: EditRequest = serde_json::from_str(request)?;
     Ok(Response::new(match edit_concept(&request) {
         Ok(report) => Answer::Success(report.into()),
-        Err(error) => Answer::Error(ProtocolError::from_write(error, "edit")),
+        Err(error) => Answer::Error(ProtocolError::from_write(&error, "edit")),
     }))
 }
 
@@ -202,7 +198,7 @@ mod tests {
             path: "a.md".into(),
         };
         assert_eq!(
-            ProtocolError::from_write(error, "edit"),
+            ProtocolError::from_write(&error, "edit"),
             ProtocolError {
                 kind: "request",
                 message: "file changed while edit was reading it: a.md".into(),
@@ -232,6 +228,22 @@ mod tests {
         let conflict = EditResult::from(report(EditOutcome::Conflict(vec!["b.md".into()])));
         assert!(!conflict.succeeded && conflict.changed && !conflict.written);
         assert_eq!(conflict.conflict_paths, ["b.md"]);
+    }
+
+    #[test]
+    fn engine_errors_map_to_request_or_io() {
+        let unknown = ProtocolError::from_write(&WriteError::UnknownConcept("x".into()), "edit");
+        assert_eq!(unknown.kind, "request");
+        assert_eq!(unknown.message, "concept does not exist exactly once: x");
+        let io =
+            ProtocolError::from_write(&WriteError::Io(std::io::Error::other("disk full")), "edit");
+        assert_eq!(
+            io,
+            ProtocolError {
+                kind: "io",
+                message: "disk full".into(),
+            }
+        );
     }
 
     #[test]

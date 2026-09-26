@@ -24,3 +24,21 @@ RFC 0024 also records two decisions: `import`, `init --infer-schema` and SQL
 `apply` move with DuckDB (phase 4), and YAML writing will use maintained
 libraries (`yaml-edit` for lossless edits, a serializer for new documents)
 rather than hand-written emitters.
+
+The Rust code as a whole now models its domain in types rather than strings,
+with every public JSON, MCP and DuckDB shape unchanged:
+
+- Engine, YAML, write and MCP failures are error enums (`LoadError`,
+  `FrontmatterError`, `WriteError`, the MCP bridge errors) that keep their
+  causes; they become text only in the protocol, CLI and MCP adapters.
+  Diagnostic messages keep their exact wording.
+- Diagnostic `code` and `severity`, reserved `filename` and link `origin` are
+  enums that serialize to the same strings as before.
+- Bundle paths are converted to text in one place (`BundlePath`), which
+  refuses a path with no UTF-8 spelling instead of silently replacing bytes
+  with U+FFFD, since that could give two files the same concept id. On Unix,
+  a backslash in a file name is now kept as written, matching the Python
+  engine's `as_posix()`.
+- The canonical JSON behind `parsed_digest` and `frontmatter_json` is written
+  from borrowed values, with no mapping clones and no per-comparison UTF-16
+  buffers; a test pins it byte for byte against the previous writer.

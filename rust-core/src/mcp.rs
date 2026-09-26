@@ -8,8 +8,9 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
+use std::{fmt, io};
 
-use okf_engine::{ConceptGraph, load_bundle};
+use okf_engine::{ConceptGraph, LoadError, load_bundle};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig};
@@ -46,7 +47,7 @@ pub enum Transport {
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PathArgs {
-    path: String,
+    path: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     exclude: Option<Vec<String>>,
 }
@@ -54,7 +55,7 @@ pub struct PathArgs {
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CheckArgs {
-    path: String,
+    path: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     exclude: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -62,7 +63,7 @@ pub struct CheckArgs {
     #[serde(default)]
     normative_spec: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    relational_schema: Option<String>,
+    relational_schema: Option<PathBuf>,
     #[serde(default)]
     classify: bool,
 }
@@ -70,7 +71,7 @@ pub struct CheckArgs {
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct InventoryArgs {
-    path: String,
+    path: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     exclude: Option<Vec<String>>,
     #[serde(default)]
@@ -100,7 +101,7 @@ pub enum ZodImport {
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SchemaArgs {
-    path: String,
+    path: PathBuf,
     #[serde(default, rename = "format")]
     schema_format: SchemaFormat,
     #[serde(default)]
@@ -118,7 +119,7 @@ pub struct SchemaArgs {
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ApplyArgs {
-    path: String,
+    path: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     sql: Option<String>,
     #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
@@ -138,7 +139,7 @@ pub struct ApplyArgs {
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct InitArgs {
-    path: String,
+    path: PathBuf,
     spec_template: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     exclude: Option<Vec<String>>,
@@ -158,8 +159,8 @@ pub enum ImportConflictPolicy {
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ImportPreviewArgs {
-    source: String,
-    path: String,
+    source: PathBuf,
+    path: PathBuf,
     #[serde(rename = "type")]
     type_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -173,8 +174,8 @@ pub struct ImportPreviewArgs {
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ImportWriteArgs {
-    source: String,
-    path: String,
+    source: PathBuf,
+    path: PathBuf,
     #[serde(rename = "type")]
     type_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -190,9 +191,9 @@ pub struct ImportWriteArgs {
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct DuckdbExportArgs {
-    path: String,
+    path: PathBuf,
     #[serde(default = "default_database")]
-    database: String,
+    database: PathBuf,
     #[serde(default = "default_schema")]
     schema: String,
     #[serde(default)]
@@ -203,7 +204,7 @@ pub struct DuckdbExportArgs {
     spec_template: Option<String>,
 }
 
-fn default_database() -> String {
+fn default_database() -> PathBuf {
     "okf.duckdb".into()
 }
 
@@ -236,13 +237,59 @@ impl OkfServer {
         match python_bridge(&self.python, &request).await {
             Ok(Value::String(text)) => CallToolResult::success(vec![ContentBlock::text(text)]),
             Ok(value) => CallToolResult::structured(value),
-            Err(message) => CallToolResult::error(vec![ContentBlock::text(message)]),
+            Err(error) => tool_error(&error),
+        }
+    }
+}
+
+/// A tool failure as the client sees it; the only place errors become text.
+fn tool_error(error: &dyn std::error::Error) -> CallToolResult {
+    CallToolResult::error(vec![ContentBlock::text(error.to_string())])
+}
+
+/// Why a delegated call produced no result.
+#[derive(Debug)]
+enum BridgeError {
+    Spawn {
+        python: PathBuf,
+        source: io::Error,
+    },
+    NoStdin,
+    Io(io::Error),
+    Encode(serde_json::Error),
+    /// The bridge exited non-zero; this is the Python exception it reported.
+    Raised(String),
+    InvalidResponse(serde_json::Error),
+}
+
+impl fmt::Display for BridgeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Spawn { python, source } => {
+                write!(f, "cannot start {}: {source}", python.display())
+            }
+            Self::NoStdin => f.write_str("python bridge has no stdin"),
+            Self::Io(error) => error.fmt(f),
+            Self::Encode(error) => write!(f, "cannot encode bridge request: {error}"),
+            Self::Raised(exception) => f.write_str(exception),
+            Self::InvalidResponse(error) => write!(f, "invalid bridge response: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for BridgeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Spawn { source, .. } => Some(source),
+            Self::Io(error) => Some(error),
+            Self::Encode(error) | Self::InvalidResponse(error) => Some(error),
+            Self::NoStdin | Self::Raised(_) => None,
         }
     }
 }
 
 /// Run one delegated call and return its JSON result, or the error it raised.
-async fn python_bridge(python: &Path, request: &Value) -> Result<Value, String> {
+async fn python_bridge(python: &Path, request: &Value) -> Result<Value, BridgeError> {
     let mut child = tokio::process::Command::new(python)
         .args(["-m", "okf_parser.mcp_bridge"])
         .stdin(Stdio::piped())
@@ -250,18 +297,21 @@ async fn python_bridge(python: &Path, request: &Value) -> Result<Value, String> 
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!("cannot start {}: {e}", python.display()))?;
-    let mut stdin = child.stdin.take().ok_or("python bridge has no stdin")?;
-    stdin
-        .write_all(request.to_string().as_bytes())
-        .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|source| BridgeError::Spawn {
+            python: python.to_owned(),
+            source,
+        })?;
+    let mut stdin = child.stdin.take().ok_or(BridgeError::NoStdin)?;
+    let body = serde_json::to_vec(request).map_err(BridgeError::Encode)?;
+    stdin.write_all(&body).await.map_err(BridgeError::Io)?;
     drop(stdin);
-    let output = child.wait_with_output().await.map_err(|e| e.to_string())?;
+    let output = child.wait_with_output().await.map_err(BridgeError::Io)?;
     if !output.status.success() {
-        return Err(bridge_error(&String::from_utf8_lossy(&output.stderr)));
+        return Err(BridgeError::Raised(bridge_error(&String::from_utf8_lossy(
+            &output.stderr,
+        ))));
     }
-    serde_json::from_slice(&output.stdout).map_err(|e| format!("invalid bridge response: {e}"))
+    serde_json::from_slice(&output.stdout).map_err(BridgeError::InvalidResponse)
 }
 
 /// Keep the exception line of a Python traceback, which is what a caller can act on.
@@ -275,12 +325,37 @@ fn bridge_error(stderr: &str) -> String {
         .to_owned()
 }
 
-fn graph_summary(args: &PathArgs) -> Result<Value, String> {
-    let exclude = args.exclude.clone().unwrap_or_default();
-    let data = load_bundle(Path::new(&args.path), &exclude, READ_CONCURRENCY)?;
+/// Why the native `graph` tool produced no summary.
+#[derive(Debug)]
+enum GraphError {
+    Load(LoadError),
+    Encode(serde_json::Error),
+}
+
+impl fmt::Display for GraphError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Load(error) => error.fmt(f),
+            Self::Encode(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for GraphError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Load(error) => Some(error),
+            Self::Encode(error) => Some(error),
+        }
+    }
+}
+
+fn graph_summary(args: &PathArgs) -> Result<Value, GraphError> {
+    let exclude = args.exclude.as_deref().unwrap_or_default();
+    let data = load_bundle(&args.path, exclude, READ_CONCURRENCY).map_err(GraphError::Load)?;
     let summary = ConceptGraph::from_bundle(&data).summary();
-    let mut payload = serde_json::to_value(summary).map_err(|e| e.to_string())?;
-    payload["root"] = Value::String(data.root.clone());
+    let mut payload = serde_json::to_value(summary).map_err(GraphError::Encode)?;
+    payload["root"] = Value::String(data.root);
     Ok(payload)
 }
 
@@ -324,8 +399,8 @@ impl OkfServer {
     async fn graph(&self, Parameters(args): Parameters<PathArgs>) -> CallToolResult {
         match tokio::task::spawn_blocking(move || graph_summary(&args)).await {
             Ok(Ok(value)) => CallToolResult::structured(value),
-            Ok(Err(message)) => CallToolResult::error(vec![ContentBlock::text(message)]),
-            Err(error) => CallToolResult::error(vec![ContentBlock::text(error.to_string())]),
+            Ok(Err(error)) => tool_error(&error),
+            Err(error) => tool_error(&error),
         }
     }
 
@@ -632,6 +707,40 @@ mod tests {
         assert_eq!(
             serde_json::to_value(args).unwrap(),
             json!({"path": "b", "database": "okf.duckdb", "schema": "okf", "overwrite": false})
+        );
+    }
+
+    #[test]
+    fn path_arguments_keep_a_string_schema() {
+        let schema = serde_json::to_value(schemars::schema_for!(DuckdbExportArgs)).unwrap();
+        for field in ["path", "database"] {
+            assert_eq!(schema["properties"][field]["type"], "string", "{field}");
+        }
+        let check = serde_json::to_value(schemars::schema_for!(CheckArgs)).unwrap();
+        assert_eq!(
+            check["properties"]["relational_schema"]["type"],
+            json!(["string", "null"])
+        );
+    }
+
+    #[test]
+    fn a_missing_bundle_is_a_typed_graph_error() {
+        let args: PathArgs =
+            serde_json::from_value(json!({"path": "/definitely/not/a/bundle"})).unwrap();
+        assert!(matches!(
+            graph_summary(&args),
+            Err(GraphError::Load(LoadError::Root(_)))
+        ));
+    }
+
+    #[test]
+    fn bridge_errors_render_only_at_the_tool_boundary() {
+        let error = BridgeError::Raised("ValueError: bad bundle".into());
+        let result = tool_error(&error);
+        assert_eq!(result.is_error, Some(true));
+        assert_eq!(
+            serde_json::to_value(&result.content).unwrap()[0]["text"],
+            "ValueError: bad bundle"
         );
     }
 
