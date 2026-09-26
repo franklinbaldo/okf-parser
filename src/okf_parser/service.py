@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 import duckdb
-import networkx as nx
 
 from okf_parser.apply import apply_bundle as _apply_bundle
 from okf_parser.bundle import load_bundle, validate_path
@@ -136,15 +135,7 @@ def inventory_bundle(
 def graph_bundle(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
     """Summarize the resolved concept graph."""
     bundle = load_bundle(Path(path), exclude)
-    graph = bundle.to_networkx()
-    return {
-        "root": str(bundle.root),
-        "nodes": graph.number_of_nodes(),
-        "edges": graph.number_of_edges(),
-        "weakly_connected_components": nx.number_weakly_connected_components(graph),
-        "strongly_connected_components": nx.number_strongly_connected_components(graph),
-        "directed_acyclic": nx.is_directed_acyclic_graph(graph),
-    }
+    return {"root": str(bundle.root), **bundle.graph().summary().model_dump()}
 
 
 def schema_bundle(  # service mirrors the independent public schema flags.

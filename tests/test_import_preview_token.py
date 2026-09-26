@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from okf_parser.bundle_import import BundleImportError, import_bundle
-from okf_parser.cli import mcp_import_preview, mcp_import_write
+from okf_parser.mcp_bridge import mcp_import_preview, mcp_import_write
 
 if TYPE_CHECKING:
     from pathlib import Path

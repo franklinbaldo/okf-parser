@@ -1,6 +1,6 @@
 [package]
 name = "okf-engine"
-version = "0.45.11"
+version = "0.46.0"
 edition = "2024"
 license = "MIT"
 description = "DuckDB-independent OKF semantic ingestion engine"
@@ -9,6 +9,7 @@ description = "DuckDB-independent OKF semantic ingestion engine"
 chrono = "0.4"
 ignore = "0.4"
 percent-encoding = "2"
+petgraph = { version = "0.8", default-features = false }
 pulldown-cmark = "0.13"
 rayon = "1"
 serde = { version = "1", features = ["derive"] }
