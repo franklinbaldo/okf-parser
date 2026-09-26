@@ -195,7 +195,7 @@ bundle, stage and validate a candidate, recheck freshness, replace files
 atomically. That engine lives in `okf-engine/src/write.rs` and needs no
 DuckDB.
 
-- **3a (0.47.0):** the write engine and the single-concept body `edit`, which
+- **3a (0.48.0):** the write engine and the single-concept body `edit`, which
   now runs entirely in the binary (`__edit`).
 - **3b:** `check`, `inventory` and `classify` as native commands and MCP tools.
 - **3c:** the non-SQL `apply` paths (type and field renames) and `dumps`, on
