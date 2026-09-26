@@ -151,3 +151,15 @@ def test_an_unknown_concept_is_an_edit_error(tmp_path: Path) -> None:
 
     with pytest.raises(EditError, match="concept does not exist exactly once: missing"):
         preview_concept_edit(str(tmp_path), "missing", "# B\n", "digest")
+
+
+def test_non_ascii_bodies_round_trip_through_the_binary(tmp_path: Path) -> None:
+    source = "---\ntype: Note\n---\n# A\n"
+    (tmp_path / "a.md").write_text(source, encoding="utf-8")
+    [concept] = load_bundle(tmp_path).concepts
+    body = "# 知識 🧠\n\nçà ñ — ✓\n"
+
+    result = write_concept_edit(str(tmp_path), "a", body, concept.source_digest)
+
+    assert result["written"] is True
+    assert (tmp_path / "a.md").read_text(encoding="utf-8") == f"---\ntype: Note\n---\n{body}"

@@ -1,5 +1,9 @@
 """Find the native ``okf-parser`` binary and speak its JSON protocol.
 
+The protocol is UTF-8 on every platform: each call pins ``encoding="utf-8"``
+so the process locale (a cp1252 Windows console, say) never decides how
+Markdown crosses the pipe.
+
 The binary is the product (RFC 0024): every OKF rule lives there, and this
 package is a shell over it. Each response carries a ``protocol`` version that
 the models here pin, so a mismatched binary fails loudly instead of being
@@ -117,7 +121,9 @@ def rust_load_bundle(
     ]
     for pattern in exclude:
         command.extend(("--exclude", pattern))
-    completed = subprocess.run(command, capture_output=True, check=False, text=True)  # noqa: S603
+    completed = subprocess.run(  # noqa: S603
+        command, capture_output=True, check=False, encoding="utf-8", errors="strict"
+    )
     if completed.returncode != 0:
         message = completed.stderr.strip() or f"okf exited with {completed.returncode}"
         raise RustCoreError(message)
@@ -181,7 +187,8 @@ def call_native(command: str, request: BaseModel, executable: Path | None = None
         input=request.model_dump_json(),
         capture_output=True,
         check=False,
-        text=True,
+        encoding="utf-8",
+        errors="strict",
     )
     if completed.returncode != 0:
         message = completed.stderr.strip() or f"okf-parser {command} exited {completed.returncode}"
@@ -218,7 +225,8 @@ def rust_markdown_facts_batch(bodies: Sequence[str], executable: Path) -> tuple[
         input=json.dumps({"documents": bodies}, ensure_ascii=False),
         capture_output=True,
         check=False,
-        text=True,
+        encoding="utf-8",
+        errors="strict",
     )
     if completed.returncode != 0:
         message = completed.stderr.strip() or f"okf-core exited with {completed.returncode}"

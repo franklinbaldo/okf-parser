@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::UNIX_EPOCH;
@@ -232,13 +232,92 @@ pub struct Candidate {
     pub expected_hash: String,
 }
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+/// A name no other write (in this or another process) can be using.
+fn unique_suffix() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "{}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |duration| duration.as_nanos()),
+        COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
+}
+
+/// Write `bytes` to a new sibling of `path` that only this write owns.
+///
+/// `create_new` fails instead of reusing a file, so two writers staging the
+/// same document can never overwrite each other's staged bytes.
+fn stage_sibling(path: &Path, bytes: &[u8]) -> io::Result<PathBuf> {
     let name = path
         .file_name()
         .map_or_else(Default::default, |name| name.to_string_lossy());
-    let staging = path.with_file_name(format!(".{name}.okf-write.tmp"));
-    fs::write(&staging, bytes)?;
-    fs::rename(&staging, path)
+    let staged = path.with_file_name(format!(".{name}.okf-write.{}.tmp", unique_suffix()));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&staged)?;
+    if let Err(error) = file.write_all(bytes).and_then(|()| file.sync_all()) {
+        drop(file);
+        let _ = fs::remove_file(&staged);
+        return Err(error);
+    }
+    Ok(staged)
+}
+
+fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let staged = stage_sibling(path, bytes)?;
+    fs::rename(&staged, path).inspect_err(|_| {
+        let _ = fs::remove_file(&staged);
+    })
+}
+
+/// Replace every file in `replacements`, or leave all of them as they were.
+///
+/// Everything is staged before anything is replaced, so a failure while
+/// staging commits nothing. If a replacement fails part-way, the files
+/// already replaced are restored from their original bytes.
+fn commit_all(
+    replacements: &[(PathBuf, Vec<u8>)],
+    rename: impl Fn(&Path, &Path) -> io::Result<()>,
+) -> io::Result<()> {
+    let originals = replacements
+        .iter()
+        .map(|(path, _)| fs::read(path))
+        .collect::<io::Result<Vec<_>>>()?;
+    let mut staged = Vec::with_capacity(replacements.len());
+    for (path, bytes) in replacements {
+        match stage_sibling(path, bytes) {
+            Ok(file) => staged.push(file),
+            Err(error) => {
+                for file in &staged {
+                    let _ = fs::remove_file(file);
+                }
+                return Err(error);
+            }
+        }
+    }
+    for (index, ((path, _), file)) in replacements.iter().zip(&staged).enumerate() {
+        if let Err(error) = rename(file, path) {
+            for file in &staged[index..] {
+                let _ = fs::remove_file(file);
+            }
+            let unrestored: Vec<String> = replacements[..index]
+                .iter()
+                .zip(&originals)
+                .filter(|((path, _), original)| atomic_write(path, original).is_err())
+                .map(|((path, _), _)| path.display().to_string())
+                .collect();
+            let detail = if unrestored.is_empty() {
+                format!("rolled back {index} replaced file(s)")
+            } else {
+                format!("could not restore: {}", unrestored.join(", "))
+            };
+            return Err(io::Error::new(error.kind(), format!("{error}; {detail}")));
+        }
+    }
+    Ok(())
 }
 
 /// A private directory removed when dropped, for staging candidate bundles.
@@ -246,16 +325,7 @@ struct StagingDir(PathBuf);
 
 impl StagingDir {
     fn new(prefix: &str) -> io::Result<Self> {
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let unique = format!(
-            "{prefix}{}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .map_or(0, |duration| duration.as_nanos()),
-            COUNTER.fetch_add(1, Ordering::Relaxed)
-        );
-        let path = std::env::temp_dir().join(unique);
+        let path = std::env::temp_dir().join(format!("{prefix}{}", unique_suffix()));
         fs::create_dir(&path)?;
         Ok(Self(path))
     }
@@ -379,9 +449,11 @@ pub fn stage_validate_write(
         return Ok(WriteOutcome::Conflict(conflicts.into_iter().collect()));
     }
 
-    for candidate in candidates.values() {
-        atomic_write(&candidate.live_path, &candidate.raw.render())?;
-    }
+    let replacements: Vec<(PathBuf, Vec<u8>)> = candidates
+        .values()
+        .map(|candidate| (candidate.live_path.clone(), candidate.raw.render()))
+        .collect();
+    commit_all(&replacements, |from, to| fs::rename(from, to))?;
     Ok(WriteOutcome::Written)
 }
 
@@ -708,6 +780,57 @@ mod tests {
         )
         .unwrap();
         assert_eq!(outcome, WriteOutcome::Conflict(vec!["c.md".into()]));
+    }
+
+    #[test]
+    fn staged_siblings_are_unique_per_write() {
+        let dir = bundle(&[("a.md", "x")]);
+        let target = dir.0.join("a.md");
+        let first = stage_sibling(&target, b"one").unwrap();
+        let second = stage_sibling(&target, b"two").unwrap();
+        assert_ne!(first, second);
+        assert_eq!(fs::read(&first).unwrap(), b"one");
+        assert_eq!(fs::read(&second).unwrap(), b"two");
+    }
+
+    #[test]
+    fn a_failed_replacement_rolls_back_the_files_already_replaced() {
+        let dir = bundle(&[("a.md", "old a"), ("b.md", "old b")]);
+        let replacements = vec![
+            (dir.0.join("a.md"), b"new a".to_vec()),
+            (dir.0.join("b.md"), b"new b".to_vec()),
+        ];
+        let calls = std::cell::Cell::new(0);
+        let error = commit_all(&replacements, |from, to| {
+            calls.set(calls.get() + 1);
+            if calls.get() == 2 {
+                return Err(io::Error::other("injected"));
+            }
+            fs::rename(from, to)
+        })
+        .unwrap_err();
+
+        assert!(error.to_string().contains("rolled back 1"), "{error}");
+        assert_eq!(fs::read_to_string(dir.0.join("a.md")).unwrap(), "old a");
+        assert_eq!(fs::read_to_string(dir.0.join("b.md")).unwrap(), "old b");
+        let leftovers: Vec<_> = fs::read_dir(&dir.0)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
+    #[test]
+    fn commit_all_replaces_every_file() {
+        let dir = bundle(&[("a.md", "old a"), ("b.md", "old b")]);
+        let replacements = vec![
+            (dir.0.join("a.md"), b"new a".to_vec()),
+            (dir.0.join("b.md"), b"new b".to_vec()),
+        ];
+        commit_all(&replacements, |from, to| fs::rename(from, to)).unwrap();
+        assert_eq!(fs::read_to_string(dir.0.join("a.md")).unwrap(), "new a");
+        assert_eq!(fs::read_to_string(dir.0.join("b.md")).unwrap(), "new b");
     }
 
     #[test]
