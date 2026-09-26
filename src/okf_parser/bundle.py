@@ -461,13 +461,14 @@ def validate_path(
     *,
     normative_spec: bool = False,
     relational_schema: Path | None = None,
+    rust_core: Path | None = None,
 ) -> ValidationReport:
     """Validate every Markdown file recursively below a path as OKF v0.2.
 
     ``require_spec`` adds the optional rule that every producer-defined type in
     use has a specification document at the path its template derives.
     """
-    bundle = load_bundle(path, exclude)
+    bundle = load_bundle(path, exclude, rust_core=rust_core)
     diagnostics = list(bundle.diagnostics)
     if relational_schema is not None:
         schema_path = (
