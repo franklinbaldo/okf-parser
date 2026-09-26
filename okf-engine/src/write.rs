@@ -5,7 +5,9 @@
 //! candidate, recheck that nothing changed since the snapshot, and only then
 //! replace the touched files atomically. A write never leaves the bundle with
 //! a normative error it did not already have, and never overwrites a file
-//! someone else changed in the meantime.
+//! someone else changed in the meantime: the recheck and the commit run
+//! under an exclusive lock on the bundle's `.okf-write.lock`, so two
+//! cooperating writers cannot both pass the recheck and overwrite each other.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -26,6 +28,8 @@ use crate::engine::{
 
 const BOM: &[u8] = b"\xef\xbb\xbf";
 const READ_CONCURRENCY: usize = 32;
+/// The advisory lock file serializing commits; never part of the bundle.
+const LOCK_FILE: &str = ".okf-write.lock";
 
 /// A write that could not be attempted at all, as opposed to one that was
 /// attempted and refused (validation or conflict), which is a result.
@@ -149,6 +153,9 @@ fn visible_files(root: &Path, rules: &Gitignore) -> io::Result<Vec<(PathBuf, Str
                 .is_ignore()
     }) {
         let entry = entry.map_err(io::Error::other)?;
+        if entry.depth() == 1 && entry.file_name() == LOCK_FILE {
+            continue;
+        }
         if entry.file_type().is_file() {
             let relative = entry
                 .path()
@@ -405,6 +412,20 @@ pub enum WriteOutcome {
     StagingFailed(String),
 }
 
+/// Take the bundle's exclusive write lock; it is released when the file drops.
+///
+/// The lock file is created once and never removed, so every writer locks the
+/// same inode.
+fn lock_bundle(root: &Path) -> io::Result<fs::File> {
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(root.join(LOCK_FILE))?;
+    lock.lock()?;
+    Ok(lock)
+}
+
 /// Stage the candidates, validate, recheck freshness, then replace the files.
 pub fn stage_validate_write(
     root: &Path,
@@ -427,6 +448,7 @@ pub fn stage_validate_write(
         return Ok(WriteOutcome::Invalid(invalid));
     }
 
+    let _lock = lock_bundle(root)?;
     let current = snapshot_manifest(root, exclude)?;
     let baseline_paths: BTreeSet<&String> = baseline_manifest.keys().collect();
     let current_paths: BTreeSet<&String> = current.keys().collect();
@@ -780,6 +802,53 @@ mod tests {
         )
         .unwrap();
         assert_eq!(outcome, WriteOutcome::Conflict(vec!["c.md".into()]));
+    }
+
+    #[test]
+    fn a_writer_committing_under_the_lock_turns_the_second_into_a_conflict() {
+        let dir = bundle(&[("a.md", "---\ntype: Note\n---\n# A\n")]);
+        let snapshot = snapshot_bundle(&dir.0, &[]).unwrap();
+        let concept = &snapshot.concepts[0];
+        let candidates = BTreeMap::from([(
+            concept.relative.clone(),
+            Candidate {
+                raw: concept.raw.with_body("# from B\n".into()),
+                live_path: concept.path.clone(),
+                expected_hash: concept.content_hash.clone(),
+            },
+        )]);
+        // Writer A holds the lock between its recheck and its commit.
+        let held = lock_bundle(&dir.0).unwrap();
+        let root = dir.0.clone();
+        let manifest = snapshot.manifest.clone();
+        let (done, finished) = std::sync::mpsc::channel();
+        let writer_b = std::thread::spawn(move || {
+            let outcome =
+                stage_validate_write(&root, &[], &candidates, &BTreeSet::new(), &manifest);
+            done.send(()).unwrap();
+            outcome
+        });
+        assert!(
+            finished
+                .recv_timeout(std::time::Duration::from_millis(300))
+                .is_err(),
+            "writer B must wait for the lock instead of committing"
+        );
+        let from_a = "---\ntype: Note\n---\n# from A\n";
+        fs::write(dir.0.join("a.md"), from_a).unwrap();
+        drop(held);
+        let outcome = writer_b.join().unwrap().unwrap();
+        assert_eq!(outcome, WriteOutcome::Conflict(vec!["a.md".into()]));
+        assert_eq!(fs::read_to_string(dir.0.join("a.md")).unwrap(), from_a);
+    }
+
+    #[test]
+    fn the_lock_file_is_not_part_of_the_bundle() {
+        let dir = bundle(&[("a.md", "---\ntype: Note\n---\n# A\n")]);
+        let before = snapshot_bundle(&dir.0, &[]).unwrap().manifest;
+        drop(lock_bundle(&dir.0).unwrap());
+        assert!(dir.0.join(LOCK_FILE).exists());
+        assert_eq!(snapshot_bundle(&dir.0, &[]).unwrap().manifest, before);
     }
 
     #[test]

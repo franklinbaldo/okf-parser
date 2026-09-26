@@ -12,6 +12,14 @@ candidate bundle, recheck freshness, replace files atomically) now lives in
 entirely in the binary through a new `__edit` protocol command, with the same
 arguments and result shape as before. `okf_parser.edit` is now a thin shell.
 
+The native commit is also stricter than the Python one it replaces. Each write
+stages into its own uniquely named sibling file. A multi-file commit rolls back
+the files it already replaced if a later rename fails. The freshness recheck
+and the commit run under an exclusive lock on `.okf-write.lock` at the bundle
+root, so two concurrent writers can no longer both pass the recheck and
+silently overwrite each other; the second reports a conflict. The lock file is
+never treated as part of the bundle.
+
 RFC 0024 also records two decisions: `import`, `init --infer-schema` and SQL
 `apply` move with DuckDB (phase 4), and YAML writing will use maintained
 libraries (`yaml-edit` for lossless edits, a serializer for new documents)
