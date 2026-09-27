@@ -23,8 +23,13 @@ from typing import TYPE_CHECKING, Literal, TypedDict, cast
 from pydantic import BaseModel, ConfigDict, JsonValue, ValidationError
 
 from okf_parser.graph import GraphSummary
-from okf_parser.models import ConceptRecord, LinkRecord, ReservedRecord, Violation
-from okf_parser.parser import MarkdownFacts
+from okf_parser.models import (
+    ConceptRecord,
+    LinkRecord,
+    MarkdownFacts,
+    ReservedRecord,
+    Violation,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping, Sequence

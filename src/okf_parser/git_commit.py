@@ -1,41 +1,22 @@
-"""Subject-first OKF commit-message parsing and formatting."""
+"""Subject-first OKF commit messages, parsed and formatted by the native engine.
+
+``okf_engine::git_commit`` owns the grammar; ``okf-parser commit-msg PATH``
+is the hook. This module is the Python API over the same code.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING, cast
 
-from okf_parser.digests import canonical_json, normalize_newlines, parsed_digest, source_digest
-from okf_parser.parser import DocumentParseError, parse_document_text
+from pydantic import BaseModel, ConfigDict
+
+from okf_parser.models import YamlValue
+from okf_parser.rust_core import native_result
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
-
-    from okf_parser.models import YamlValue
-
-_RESERVED_KEYS = frozenset(
-    {
-        "title",
-        "source_kind",
-        "repository_identity",
-        "object_format",
-        "object_type",
-        "oid",
-        "commit_oid",
-        "tree_oid",
-        "parent_oids",
-        "parents",
-        "author",
-        "committer",
-        "refs",
-        "source_digest",
-        "parsed_digest",
-        "diagnostics",
-        "provenance",
-    }
-)
 
 
 class GitCommitMessageError(ValueError):
@@ -66,104 +47,64 @@ class GitCommitMessage:
         return cast("str", self.effective_frontmatter["type"])
 
 
-def _parse_metadata(block: str) -> dict[str, YamlValue]:
-    """Reuse the strict filesystem YAML authority without inventing Git YAML semantics."""
-    source = f"---\n{block}\n---\n"
-    try:
-        parsed = parse_document_text(Path("<git-commit-metadata>"), source)
-    except DocumentParseError as exc:
-        code = "GIT_MESSAGE_YAML"
-        message = str(exc)
-        raise GitCommitMessageError(code, message) from exc
-    return dict(parsed.frontmatter)
+class _Parse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    source: str
+    require_envelope: bool
 
 
-def _validate_metadata(metadata: dict[str, YamlValue]) -> str:
-    reserved = sorted(set(metadata) & _RESERVED_KEYS)
-    if reserved:
-        joined = ", ".join(reserved)
-        code = "GIT_MESSAGE_RESERVED_KEY"
-        message = f"commit metadata uses adapter-owned key(s): {joined}"
-        raise GitCommitMessageError(code, message, line=3)
+class _Authored(BaseModel):
+    model_config = ConfigDict(frozen=True)
 
-    if "type" not in metadata:
-        return "Commit"
-    raw_type = metadata["type"]
-    if not isinstance(raw_type, str) or not raw_type.strip():
-        code = "GIT_MESSAGE_TYPE"
-        message = "commit metadata type must be a non-empty string"
-        raise GitCommitMessageError(code, message, line=3)
-    return raw_type.strip()
-
-
-def _find_closing_delimiter(envelope_source: str) -> tuple[str, str, int]:
-    """Return metadata block, post-close text and the closing line number."""
-    lines = envelope_source.splitlines(keepends=True)
-    if not lines or lines[0].removesuffix("\n") != "--- okf":
-        code = "GIT_MESSAGE_ENVELOPE"
-        message = "structured commit metadata must start with exact '--- okf'"
-        raise GitCommitMessageError(code, message, line=3)
-
-    offset = len(lines[0])
-    for index, line in enumerate(lines[1:], start=1):
-        logical = line.removesuffix("\n")
-        if logical == "---":
-            metadata = envelope_source[len(lines[0]) : offset]
-            after = envelope_source[offset + len(line) :]
-            return metadata.removesuffix("\n"), after, index + 3
-        offset += len(line)
-
-    code = "GIT_MESSAGE_UNTERMINATED_ENVELOPE"
-    message = "structured commit metadata has no closing '---' delimiter"
-    raise GitCommitMessageError(code, message, line=3)
-
-
-def parse_git_commit_message(source: str) -> GitCommitMessage:
-    """Parse a valid UTF-8 commit message into its effective OKF projection."""
-    exact_digest = source_digest(source)
-    normalized = normalize_newlines(source).removeprefix("\ufeff")
-    subject, separator, remainder = normalized.partition("\n")
-    if not subject.strip():
-        code = "GIT_MESSAGE_EMPTY_SUBJECT"
-        message = "commit subject must be non-empty"
-        raise GitCommitMessageError(code, message, line=1)
-
-    has_blank_separator = separator == "\n" and remainder.startswith("\n")
-    candidate = remainder[1:] if has_blank_separator else remainder
-    has_envelope = candidate == "--- okf" or candidate.startswith("--- okf\n")
-
-    metadata: dict[str, YamlValue]
+    subject: str
+    authored_metadata: dict[str, YamlValue]
     body: str
-    if has_envelope:
-        block, after, closing_line = _find_closing_delimiter(candidate)
-        if after and not after.startswith("\n"):
-            code = "GIT_MESSAGE_BODY_SEPARATOR"
-            message = "structured commit metadata must be followed by a blank line before the body"
-            raise GitCommitMessageError(code, message, line=closing_line + 1)
-        body = after[1:] if after.startswith("\n") else ""
-        if any(line == "--- okf" for line in body.splitlines()):
-            code = "GIT_MESSAGE_DUPLICATE_ENVELOPE"
-            message = "commit message contains more than one OKF envelope"
-            raise GitCommitMessageError(code, message)
-        metadata = _parse_metadata(block)
-    else:
-        metadata = {}
-        body = candidate if has_blank_separator else remainder
+    has_envelope: bool
 
-    effective_type = _validate_metadata(metadata)
-    effective: dict[str, YamlValue] = dict(metadata)
-    effective["type"] = effective_type
-    effective["title"] = subject
 
-    return GitCommitMessage(
-        subject=subject,
-        authored_metadata=MappingProxyType(dict(metadata)),
-        effective_frontmatter=MappingProxyType(effective),
-        body=body,
-        has_envelope=has_envelope,
-        source_digest=exact_digest,
-        parsed_digest=parsed_digest(effective, body),
-    )
+class _ParseRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    parse: _Parse
+
+
+class _FormatRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    format: _Authored
+
+
+class _Message(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    subject: str
+    authored_metadata: dict[str, YamlValue]
+    effective_frontmatter: dict[str, YamlValue]
+    body: str
+    has_envelope: bool
+    source_digest: str
+    parsed_digest: str
+
+
+class _Invalid(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    code: str
+    message: str
+    line: int | None
+
+
+class _Answer(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    message: _Message | None = None
+    invalid: _Invalid | None = None
+    text: str | None = None
+
+
+def _call(request: _ParseRequest | _FormatRequest) -> _Answer:
+    return _Answer.model_validate(native_result("__git-commit", request))
 
 
 def validate_git_commit_message(
@@ -172,34 +113,46 @@ def validate_git_commit_message(
     require_envelope: bool = False,
 ) -> GitCommitMessage:
     """Validate one prospective commit message and return its canonical projection."""
-    parsed = parse_git_commit_message(source)
-    if require_envelope and not parsed.has_envelope:
-        code = "GIT_MESSAGE_ENVELOPE_REQUIRED"
-        message = "repository policy requires an OKF commit envelope"
-        raise GitCommitMessageError(code, message, line=3)
-    return parsed
-
-
-def _format_metadata(metadata: Mapping[str, YamlValue]) -> str:
-    """Emit a deterministic JSON-flow subset that is also valid failsafe YAML."""
-    return "\n".join(
-        f"{canonical_json(key)}: {canonical_json(metadata[key])}"
-        for key in sorted(metadata, key=lambda value: value.encode("utf-16-be"))
+    answer = _call(_ParseRequest(parse=_Parse(source=source, require_envelope=require_envelope)))
+    if answer.invalid is not None:
+        raise GitCommitMessageError(
+            answer.invalid.code, answer.invalid.message, line=answer.invalid.line
+        )
+    if answer.message is None:
+        msg = "okf-parser __git-commit answered a parse without a message"
+        code = "GIT_MESSAGE_PROTOCOL"
+        raise GitCommitMessageError(code, msg)
+    message = answer.message
+    return GitCommitMessage(
+        subject=message.subject,
+        authored_metadata=MappingProxyType(message.authored_metadata),
+        effective_frontmatter=MappingProxyType(message.effective_frontmatter),
+        body=message.body,
+        has_envelope=message.has_envelope,
+        source_digest=message.source_digest,
+        parsed_digest=message.parsed_digest,
     )
+
+
+def parse_git_commit_message(source: str) -> GitCommitMessage:
+    """Parse a valid UTF-8 commit message into its effective OKF projection."""
+    return validate_git_commit_message(source)
 
 
 def format_git_commit_message(message: GitCommitMessage) -> str:
     """Format one parsed commit message idempotently without rewriting Git history."""
-    if not message.has_envelope:
-        return message.subject if not message.body else f"{message.subject}\n\n{message.body}"
-
-    metadata = _format_metadata(message.authored_metadata)
-    block = "--- okf\n"
-    if metadata:
-        block += f"{metadata}\n"
-    block += "---"
-    return (
-        f"{message.subject}\n\n{block}"
-        if not message.body
-        else f"{message.subject}\n\n{block}\n\n{message.body}"
+    answer = _call(
+        _FormatRequest(
+            format=_Authored(
+                subject=message.subject,
+                authored_metadata=dict(message.authored_metadata),
+                body=message.body,
+                has_envelope=message.has_envelope,
+            )
+        )
     )
+    if answer.text is None:
+        msg = "okf-parser __git-commit answered a format without text"
+        code = "GIT_MESSAGE_PROTOCOL"
+        raise GitCommitMessageError(code, msg)
+    return answer.text

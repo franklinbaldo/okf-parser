@@ -30,9 +30,7 @@ classifiers = [
   "Topic :: Text Processing :: Markup :: Markdown",
 ]
 dependencies = [
-  "markdown-it-py>=4,<5",
   "pydantic>=2.12,<3",
-  "pyyaml>=6,<7",
 ]
 
 [project.urls]
@@ -52,6 +50,8 @@ dev = [
   "duckdb>=1.4,<2",
   "graphql-core>=3.2,<4",
   "jsonschema>=4.26,<5",
+  # An independent CommonMark parser the formatter tests check output against.
+  "markdown-it-py>=4,<5",
   "networkx>=3.4,<4",
   "pytest>=8,<10",
   "pytest-cov>=6,<7",

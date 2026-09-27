@@ -1,23 +1,19 @@
-"""Deterministic physical-source and parsed-content identity for OKF concepts."""
+"""The canonical JSON spelling of OKF frontmatter (RFC 8785/JCS).
+
+The digests themselves are computed by the native engine; this is the one
+spelling the shell still produces, for ``ParsedDocument.frontmatter_json``.
+"""
 
 from __future__ import annotations
 
-import hashlib
 import json
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from okf_parser.models import YamlValue
 
-_SOURCE_PREFIX = "sha256:"
-_PARSED_PREFIX = "okf-parsed-v1-jcs-sha256:"
 _SURROGATE_MIN = 0xD800
 _SURROGATE_MAX = 0xDFFF
-
-
-def normalize_newlines(text: str) -> str:
-    """Normalize CRLF and bare CR to LF for the parsed representation."""
-    return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
 def _reject_lone_surrogates(value: str) -> None:
@@ -55,17 +51,3 @@ def canonical_json(value: YamlValue) -> str:
         for key in sorted(value, key=_utf16_sort_key)
     )
     return "{" + ",".join(items) + "}"
-
-
-def source_digest(text: str) -> str:
-    """Hash the exact valid UTF-8 text supplied to the parser."""
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
-    return f"{_SOURCE_PREFIX}{digest}"
-
-
-def parsed_digest(frontmatter: dict[str, YamlValue], body: str) -> str:
-    """Hash the versioned parsed OKF value without claiming Revision identity."""
-    payload: YamlValue = [frontmatter, normalize_newlines(body)]
-    canonical = canonical_json(payload)
-    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-    return f"{_PARSED_PREFIX}{digest}"

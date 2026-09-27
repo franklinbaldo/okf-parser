@@ -315,8 +315,12 @@ commit messages as OKF and type packs move with their commands; cyclopts and
   which embeds the shipped packs and installs any local pack directory; the
   `okf_parser.packs` entry-point group is gone. With the last delegated
   command native, `okf_parser.cli` and cyclopts leave.
-- **6d:** the document parser and git commit messages; markdown-it-py and
-  PyYAML leave.
+- **6d (0.48.0):** the document parser and git commit messages. The
+  engine's strict `parse_text` (every scalar a string, a tag JSON cannot
+  carry an error) answers `parse_document()` and ingestion over a batched
+  `__parse`, and `okf_engine::git_commit` answers the Python API and the new
+  `okf-parser commit-msg` hook, which replaces `okf_parser.git_commit_cli`.
+  markdown-it-py and PyYAML leave; Pydantic is the only runtime dependency.
 
 ## Relationship to other RFCs
 

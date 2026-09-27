@@ -371,6 +371,40 @@ result, not a tool error.
 
 MCP tool: `duckdb_export` with `--allow-write`; it also accepts `spec_template`.
 
+## `commit-msg`
+
+```bash
+okf-parser commit-msg .git/COMMIT_EDITMSG [--require-envelope]
+```
+
+Validates one subject-first OKF commit message, as a Git `commit-msg` hook
+does. The subject line is the message's `title`; an optional envelope after a
+blank line carries authored metadata as strict YAML:
+
+```text
+Add retry budget
+
+--- okf
+type: Change
+---
+
+Body.
+```
+
+A valid message prints nothing and exits `0`. A structural error prints
+`PATH[:LINE]: CODE: message` to stderr and exits `1`; the message is never
+rewritten. `--require-envelope` also rejects a plain message without an
+envelope. To install it as a hook:
+
+```bash
+printf '#!/bin/sh\nexec okf-parser commit-msg "$1"\n' > .git/hooks/commit-msg
+chmod +x .git/hooks/commit-msg
+```
+
+The Python API is `okf_parser.validate_git_commit_message()`, with
+`parse_git_commit_message()` and `format_git_commit_message()`; the shared
+vectors live in `conformance/git-commit-messages.json`.
+
 ## `serve`
 
 ```bash

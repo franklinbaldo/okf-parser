@@ -996,3 +996,84 @@ mod tests {
         assert!(edit(r#"{"path": "/b", "unknown": 1}"#).is_err());
     }
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ParseDocument {
+    text: String,
+    #[serde(default)]
+    optional: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ParseRequest {
+    documents: Vec<ParseDocument>,
+}
+
+/// One document's parse: the document, or why it is not one. A document
+/// that does not parse is data about that document, not a failed request.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum ParseOutcome {
+    Parsed(okf_engine::ParsedText),
+    Invalid { error: String },
+}
+
+#[derive(Debug, Serialize)]
+pub struct ParseAnswer {
+    documents: Vec<ParseOutcome>,
+}
+
+/// `__parse`: strict frontmatter, body and digests for each document.
+pub fn parse(request: &str) -> Result<Response<ParseAnswer>, serde_json::Error> {
+    let request: ParseRequest = serde_json::from_str(request)?;
+    let documents = request
+        .documents
+        .iter()
+        .map(
+            |document| match okf_engine::parse_text(&document.text, document.optional) {
+                Ok(parsed) => ParseOutcome::Parsed(parsed),
+                Err(error) => ParseOutcome::Invalid {
+                    error: error.to_string(),
+                },
+            },
+        )
+        .collect();
+    Ok(Ok(ParseAnswer { documents }).into())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "snake_case")]
+enum GitCommitRequest {
+    Parse {
+        source: String,
+        #[serde(default)]
+        require_envelope: bool,
+    },
+    Format(okf_engine::git_commit::Authored),
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GitCommitAnswer {
+    Message(okf_engine::git_commit::CommitMessage),
+    Invalid(okf_engine::git_commit::CommitMessageError),
+    Text(String),
+}
+
+/// `__git-commit`: parse and validate a commit message, or format one.
+pub fn git_commit(request: &str) -> Result<Response<GitCommitAnswer>, serde_json::Error> {
+    use okf_engine::git_commit::{format, validate};
+    let answer = match serde_json::from_str(request)? {
+        GitCommitRequest::Parse {
+            source,
+            require_envelope,
+        } => match validate(&source, require_envelope) {
+            Ok(message) => GitCommitAnswer::Message(message),
+            Err(error) => GitCommitAnswer::Invalid(error),
+        },
+        GitCommitRequest::Format(authored) => GitCommitAnswer::Text(format(&authored)),
+    };
+    Ok(Ok(answer).into())
+}
