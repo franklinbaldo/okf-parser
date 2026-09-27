@@ -1,13 +1,15 @@
-//! `okf-parser import`'s reading: any source DuckDB can scan, as text rows.
+//! `okf-parser import`'s reading: any source DuckDB can scan, preserving shape.
 //!
 //! `FROM '<source>'` lets DuckDB's replacement scan pick the reader by
-//! extension (CSV, Parquet, JSON, NDJSON). Every value is cast to `VARCHAR`
-//! by DuckDB itself, which is exactly the text a frontmatter field holds.
+//! extension (CSV, Parquet, JSON, NDJSON). DuckDB serializes each typed value
+//! through `to_json`, so lists and structs keep their shape while scalar
+//! leaves can still be normalized to OKF strings by the importer.
 
 use std::fmt;
 
 use duckdb::Connection;
 use serde::Serialize;
+use serde_json::Value;
 
 use crate::catalog::quote_literal;
 
@@ -15,18 +17,30 @@ use crate::catalog::quote_literal;
 #[derive(Debug)]
 pub struct SourceError {
     source: String,
-    error: duckdb::Error,
+    error: SourceErrorKind,
+}
+
+#[derive(Debug)]
+enum SourceErrorKind {
+    DuckDb(duckdb::Error),
+    Json(serde_json::Error),
 }
 
 impl fmt::Display for SourceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "could not read {:?}: {}", self.source, self.error)
+        write!(f, "could not read {:?}: {}", self.source, match &self.error {
+            SourceErrorKind::DuckDb(error) => error.to_string(),
+            SourceErrorKind::Json(error) => format!("DuckDB returned invalid JSON: {error}"),
+        })
     }
 }
 
 impl std::error::Error for SourceError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.error)
+        Some(match &self.error {
+            SourceErrorKind::DuckDb(error) => error,
+            SourceErrorKind::Json(error) => error,
+        })
     }
 }
 
@@ -38,18 +52,18 @@ pub struct SourceColumn {
     pub sql_type: String,
 }
 
-/// Every row of a source, each value as DuckDB's own text for it.
+/// Every row of a source, preserving lists/mappings and typed scalar leaves.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SourceRows {
     pub columns: Vec<SourceColumn>,
-    pub rows: Vec<Vec<Option<String>>>,
+    pub rows: Vec<Vec<Option<Value>>>,
 }
 
 /// Read every row of `source` (a path or anything DuckDB's `FROM` accepts).
 pub fn read_source(source: &str) -> Result<SourceRows, SourceError> {
     let failed = |error| SourceError {
         source: source.to_owned(),
-        error,
+        error: SourceErrorKind::DuckDb(error),
     };
     let connection = Connection::open_in_memory().map_err(failed)?;
     let from = format!("FROM {}", quote_literal(source));
@@ -66,8 +80,8 @@ pub fn read_source(source: &str) -> Result<SourceRows, SourceError> {
                 .collect()
         })
         .map_err(failed)?;
-    let rows = connection
-        .prepare(&format!("SELECT CAST(COLUMNS(*) AS VARCHAR) {from}"))
+    let raw_rows: Vec<Vec<Option<String>>> = connection
+        .prepare(&format!("SELECT to_json(COLUMNS(*)) {from}"))
         .and_then(|mut statement| {
             statement
                 .query_map([], |row| {
@@ -78,6 +92,23 @@ pub fn read_source(source: &str) -> Result<SourceRows, SourceError> {
                 .collect()
         })
         .map_err(failed)?;
+    let rows = raw_rows
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(|value| {
+                    value
+                        .map(|json| {
+                            serde_json::from_str(&json).map_err(|error| SourceError {
+                                source: source.to_owned(),
+                                error: SourceErrorKind::Json(error),
+                            })
+                        })
+                        .transpose()
+                })
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(SourceRows { columns, rows })
 }
 
@@ -101,12 +132,17 @@ mod tests {
             read.rows,
             [
                 vec![
-                    Some("a".into()),
-                    Some("1.5".into()),
-                    Some("true".into()),
-                    Some("2026-01-15".into())
+                    Some(serde_json::json!("a")),
+                    Some(serde_json::json!(1.5)),
+                    Some(serde_json::json!(true)),
+                    Some(serde_json::json!("2026-01-15"))
                 ],
-                vec![Some("b".into()), None, Some("false".into()), None],
+                vec![
+                    Some(serde_json::json!("b")),
+                    None,
+                    Some(serde_json::json!(false)),
+                    None
+                ],
             ]
         );
     }
