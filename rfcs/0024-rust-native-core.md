@@ -261,7 +261,14 @@ nothing installed. See docs/releasing.md.
   columns, declared fields and structured fields are not writable. `import`
   reads its source through the binary (`__read-source`), every value as
   DuckDB's `VARCHAR` cast. ibis, pyarrow, pandas and numpy leave.
-- **4d:** full-text search; the Python `duckdb` package leaves.
+- **4d (0.48.0):** search runs in the binary (`okf_engine::search`): the
+  built-in BM25 scorer and literal matching, as `okf-parser search`, the
+  read-only MCP `search` tool and `Bundle.search()` (`__search`). RFC 0016's
+  optional DuckDB FTS path goes: `fts` is not linked into DuckDB's release
+  builds, and loading it means `INSTALL`, which search must never do, so the
+  path only ran where someone had installed the extension by hand. The SQLite
+  materialization experiment (`materialization.py`) goes with it; the Python
+  `duckdb` package is now a test-only dependency.
 
 ### Phase 5 — the Rust formatter
 

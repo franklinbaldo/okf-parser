@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
-import okf_parser.search as search_module
 from okf_parser.bundle import load_bundle
 from okf_parser.search import SearchError, search_bundle
 
@@ -20,16 +19,6 @@ def _result_rows(result: str | dict[str, object]) -> list[dict[str, object]]:
     rows = result["results"]
     assert isinstance(rows, list)
     return cast("list[dict[str, object]]", rows)
-
-
-@pytest.fixture(autouse=True)
-def _disable_optional_fts(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Keep Phase 1A core tests independent of host extension availability."""
-
-    def no_fts(_passages: object, _query: str) -> None:
-        return None
-
-    monkeypatch.setattr(search_module, "try_duckdb_fts_scores", no_fts)
 
 
 def _write_concept(path: Path, concept_type: str, body: str) -> None:
@@ -193,3 +182,11 @@ def test_search_request_validation(
 
     with pytest.raises(SearchError, match=message):
         search_bundle(load_bundle(tmp_path), **kwargs)
+
+
+def test_bundle_search_is_the_method_form(tmp_path: Path) -> None:
+    _write_concept(tmp_path / "a.md", "Tese", "needle here")
+
+    assert load_bundle(tmp_path).search("NEEDLE", mode="literal", detail="score") == (
+        "location\tscore\tsnippet\na.md#B1\t1\tneedle here"
+    )

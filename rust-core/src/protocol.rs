@@ -17,6 +17,7 @@ use okf_db::query::{QueryError, QueryOptions, QueryResult, query_bundle};
 use okf_db::relational::{RelationalSchema, RelationalSchemaError, parse_relational_schema};
 use okf_db::source::SourceRows;
 use okf_engine::check::{CheckError, CheckReport};
+use okf_engine::search::{Detail, Mode, SearchError, SearchOutput, SearchRequest, SearchResults};
 use okf_engine::{BundleData, ConceptGraph, GraphSummary, LoadError};
 use serde::{Deserialize, Serialize};
 
@@ -353,6 +354,85 @@ pub fn sql(request: &str) -> Result<Response<QueryResult>, serde_json::Error> {
             QueryError::Db(_) => ProtocolError::io(&error),
         });
     Ok(outcome.into())
+}
+
+fn default_mode() -> String {
+    "lexical".to_owned()
+}
+
+fn default_detail() -> String {
+    "compact".to_owned()
+}
+
+const fn default_search_limit() -> i64 {
+    10
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SearchRequestJson {
+    /// The records of the `Bundle` being searched, as `__engine-load` answered them.
+    bundle: BundleData,
+    query: String,
+    #[serde(default = "default_mode")]
+    mode: String,
+    #[serde(default = "default_search_limit")]
+    limit: i64,
+    #[serde(default)]
+    context: i64,
+    #[serde(default)]
+    concept_type: Option<String>,
+    #[serde(default)]
+    path_glob: Option<String>,
+    #[serde(default = "default_detail")]
+    detail: String,
+    #[serde(default)]
+    profile: Option<String>,
+}
+
+fn run_search(request: &SearchRequestJson) -> Result<SearchOutput, ProtocolError> {
+    let invalid = |error: SearchError| ProtocolError::request(&error);
+    let context =
+        usize::try_from(request.context).map_err(|_| invalid(SearchError::NegativeContext))?;
+    let mode: Mode = request.mode.parse().map_err(invalid)?;
+    let detail: Detail = request.detail.parse().map_err(invalid)?;
+    if let Some(profile) = &request.profile {
+        return Err(invalid(SearchError::Profile(profile.clone())));
+    }
+    let search = SearchRequest {
+        query: &request.query,
+        mode,
+        // A negative limit is as unanswerable as zero.
+        limit: usize::try_from(request.limit).unwrap_or(0),
+        context,
+        concept_type: request.concept_type.as_deref(),
+        path_glob: request.path_glob.as_deref(),
+        detail,
+    };
+    okf_engine::search::search(&request.bundle.concepts, &search).map_err(invalid)
+}
+
+/// A search answer as an object, which every protocol result is.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+pub enum SearchAnswer {
+    Rows { rows: String },
+    Full(SearchResults),
+}
+
+impl From<SearchOutput> for SearchAnswer {
+    fn from(output: SearchOutput) -> Self {
+        match output {
+            SearchOutput::Rows(rows) => Self::Rows { rows },
+            SearchOutput::Full(results) => Self::Full(results),
+        }
+    }
+}
+
+/// `__search`: RFC 0016 search over the `Bundle` the caller holds.
+pub fn search(request: &str) -> Result<Response<SearchAnswer>, serde_json::Error> {
+    let request: SearchRequestJson = serde_json::from_str(request)?;
+    Ok(run_search(&request).map(SearchAnswer::from).into())
 }
 
 #[derive(Debug, Deserialize)]

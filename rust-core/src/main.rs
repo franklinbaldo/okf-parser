@@ -13,10 +13,24 @@ use std::process::Command as ProcessCommand;
 use mcp::Transport;
 use okf_db::export::ExportOptions;
 use okf_db::query::QueryOptions;
+use okf_engine::search::{Detail, Mode, SearchOutput, SearchRequest};
 /// The command line is declared here in full, so `--help` lists every public
 /// command. Commands that still need Python (RFC 0024 phases 4-6) are declared
 /// as pass-through: their arguments, `--help` included, go to the Python CLI
 /// unparsed.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum SearchMode {
+    Lexical,
+    Literal,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum SearchDetail {
+    Compact,
+    Score,
+    Full,
+}
+
 #[derive(Parser)]
 #[command(
     name = "okf-parser",
@@ -56,6 +70,9 @@ enum Command {
     /// Plan and preview or commit an apply (JSON request on stdin).
     #[command(name = "__apply", hide = true)]
     ApplyRequest,
+    /// Search a loaded bundle for the Python shell (JSON request on stdin).
+    #[command(name = "__search", hide = true)]
+    SearchRequest,
     /// Query a loaded bundle for the Python shell (JSON request on stdin).
     #[command(name = "__sql", hide = true)]
     SqlRequest,
@@ -141,6 +158,36 @@ enum Command {
         /// Return at most this many rows.
         #[arg(long)]
         limit: Option<usize>,
+    },
+    /// Search concept bodies: body lines ranked by BM25, or matched literally.
+    #[command(after_help = "Each non-blank body line is a passage. Rows are \
+        `location<TAB>snippet`, where a location is `path#B<line>` (or `#B<start>-B<end>` \
+        with --context); --detail full answers JSON with each hit's concept and digest.\n\n\
+        Example: okf-parser search notes \"retry budget\" --type Runbook --context 1")]
+    Search {
+        path: PathBuf,
+        query: String,
+        /// `lexical` ranks by BM25 over case-folded words; `literal` matches the text.
+        #[arg(long, value_enum, default_value_t = SearchMode::Lexical)]
+        mode: SearchMode,
+        /// Answer at most this many passages.
+        #[arg(long, default_value_t = 10, value_parser = clap::value_parser!(u32).range(1..))]
+        limit: u32,
+        /// Widen each hit by this many body lines on each side.
+        #[arg(long, default_value_t = 0)]
+        context: u32,
+        /// Only concepts of this type.
+        #[arg(long = "type", value_name = "TYPE")]
+        concept_type: Option<String>,
+        /// Only documents matching this gitignore-style pattern (e.g. `legal/**`).
+        #[arg(long = "path", value_name = "PATTERN")]
+        path_glob: Option<String>,
+        /// `compact` rows, rows with a `score` column, or `full` JSON.
+        #[arg(long, value_enum, default_value_t = SearchDetail::Compact)]
+        detail: SearchDetail,
+        /// Skip files matching this gitignore-style pattern (repeatable).
+        #[arg(long, value_name = "PATTERN")]
+        exclude: Vec<String>,
     },
     /// Materialize every row of a DuckDB-readable source (CSV, Parquet, JSON) as a concept.
     #[command(name = "import", disable_help_flag = true)]
@@ -304,6 +351,9 @@ fn run() -> Outcome {
         Command::ApplyRequest => {
             serde_json::to_writer(io::stdout().lock(), &protocol::apply(&stdin_text()?)?)?;
         }
+        Command::SearchRequest => {
+            serde_json::to_writer(io::stdout().lock(), &protocol::search(&stdin_text()?)?)?;
+        }
         Command::SqlRequest => {
             serde_json::to_writer(io::stdout().lock(), &protocol::sql(&stdin_text()?)?)?;
         }
@@ -385,6 +435,41 @@ fn run() -> Outcome {
             let result = commands::apply(&input)?;
             let code = i32::from(!result.succeeded());
             return print(&result, code);
+        }
+        Command::Search {
+            path,
+            query,
+            mode,
+            limit,
+            context,
+            concept_type,
+            path_glob,
+            detail,
+            exclude,
+        } => {
+            let request = SearchRequest {
+                query: &query,
+                mode: match mode {
+                    SearchMode::Lexical => Mode::Lexical,
+                    SearchMode::Literal => Mode::Literal,
+                },
+                limit: limit as usize,
+                context: context as usize,
+                concept_type: concept_type.as_deref(),
+                path_glob: path_glob.as_deref(),
+                detail: match detail {
+                    SearchDetail::Compact => Detail::Compact,
+                    SearchDetail::Score => Detail::Score,
+                    SearchDetail::Full => Detail::Full,
+                },
+            };
+            return match commands::search(&path, &exclude, &request)? {
+                SearchOutput::Rows(rows) => {
+                    writeln!(io::stdout().lock(), "{rows}")?;
+                    Ok(0)
+                }
+                full @ SearchOutput::Full(_) => print(&full, 0),
+            };
         }
         Command::Sql {
             path,

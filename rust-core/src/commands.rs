@@ -14,6 +14,7 @@ use okf_db::relational::{RelationalSchemaError, load_relational_schema, validate
 use okf_engine::check::{
     self, CheckError, CheckReport, Inventory, READ_CONCURRENCY, SpecRules, check_loaded,
 };
+use okf_engine::search::{SearchError, SearchOutput, SearchRequest};
 use okf_engine::specs::{
     Scaffold, SpecTemplate, SpecTemplateError, commit_scaffold, plan_scaffold,
 };
@@ -449,6 +450,41 @@ pub fn sorted(value: Value) -> Value {
         Value::Array(values) => Value::Array(values.into_iter().map(sorted).collect()),
         other => other,
     }
+}
+
+/// Why `search` found nothing to answer.
+#[derive(Debug)]
+pub enum SearchFailure {
+    Load(LoadError),
+    Search(SearchError),
+}
+
+impl fmt::Display for SearchFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Load(error) => error.fmt(f),
+            Self::Search(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for SearchFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Load(error) => Some(error),
+            Self::Search(error) => Some(error),
+        }
+    }
+}
+
+/// `okf-parser search`: rank the body lines of the bundle at `path`.
+pub fn search(
+    path: &Path,
+    exclude: &[String],
+    request: &SearchRequest<'_>,
+) -> Result<SearchOutput, SearchFailure> {
+    let data = load_bundle(path, exclude, READ_CONCURRENCY).map_err(SearchFailure::Load)?;
+    okf_engine::search::search(&data.concepts, request).map_err(SearchFailure::Search)
 }
 
 /// Render a report the way the CLI always has: indented JSON, sorted keys.
