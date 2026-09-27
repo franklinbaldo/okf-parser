@@ -2,8 +2,8 @@
 
 The MCP protocol itself (transports, tool schemas, effect annotations) lives
 in the Rust binary (``rust-core/src/mcp.rs``, built on ``rmcp``), which also
-answers ``check``, ``inventory``, ``graph``, ``sql``, ``apply_*``,
-``init_*`` and ``duckdb_export`` natively. The tools whose logic is still Python are
+answers ``check``, ``inventory``, ``graph``, ``search``, ``sql``, ``format_*``,
+``apply_*``, ``init_*`` and ``duckdb_export`` natively. The tools whose logic is still Python are
 answered here: the binary pipes
 ``{"tool": ..., "arguments": {...}}`` to ``python -m okf_parser.mcp_bridge``
 and relays the JSON this module prints.
@@ -26,10 +26,8 @@ from okf_parser.cli import (  # noqa: TC001
     ZodImport,
 )
 from okf_parser.service import (
-    check_format,
     import_bundle,
     schema_bundle,
-    write_format,
 )
 
 if TYPE_CHECKING:
@@ -56,11 +54,6 @@ def mcp_schema(
         zod_import=zod_import,
         spec_template=spec_template,
     )
-
-
-def mcp_format_check(path: str, exclude: RepeatableStrings = None) -> dict[str, object]:
-    """Check mdformat style without modifying files."""
-    return check_format(path, exclude or ())
 
 
 def mcp_import_preview(
@@ -107,24 +100,15 @@ def mcp_import_write(
     )
 
 
-def mcp_format_write(path: str, exclude: RepeatableStrings = None) -> dict[str, object]:
-    """Rewrite Markdown files into canonical format."""
-    return write_format(path, exclude or ())
-
-
 type ToolName = Literal[
     "schema",
-    "format_check",
     "import_preview",
-    "format_write",
     "import_write",
 ]
 
 TOOLS: dict[ToolName, Callable[..., object]] = {
     "schema": mcp_schema,
-    "format_check": mcp_format_check,
     "import_preview": mcp_import_preview,
-    "format_write": mcp_format_write,
     "import_write": mcp_import_write,
 }
 """Every tool the native server may delegate, keyed by its MCP name."""

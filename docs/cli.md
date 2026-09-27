@@ -220,12 +220,14 @@ usage, scalar policies, and host-owned transport integration.
 uv run okf-parser format path/to/bundle [--write] [--exclude PATTERN]...
 ```
 
-Checks, or with `--write` applies, canonical Markdown formatting. Exits `1`
-when `payload["succeeded"]` is `false` — for example, files would change and
-`--write` was not passed. Files whose protected block structure the rewrite
-would change are left on disk and listed in `payload["skipped_paths"]`; see
-[Formatting](../README.md#quick-start) in the README for what "protected"
-means.
+Checks, or with `--write` applies, the canonical Markdown form (see
+[Formatting](../README.md#quick-start)): only syntax tokens are rewritten, and
+text, code and HTML are kept byte for byte. Prints `{"markdown_count", "clean",
+"changed_paths", "skipped", "succeeded", "written"}`; `skipped` lists each file
+left alone with its reason (not UTF-8, unreadable, or a rewrite that would change
+the document's structure). `--write` replaces every changed file or, on a write
+error, none. Exits `1` when `succeeded` is false: files would change and
+`--write` was not passed, or a file was skipped.
 
 MCP tools: `format_check`; `format_write` with `--allow-write`.
 
@@ -380,9 +382,9 @@ Tool arguments are validated at the server: an unknown key is a tool error,
 and defaulted flags keep concrete, non-nullable schemas (`digests` defaults to
 `false`, `database` to `knowledge.duckdb`). The legacy
 `sse` transport is gone: the MCP specification deprecated it in favor of
-Streamable HTTP. `check`, `inventory`, `graph`, `search`, `sql`, `apply_*`, `init_*`
+Streamable HTTP. `check`, `inventory`, `graph`, `search`, `sql`, `format_*`, `apply_*`, `init_*`
 and `duckdb_export` are answered natively by the binary. The tools still written in
-Python (`schema`, `format_*`, `import_*`) are delegated to
+Python (`schema`, `import_*`) are delegated to
 `python -m okf_parser.mcp_bridge`, which runs the CLI's own service function.
 The interpreter is the one installed next to the binary; set `OKF_PYTHON` to
 point a binary outside any Python environment at one. The default

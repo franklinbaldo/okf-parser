@@ -14,6 +14,7 @@ use okf_db::relational::{RelationalSchemaError, load_relational_schema, validate
 use okf_engine::check::{
     self, CheckError, CheckReport, Inventory, READ_CONCURRENCY, SpecRules, check_loaded,
 };
+use okf_engine::format::{FormatReport, FormatTreeError, Skipped, format_tree};
 use okf_engine::search::{SearchError, SearchOutput, SearchRequest};
 use okf_engine::specs::{
     Scaffold, SpecTemplate, SpecTemplateError, commit_scaffold, plan_scaffold,
@@ -450,6 +451,45 @@ pub fn sorted(value: Value) -> Value {
         Value::Array(values) => Value::Array(values.into_iter().map(sorted).collect()),
         other => other,
     }
+}
+
+/// `okf-parser format`: what the formatter found and did, with its verdicts.
+#[derive(Debug, Serialize)]
+pub struct FormatAnswer {
+    markdown_count: usize,
+    clean: bool,
+    changed_paths: Vec<String>,
+    skipped: Vec<Skipped>,
+    succeeded: bool,
+    written: bool,
+}
+
+impl FormatAnswer {
+    pub const fn succeeded(&self) -> bool {
+        self.succeeded
+    }
+}
+
+impl From<FormatReport> for FormatAnswer {
+    fn from(report: FormatReport) -> Self {
+        Self {
+            clean: report.clean(),
+            succeeded: report.succeeded(),
+            markdown_count: report.markdown_count,
+            changed_paths: report.changed_paths,
+            skipped: report.skipped,
+            written: report.written,
+        }
+    }
+}
+
+/// `okf-parser format`: check, or with `write` rewrite, the canonical form.
+pub fn format(
+    path: &Path,
+    exclude: &[String],
+    write: bool,
+) -> Result<FormatAnswer, FormatTreeError> {
+    format_tree(path, exclude, write).map(FormatAnswer::from)
 }
 
 /// Why `search` found nothing to answer.

@@ -77,21 +77,19 @@ commit tools for formatting, relational apply, spec scaffolding, import, and Duc
 export; preview tools remain available without the flag. Effect annotations describe
 maximum tool effects but are not authorization or sandboxing.
 
-`format` is an opinionated canonicalizer, not a syntax-preserving rewriter. It
-keeps [mdformat](https://mdformat.readthedocs.io/) as its base and replaces only
-the numbering policy for ordered lists: markers are decided while rendering, so
-they are consecutive (`1. 2. 3.`) and never zero-padded to an even width. A list
-starting at `101` is written `101. 102. 103.`, appending an item does not rewrite
-the lines above it, and a list whose markers would exceed CommonMark's nine-digit
-limit keeps plain numbering.
+`format` normalizes syntax and nothing else. It parses each document and
+rewrites only the tokens that spell its structure: list markers (`-`, and
+consecutive `1. 2. 3.` numbering from the list's start, never zero-padded), `*`
+and `**` emphasis, ATX headings, compact tables (`| a | b |`, `| --- | :-: |`),
+backslash hard breaks, single blank lines, no trailing whitespace, one final
+newline, and a blank line after frontmatter whose simple keys are ordered
+`type`, `title`, `description`, then by name. Every other byte — text, code,
+HTML, links, escapes — is kept as written, so `x86_64`, `#25` and `[[wiki]]`
+stay exactly as they are.
 
-Formatting will not write a file whose **protected block structure** the rewrite
-would change; such a file is reported in `skipped_paths` and left on disk.
-Protected means the sequence, nesting and tag of every block, block attributes
-such as an ordered list's `start`, and the content of code blocks, raw HTML and
-frontmatter. Inline content — link targets, emphasis, text inside a paragraph or
-table cell — is deliberately outside this check, because canonical formatting
-rewrites inline whitespace.
+The rewrite must parse to the same document as the original. When it would
+not, the file is reported in `skipped` with the reason and left on disk, and
+`--write` replaces every changed file or, on a write error, none.
 
 ## Excluding paths
 
@@ -236,9 +234,9 @@ Python accepts `load_bundle(root, rust_core=Path(".../okf-parser"))`; TypeScript
 bounded parallel reads, YAML/frontmatter, Markdown facts, validation, link resolution,
 and content digests. The packaged `okf-parser` executable is the single Python command
 and declares the whole command line: `check`, `inventory`, `graph`, `search`, `sql`,
-`apply`, `duckdb`, `init`, `serve` and the private engine operations run natively, and only
-the commands still written in Python (`import`'s document building, `schema`, `format` and
-the type packs) are handed to the Python CLI. Omitting the option keeps the portable language-native fallback.
+`apply`, `format`, `duckdb`, `init`, `serve` and the private engine operations run natively, and only
+the commands still written in Python (`import`'s document building, `schema` and the type
+packs) are handed to the Python CLI. Omitting the option keeps the portable language-native fallback.
 
 The composite action installs a pinned uv version and executes the same
 `validate_path()` function used by the Python API, CLI, and MCP server.
@@ -267,11 +265,12 @@ uv run okf-parser serve --allow-write        # also register the commit tools
 
 The server is part of the native `okf-parser` binary, built on
 [`rmcp`](https://crates.io/crates/rmcp); no Python MCP framework is installed.
-`graph` is answered natively; the remaining tools run the same Python service
-functions as the CLI (see [RFC 0024](rfcs/0024-rust-native-core.md)).
+Every tool but `schema` and `import_*` is answered natively; those two run the
+same Python service functions as the CLI (see
+[RFC 0024](rfcs/0024-rust-native-core.md)).
 
-Read-only tools: `check`, `inventory`, `graph`, `format_check`, `init_preview`,
-and `import_preview`.
+Read-only tools: `check`, `inventory`, `graph`, `search`, `sql`, `format_check`,
+`apply_preview`, `init_preview` and `import_preview`.
 
 ## Graph
 

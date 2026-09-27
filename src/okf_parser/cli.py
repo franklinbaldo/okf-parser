@@ -16,10 +16,8 @@ from typing import Annotated, Literal
 from cyclopts import App, Parameter
 
 from okf_parser.service import (
-    check_format,
     import_bundle,
     schema_bundle,
-    write_format,
 )
 from okf_parser.type_packs import install_type_pack, list_type_packs
 
@@ -117,19 +115,6 @@ def schema(  # each argument is an independent public CLI flag.
             refs=refs,
         )
     )
-
-
-@app.command(name="format")
-def format_command(
-    path: str,
-    *,
-    write: bool = False,
-    exclude: RepeatableStrings = None,
-) -> CliResult[JsonPayload]:
-    """Check mdformat style, writing only when --write is explicit."""
-    patterns = exclude or ()
-    payload = write_format(path, patterns) if write else check_format(path, patterns)
-    return CliResult(payload, 0 if payload["succeeded"] else 1)
 
 
 @app.command

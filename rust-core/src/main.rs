@@ -70,6 +70,9 @@ enum Command {
     /// Plan and preview or commit an apply (JSON request on stdin).
     #[command(name = "__apply", hide = true)]
     ApplyRequest,
+    /// Check or rewrite the canonical form for the Python API (JSON request on stdin).
+    #[command(name = "__format", hide = true)]
+    FormatRequest,
     /// Search a loaded bundle for the Python shell (JSON request on stdin).
     #[command(name = "__search", hide = true)]
     SearchRequest,
@@ -195,9 +198,23 @@ enum Command {
     /// Export JSON Schema, Zod, Pydantic source, or GraphQL SDL.
     #[command(disable_help_flag = true)]
     Schema(Delegated),
-    /// Check mdformat style, writing only when --write is explicit.
-    #[command(disable_help_flag = true)]
-    Format(Delegated),
+    /// Check the canonical Markdown form, rewriting only with --write.
+    #[command(
+        after_help = "Only syntax is normalized: list markers and numbering, `*` \
+        emphasis, ATX headings, compact tables, hard breaks, blank lines, trailing whitespace, \
+        the final newline and simple frontmatter order. Text, code and HTML are kept byte for \
+        byte, and a document the rewrite would change the meaning of is skipped, not written.\n\n\
+        Exits 1 while any document is not canonical (without --write) or was skipped."
+    )]
+    Format {
+        path: PathBuf,
+        /// Rewrite the files; all of them or, on a write error, none.
+        #[arg(long)]
+        write: bool,
+        /// Skip files matching this gitignore-style pattern (repeatable).
+        #[arg(long, value_name = "PATTERN")]
+        exclude: Vec<String>,
+    },
     /// Edit frontmatter fields with SQL: each type is a table, each field a column.
     #[command(
         after_help = "The script runs over one table per concept type (named for the \
@@ -368,11 +385,9 @@ fn run() -> Outcome {
             let data = engine::load_bundle(&root, &exclude, read_concurrency)?;
             serde_json::to_writer(io::stdout().lock(), &protocol::LoadResponse::new(&data))?;
         }
-        Command::Import(_)
-        | Command::Schema(_)
-        | Command::Format(_)
-        | Command::Packs(_)
-        | Command::AddPack(_) => return python_cli(),
+        Command::Import(_) | Command::Schema(_) | Command::Packs(_) | Command::AddPack(_) => {
+            return python_cli();
+        }
         Command::Check {
             path,
             exclude,
@@ -435,6 +450,18 @@ fn run() -> Outcome {
             let result = commands::apply(&input)?;
             let code = i32::from(!result.succeeded());
             return print(&result, code);
+        }
+        Command::Format {
+            path,
+            write,
+            exclude,
+        } => {
+            let answer = commands::format(&path, &exclude, write)?;
+            let code = i32::from(!answer.succeeded());
+            return print(&answer, code);
+        }
+        Command::FormatRequest => {
+            serde_json::to_writer(io::stdout().lock(), &protocol::format(&stdin_text()?)?)?;
         }
         Command::Search {
             path,

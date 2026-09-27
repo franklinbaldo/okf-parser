@@ -17,6 +17,7 @@ use okf_db::query::{QueryError, QueryOptions, QueryResult, query_bundle};
 use okf_db::relational::{RelationalSchema, RelationalSchemaError, parse_relational_schema};
 use okf_db::source::SourceRows;
 use okf_engine::check::{CheckError, CheckReport};
+use okf_engine::format::FormatTreeError;
 use okf_engine::search::{Detail, Mode, SearchError, SearchOutput, SearchRequest, SearchResults};
 use okf_engine::{BundleData, ConceptGraph, GraphSummary, LoadError};
 use serde::{Deserialize, Serialize};
@@ -433,6 +434,31 @@ impl From<SearchOutput> for SearchAnswer {
 pub fn search(request: &str) -> Result<Response<SearchAnswer>, serde_json::Error> {
     let request: SearchRequestJson = serde_json::from_str(request)?;
     Ok(run_search(&request).map(SearchAnswer::from).into())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FormatRequest {
+    path: PathBuf,
+    #[serde(default)]
+    exclude: Vec<String>,
+    #[serde(default)]
+    write: bool,
+}
+
+/// `__format`: check or rewrite the canonical Markdown form of a tree.
+pub fn format(request: &str) -> Result<Response<crate::commands::FormatAnswer>, serde_json::Error> {
+    let request: FormatRequest = serde_json::from_str(request)?;
+    Ok(
+        crate::commands::format(&request.path, &request.exclude, request.write)
+            .map_err(|error| match &error {
+                FormatTreeError::Load(load) if crate::commands::load_is_request(load) => {
+                    ProtocolError::request(&error)
+                }
+                FormatTreeError::Load(_) | FormatTreeError::Write(_) => ProtocolError::io(&error),
+            })
+            .into(),
+    )
 }
 
 #[derive(Debug, Deserialize)]

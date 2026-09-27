@@ -6,35 +6,11 @@ from typing import TYPE_CHECKING, Literal
 
 import pytest
 
-from okf_parser.cli import app, format_command, import_command
+from okf_parser.cli import app, import_command
 from okf_parser.service import schema_bundle
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-
-def test_format_write_exits_nonzero_when_a_file_was_skipped(tmp_path: Path) -> None:
-    (tmp_path / "unreadable.md").write_bytes(b"# Caf\xe9\n")
-
-    result = format_command(str(tmp_path), write=True)
-
-    assert result.exit_code == 1
-    assert result.payload["skipped_paths"] == ["unreadable.md"]
-
-
-def test_format_write_exits_zero_once_every_file_is_formatted(tmp_path: Path) -> None:
-    (tmp_path / "a.md").write_text("# Heading\n\n-   item\n", encoding="utf-8")
-
-    result = format_command(str(tmp_path), write=True)
-
-    assert result.exit_code == 0
-    assert result.payload["changed_paths"] == ["a.md"]
-
-
-def test_format_check_exits_nonzero_when_a_file_needs_formatting(tmp_path: Path) -> None:
-    (tmp_path / "a.md").write_text("# Heading\n\n-   item\n", encoding="utf-8")
-
-    assert format_command(str(tmp_path)).exit_code == 1
 
 
 def test_import_exits_nonzero_for_a_divergent_existing_identity(tmp_path: Path) -> None:

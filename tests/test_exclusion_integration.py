@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING
 import duckdb
 
 from okf_parser.bundle import validate_path
-from okf_parser.cli import format_command
 from okf_parser.discovery import discover_markdown
 from okf_parser.exclusion import EXCLUSION_FILENAME, ExclusionRules
 from okf_parser.formatting import format_path
@@ -95,12 +94,14 @@ def test_check_accepts_repeated_exclude_options(tmp_path: Path) -> None:
 
 
 def test_format_accepts_repeated_exclude_options(tmp_path: Path) -> None:
-    _write(tmp_path / "vendor" / "dep.md", "# Vendored\n\n-   untouched\n")
-    _write(tmp_path / "a.md", "# Mine\n")
+    (tmp_path / "vendor").mkdir()
+    (tmp_path / "vendor" / "dep.md").write_text("# Dep\n\n-   item\n", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "doc.md").write_text("# Doc\n\n-   item\n", encoding="utf-8")
 
-    result = format_command(str(tmp_path), exclude=["vendor"])
+    report = format_path(tmp_path, exclude=["vendor", "docs"])
 
-    assert result.payload["markdown_count"] == 1
+    assert report.markdown_count == 0
 
 
 def test_duckdb_export_honours_exclusion(tmp_path: Path) -> None:

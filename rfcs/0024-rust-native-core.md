@@ -275,6 +275,20 @@ nothing installed. See docs/releasing.md.
 The formatter moves into the binary and defines the new canonical format.
 mdformat, its plugins and markdown-it-py leave.
 
+- **5 (0.48.0):** `okf_engine::format` is a *surgical* formatter: it parses
+  with pulldown-cmark and rewrites only syntax tokens at their source offsets
+  (list markers and numbering, `*` emphasis, ATX headings, compact tables,
+  hard breaks, blank lines, trailing whitespace, the final newline, simple
+  frontmatter order), keeping every other byte. Rendering formatters were
+  measured on this repository and on pulldown-cmark's 1,148 spec and
+  regression examples and rejected: comrak escapes ordinary text (`x86\_64`,
+  `\#25`) and dprint dedents fenced code. The output must parse to the same
+  event stream as the input, or the file is skipped with its reason; across
+  the spec corpus 5 pathological documents are skipped and none is unstable.
+  `format` and the MCP `format_*` tools are native, and `--write` commits all
+  files or none. mdformat and its plugins leave; markdown-it-py stays until
+  `parser.py` moves with `import` and `schema` in phase 6.
+
 ### Phase 6 — the rest
 
 The GraphQL adapter is ported or becomes a separate optional package; git
