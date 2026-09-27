@@ -427,7 +427,7 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// Everything is staged before anything is replaced, so a failure while
 /// staging commits nothing. If a replacement fails part-way, the files
 /// already replaced are restored from their original bytes.
-fn commit_all(
+pub(crate) fn commit_all(
     replacements: &[(PathBuf, Vec<u8>)],
     rename: impl Fn(&Path, &Path) -> io::Result<()>,
 ) -> io::Result<()> {

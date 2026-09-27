@@ -1,5 +1,6 @@
 pub mod check;
 pub mod engine;
+pub mod format;
 pub mod frontmatter;
 pub mod graph;
 pub mod search;

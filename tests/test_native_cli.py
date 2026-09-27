@@ -126,19 +126,28 @@ def test_top_level_help_lists_native_and_delegated_commands() -> None:
     )
 
     listed = {line.split()[0] for line in completed.stdout.splitlines() if line.startswith("  ")}
-    native = {"check", "search", "sql", "apply", "inventory", "graph", "init", "duckdb", "serve"}
-    delegated = {"import", "schema", "format", "packs", "add-pack"}
+    native = {
+        "check",
+        "search",
+        "sql",
+        "apply",
+        "format",
+        "inventory",
+        "graph",
+        "init",
+        "duckdb",
+        "serve",
+    }
+    delegated = {"import", "schema", "packs", "add-pack"}
     assert native | delegated <= listed
     assert not any(name.startswith("__") for name in listed)
 
 
-def test_a_delegated_command_is_answered_by_the_python_cli(tmp_path: Path) -> None:
-    _write(tmp_path / "a.md", "---\ntype: Note\n---\n")
-
-    code, payload = _run("format", str(tmp_path))
+def test_a_delegated_command_is_answered_by_the_python_cli() -> None:
+    code, payload = _run("packs")
 
     assert code == 0
-    assert payload["markdown_count"] == 1
+    assert "packs" in payload
 
 
 def test_search_prints_rows_and_full_json(tmp_path: Path) -> None:
@@ -156,3 +165,24 @@ def test_search_prints_rows_and_full_json(tmp_path: Path) -> None:
     assert rows.stdout == "location\tsnippet\na.md#B1-B2\tintro the retry budget\n"
     assert code == 0
     assert payload["results"][0]["location"] == "a.md#B2"
+
+
+def test_format_checks_then_writes_the_canonical_form(tmp_path: Path) -> None:
+    document = tmp_path / "a.md"
+    _write(document, "---\ntitle: T\ntype: Note\n---\n1. a\n1. b\n")
+
+    checked, report = _run("format", str(tmp_path))
+    written, _ = _run("format", str(tmp_path), "--write")
+
+    assert (checked, report["changed_paths"], report["clean"]) == (1, ["a.md"], False)
+    assert written == 0
+    assert document.read_text(encoding="utf-8") == "---\ntype: Note\ntitle: T\n---\n\n1. a\n2. b\n"
+
+
+def test_format_write_exits_nonzero_when_a_file_was_skipped(tmp_path: Path) -> None:
+    (tmp_path / "unreadable.md").write_bytes(b"# Caf\xe9\n")
+
+    code, payload = _run("format", str(tmp_path), "--write")
+
+    assert code == 1
+    assert payload["skipped"] == [{"path": "unreadable.md", "reason": "not UTF-8"}]

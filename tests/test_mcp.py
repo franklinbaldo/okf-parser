@@ -45,6 +45,8 @@ DEFAULT_TOOLS = {
 }
 NATIVE_TOOLS = {
     "check",
+    "format_check",
+    "format_write",
     "search",
     "inventory",
     "graph",
@@ -204,6 +206,20 @@ def test_search_answers_rows_as_text_and_full_results_as_structure(tmp_path: Pat
 
 
 @native
+def test_format_tools_check_and_write_natively(tmp_path: Path) -> None:
+    document = tmp_path / "a.md"
+    document.write_text("---\ntype: Note\n---\n\n*   item\n", encoding="utf-8")
+    with McpSession("--allow-write") as session:
+        checked = session.call("format_check", {"path": str(tmp_path)})
+        written = session.call("format_write", {"path": str(tmp_path)})
+
+    assert checked["structuredContent"]["changed_paths"] == ["a.md"]
+    assert checked["structuredContent"]["succeeded"] is False
+    assert written["structuredContent"]["succeeded"] is True
+    assert document.read_text(encoding="utf-8") == "---\ntype: Note\n---\n\n- item\n"
+
+
+@native
 def test_mcp_effect_annotations_describe_maximum_possible_effect() -> None:
     with McpSession("--allow-write") as session:
         tools = session.tools()
@@ -330,10 +346,10 @@ def test_delegated_tool_answers_through_the_python_bridge(tmp_path: Path) -> Non
     bundle = _bundle(tmp_path)
 
     with McpSession() as session:
-        result = session.call("format_check", {"path": str(bundle)})
+        result = session.call("schema", {"path": str(bundle)})
 
     assert result["isError"] is False
-    assert result["structuredContent"] == mcp_bridge.mcp_format_check(str(bundle))
+    assert result["structuredContent"] == mcp_bridge.mcp_schema(str(bundle))
 
 
 @native
@@ -475,7 +491,7 @@ def test_bridge_accepts_wire_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_bridge_rejects_arguments_a_tool_does_not_take() -> None:
     with pytest.raises(ValueError, match="unexpected_keyword_argument"):
         mcp_bridge.run_tool_call(
-            mcp_bridge.ToolCall(tool="format_check", arguments={"path": ".", "write": True})
+            mcp_bridge.ToolCall(tool="schema", arguments={"path": ".", "write": True})
         )
 
 

@@ -637,7 +637,9 @@ impl OkfServer {
     }
 
     #[tool(
-        description = "Check mdformat style without modifying files.",
+        description = "Report which Markdown files are not in canonical form, without \
+            changing them. Only syntax is normalized (list markers, emphasis, headings, \
+            tables, whitespace); `skipped` names files the rewrite would change the meaning of.",
         annotations(
             read_only_hint = true,
             destructive_hint = false,
@@ -646,7 +648,7 @@ impl OkfServer {
         )
     )]
     async fn format_check(&self, Parameters(args): Parameters<PathArgs>) -> CallToolResult {
-        self.delegate("format_check", args).await
+        native(move || commands::format(&args.path, exclude(&args.exclude), false)).await
     }
 
     #[tool(
@@ -694,7 +696,8 @@ impl OkfServer {
     }
 
     #[tool(
-        description = "Rewrite Markdown files into canonical format.",
+        description = "Rewrite Markdown files into canonical form: all of them, or on a \
+            write error none. Text, code and HTML are kept byte for byte.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
@@ -703,7 +706,7 @@ impl OkfServer {
         )
     )]
     async fn format_write(&self, Parameters(args): Parameters<PathArgs>) -> CallToolResult {
-        self.delegate("format_write", args).await
+        native(move || commands::format(&args.path, exclude(&args.exclude), true)).await
     }
 
     #[tool(

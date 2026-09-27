@@ -13,7 +13,7 @@ from okf_parser.bundle_import import import_bundle as _import_bundle
 from okf_parser.declared_schema import DeclaredSchemaError
 from okf_parser.edit import preview_concept_edit as _preview_concept_edit
 from okf_parser.edit import write_concept_edit as _write_concept_edit
-from okf_parser.formatting import FormatReport, format_path
+from okf_parser.formatting import format_path
 from okf_parser.graphql_adapter import export_graphql_sdl
 from okf_parser.rust_core import native_result
 from okf_parser.schema_export import (
@@ -174,25 +174,14 @@ def schema_bundle(  # service mirrors the independent public schema flags.
     )
 
 
-def _format_payload(report: FormatReport) -> dict[str, object]:
-    return {
-        "markdown_count": report.markdown_count,
-        "clean": report.clean,
-        "changed_paths": list(report.changed_paths),
-        "skipped_paths": list(report.skipped_paths),
-        "succeeded": report.succeeded,
-        "written": report.written,
-    }
-
-
 def check_format(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
-    """Check mdformat style without modifying files."""
-    return _format_payload(format_path(Path(path), exclude=exclude))
+    """Report which Markdown files are not in canonical form, changing nothing."""
+    return format_path(Path(path), exclude=exclude).model_dump(mode="json")
 
 
 def write_format(path: str, exclude: Sequence[str] = ()) -> dict[str, object]:
-    """Explicitly rewrite Markdown files into canonical form."""
-    return _format_payload(format_path(Path(path), write=True, exclude=exclude))
+    """Rewrite Markdown files into canonical form: all of them, or none."""
+    return format_path(Path(path), write=True, exclude=exclude).model_dump(mode="json")
 
 
 def apply_bundle(  # each argument is an independent public CLI flag.

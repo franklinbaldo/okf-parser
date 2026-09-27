@@ -248,21 +248,16 @@ def test_formatting_is_idempotent(tmp_path: Path, source: str) -> None:
     assert _format_once(tmp_path, once) == once
 
 
-def test_a_file_whose_structure_would_change_is_skipped(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_a_file_whose_structure_would_change_is_skipped(tmp_path: Path) -> None:
     path = tmp_path / "a.md"
-    original = "# Heading\n\n1. item\n"
+    # Narrowing `-    ` to `- ` would pull the unindented `bar` into the item.
+    original = "-    foo\n\n  bar\n"
     path.write_text(original, encoding="utf-8")
-    monkeypatch.setattr(
-        "okf_parser.markdown_style.mdformat.text",
-        lambda *_args, **_kwargs: "just a paragraph now\n",
-    )
 
     report = format_path(tmp_path, write=True)
 
     assert report.skipped_paths == ("a.md",)
+    assert report.skipped[0].reason == "formatting would change the document's structure"
     assert report.changed_paths == ()
     assert path.read_text(encoding="utf-8") == original
 
@@ -305,26 +300,3 @@ def test_check_does_not_report_success_when_a_file_needs_formatting(tmp_path: Pa
     (tmp_path / "a.md").write_text("# Heading\n\n-   item\n", encoding="utf-8")
 
     assert not format_path(tmp_path).succeeded
-
-
-def test_write_is_all_or_nothing_when_formatting_fails(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    first = tmp_path / "a.md"
-    original = "# Heading\n\n-   item\n"
-    first.write_text(original, encoding="utf-8")
-    (tmp_path / "b.md").write_text(original, encoding="utf-8")
-
-    def explode(text: str, **_kwargs: object) -> str:
-        if "b.md" not in text:
-            return text.replace("-   item", "- item")
-        raise RuntimeError
-
-    monkeypatch.setattr("okf_parser.markdown_style.mdformat.text", explode)
-    (tmp_path / "b.md").write_text(f"{original}<!-- b.md -->\n", encoding="utf-8")
-
-    with pytest.raises(RuntimeError):
-        format_path(tmp_path, write=True)
-
-    assert first.read_text(encoding="utf-8") == original
