@@ -10,15 +10,29 @@ use std::io::{self, Read, Write};
 use std::path::PathBuf;
 use std::process::Command as ProcessCommand;
 
+use commands::SchemaFormat;
 use mcp::Transport;
 use okf_db::export::ExportOptions;
 use okf_db::import::{ConflictPolicy, ImportRequest};
 use okf_db::query::QueryOptions;
+use okf_db::schema::{RefsMode, SchemaOptions, ZodImport};
 use okf_engine::search::{Detail, Mode, SearchOutput, SearchRequest};
 /// The command line is declared here in full, so `--help` lists every public
 /// command. Commands that still need Python (RFC 0024 phases 4-6) are declared
 /// as pass-through: their arguments, `--help` included, go to the Python CLI
 /// unparsed.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum ZodImportArg {
+    Zod,
+    Astro,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum RefsArg {
+    Key,
+    Embed,
+}
+
 #[derive(Clone, Copy, clap::ValueEnum)]
 enum OnConflict {
     Skip,
@@ -77,6 +91,9 @@ enum Command {
     /// Plan and preview or commit an apply (JSON request on stdin).
     #[command(name = "__apply", hide = true)]
     ApplyRequest,
+    /// Compile or render schema contracts for the Python API (JSON request on stdin).
+    #[command(name = "__schema", hide = true)]
+    SchemaRequest,
     /// Import a tabular source for the Python API (JSON request on stdin).
     #[command(name = "__import", hide = true)]
     ImportRequest,
@@ -235,8 +252,40 @@ enum Command {
         expected_preview_token: Option<String>,
     },
     /// Export JSON Schema, Zod, Pydantic source, or GraphQL SDL.
-    #[command(disable_help_flag = true)]
-    Schema(Delegated),
+    #[command(
+        after_help = "One contract per concept type, compiled from every document's \
+        frontmatter: a field is required when every document has it, nullable when one sets it \
+        to null. --infer-types reads booleans, numbers and dates from the values; --cast fixes \
+        one field's type; --spec-template adds each type's declared .schema.sql types; \
+        --relational-schema turns declared foreign keys into references (--refs embed to \
+        inline the referenced schema)."
+    )]
+    Schema {
+        path: PathBuf,
+        #[arg(long, value_enum, default_value_t = SchemaFormat::Json)]
+        format: SchemaFormat,
+        /// Infer booleans, integers, numbers, dates and datetimes from the values.
+        #[arg(long)]
+        infer_types: bool,
+        /// Fix one field's type, as FIELD=TYPE (repeatable).
+        #[arg(long, value_name = "FIELD=TYPE")]
+        cast: Vec<String>,
+        /// Skip files matching this gitignore-style pattern (repeatable).
+        #[arg(long, value_name = "PATTERN")]
+        exclude: Vec<String>,
+        /// Where the Zod output imports `z` from.
+        #[arg(long, value_enum, default_value_t = ZodImportArg::Zod)]
+        zod_import: ZodImportArg,
+        /// Read each type's declared `.schema.sql` beside its specification.
+        #[arg(long, value_name = "TEMPLATE")]
+        spec_template: Option<String>,
+        /// Export declared foreign keys (okf.schema.sql) as references.
+        #[arg(long, value_name = "PATH")]
+        relational_schema: Option<String>,
+        /// A reference's shape: the key's value, or the embedded schema.
+        #[arg(long, value_enum, default_value_t = RefsArg::Key)]
+        refs: RefsArg,
+    },
     /// Check the canonical Markdown form, rewriting only with --write.
     #[command(
         after_help = "Only syntax is normalized: list markers and numbering, `*` \
@@ -453,7 +502,44 @@ fn run() -> Outcome {
         Command::ImportRequest => {
             serde_json::to_writer(io::stdout().lock(), &protocol::import(&stdin_text()?)?)?;
         }
-        Command::Schema(_) | Command::Packs(_) | Command::AddPack(_) => {
+        Command::Schema {
+            path,
+            format,
+            infer_types,
+            cast,
+            exclude,
+            zod_import,
+            spec_template,
+            relational_schema,
+            refs,
+        } => {
+            let options = SchemaOptions {
+                exclude,
+                infer_types,
+                casts: cast,
+                spec_template,
+                relational_schema,
+                refs: match refs {
+                    RefsArg::Key => RefsMode::Key,
+                    RefsArg::Embed => RefsMode::Embed,
+                },
+            };
+            let zod_import = match zod_import {
+                ZodImportArg::Zod => ZodImport::Zod,
+                ZodImportArg::Astro => ZodImport::Astro,
+            };
+            return match commands::schema(&path, format, &options, zod_import)? {
+                commands::SchemaAnswer::Json(payload) => print(&payload, 0),
+                commands::SchemaAnswer::Text(text) => {
+                    writeln!(io::stdout().lock(), "{}", text.trim_end_matches('\n'))?;
+                    Ok(0)
+                }
+            };
+        }
+        Command::SchemaRequest => {
+            serde_json::to_writer(io::stdout().lock(), &protocol::schema(&stdin_text()?)?)?;
+        }
+        Command::Packs(_) | Command::AddPack(_) => {
             return python_cli();
         }
         Command::Check {
@@ -663,11 +749,11 @@ mod tests {
 
     #[test]
     fn delegated_commands_keep_every_argument_unparsed() {
-        let cli = Cli::try_parse_from(["okf-parser", "schema", "b", "--format", "zod", "--help"])
-            .unwrap();
-        let Command::Schema(Delegated { args }) = cli.command else {
-            panic!("schema should be delegated");
+        let cli =
+            Cli::try_parse_from(["okf-parser", "add-pack", "b", "--write", "--help"]).unwrap();
+        let Command::AddPack(Delegated { args }) = cli.command else {
+            panic!("add-pack should be delegated");
         };
-        assert_eq!(args, ["b", "--format", "zod", "--help"]);
+        assert_eq!(args, ["b", "--write", "--help"]);
     }
 }

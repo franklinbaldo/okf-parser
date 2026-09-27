@@ -10,9 +10,8 @@ import pytest
 from okf_parser.schema_contract import (
     FieldContract,
     RefNode,
+    ScalarNode,
     TypeContract,
-    node_json_schema,
-    node_zod,
 )
 from okf_parser.schema_export import (
     SchemaExportError,
@@ -109,9 +108,15 @@ def test_reference_keeps_the_scalar_it_carries(single_column_bundle: Path) -> No
         relational_schema=str(single_column_bundle / "okf.schema.sql"),
     )
     reference = _field(contracts, "Fundamentacao", "regra").value
+    assert isinstance(reference, RefNode)
+    assert isinstance(reference.value, ScalarNode)
+    assert reference.value.kind == "string"
 
-    assert node_json_schema(reference)["type"] == "string"
-    assert node_zod(reference).startswith("z.string()")
+    relational_schema = str(single_column_bundle / "okf.schema.sql")
+    exported = export_json_schema(str(single_column_bundle), relational_schema=relational_schema)
+    zod = export_zod_schema(str(single_column_bundle), relational_schema=relational_schema)
+    assert exported["schemas"]["Fundamentacao"]["properties"]["regra"]["type"] == "string"
+    assert '"regra": z.string().describe(' in zod
 
 
 def test_json_schema_carries_the_reference_metadata(single_column_bundle: Path) -> None:

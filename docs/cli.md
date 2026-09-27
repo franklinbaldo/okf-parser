@@ -148,6 +148,12 @@ an importable Pydantic v2 module, or deterministic GraphQL SDL. GraphQL SDL is a
 read-only projection of the same TypeContract; it does not add a second schema
 authority or a GraphQL server.
 
+The binary compiles the contracts and renders JSON Schema, Zod and GraphQL
+itself. Pydantic source is rendered by the Python package the binary is
+installed with, because its naming rules are Python's own (keywords,
+`str.isidentifier`, the attributes of `BaseModel`); set `OKF_PYTHON` to point a
+binary outside any Python environment at an interpreter with `okf-parser`.
+
 The common Pydantic path is intentionally just:
 
 ```bash
@@ -211,8 +217,7 @@ and adversarial source snapshots exercise this contract against the repository's
 Ruff formatting and lint rules.
 
 MCP tool: `schema` with the same `json`, `zod`, `pydantic`, and `graphql` format
-choices (`format` is represented internally by the Python parameter
-`schema_format`).
+choices and the same `relational_schema` and `refs` arguments.
 
 See [Embedded GraphQL read adapter](graphql.md) for executable read-only schema
 usage, scalar policies, and host-owned transport integration.
@@ -385,12 +390,9 @@ Tool arguments are validated at the server: an unknown key is a tool error,
 and defaulted flags keep concrete, non-nullable schemas (`digests` defaults to
 `false`, `database` to `knowledge.duckdb`). The legacy
 `sse` transport is gone: the MCP specification deprecated it in favor of
-Streamable HTTP. `check`, `inventory`, `graph`, `search`, `sql`, `format_*`, `apply_*`, `import_*`, `init_*`
-and `duckdb_export` are answered natively by the binary. The tools still written in
-Python (`schema`) are delegated to
-`python -m okf_parser.mcp_bridge`, which runs the CLI's own service function.
-The interpreter is the one installed next to the binary; set `OKF_PYTHON` to
-point a binary outside any Python environment at one. The default
+Streamable HTTP. Every tool is answered natively by the binary; only
+`schema` with `format: pydantic` runs the Python renderer described under
+[`schema`](#schema). The default
 profile exposes `check`, `inventory`, `graph`, `search`, `sql`, `schema`, `format_check`,
 `apply_preview`, `init_preview`, and `import_preview`. `--allow-write` additionally
 exposes `format_write`, `apply_write`, `init_write`, `import_write`, and

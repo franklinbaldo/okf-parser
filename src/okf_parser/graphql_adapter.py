@@ -1,11 +1,14 @@
-"""Optional read-only GraphQL projection over canonical OKF relations and TypeContract."""
+"""Optional read-only GraphQL projection over canonical OKF relations and TypeContract.
+
+The binary renders the SDL and names every GraphQL type and field
+(``okf-db/src/schema/graphql.rs``); this module only makes it executable,
+resolving concepts from one bundle snapshot.
+"""
 
 from __future__ import annotations
 
 import json
 import math
-import re
-import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -15,48 +18,30 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import UUID
 
+from pydantic import BaseModel, ConfigDict
+
 from okf_parser.bundle import Bundle, load_bundle
 from okf_parser.schema_contract import (
-    AnyNode,
     ContractNode,
     FieldContract,
     ListNode,
-    LiteralNode,
-    ObjectNode,
     ScalarNode,
     SchemaExportError,
-    TypeContract,
+    contracts_from_json,
 )
-from okf_parser.schema_export import build_schema_contracts
+from okf_parser.schema_export import SCHEMA_ERRORS, SchemaRequest, native_schema
 
 if TYPE_CHECKING:
     from types import ModuleType
 
     from graphql import GraphQLSchema
 
-_GRAPHQL_NAME_RE = re.compile(r"^[_A-Za-z][_0-9A-Za-z]*$")
-_GENERIC_FIELDS = frozenset(
-    {
-        "id",
-        "logicalKey",
-        "path",
-        "type",
-        "title",
-        "description",
-        "sourceDigest",
-        "parsedDigest",
-        "body",
-        "frontmatter",
-        "links",
-        "reverseLinks",
-        "diagnostics",
-    }
-)
 _GRAPHQL_INSTALL_MESSAGE = (
     "GraphQL execution requires the optional dependency; install okf-parser[graphql]"
 )
 _MAX_PAGE_SIZE = 1000
 _PAGINATION_MESSAGE = "GraphQL pagination requires 0 <= offset and 1 <= first <= 1000"
+_SMALL_INTEGERS = frozenset({"TINYINT", "SMALLINT", "INTEGER", "UTINYINT", "USMALLINT"})
 
 
 class GraphQLAdapterUnavailableError(RuntimeError):
@@ -84,8 +69,24 @@ class _ProjectedField:
 
 @dataclass(frozen=True, slots=True)
 class _Projection:
+    sdl: str
     type_names: dict[str, str]
     fields: dict[str, tuple[_ProjectedField, ...]]
+
+
+class _GraphqlType(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    name: str
+    fields: dict[str, str]
+
+
+class _GraphqlAnswer(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    sdl: str
+    types: dict[str, _GraphqlType]
+    contracts: list[object]
 
 
 def _graphql_module() -> ModuleType:
@@ -95,90 +96,45 @@ def _graphql_module() -> ModuleType:
         raise GraphQLAdapterUnavailableError(_GRAPHQL_INSTALL_MESSAGE) from exc
 
 
-def _ascii_identifier(value: str, prefix: str) -> str:
-    normalized = unicodedata.normalize("NFKD", value)
-    ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
-    identifier = re.sub(r"[^_0-9A-Za-z]", "_", ascii_value)
-    identifier = re.sub(r"_+", "_", identifier).strip("_")
-    if not identifier:
-        identifier = prefix
-    if identifier[0].isdigit():
-        identifier = f"{prefix}_{identifier}"
-    if identifier.startswith("__"):
-        identifier = f"{prefix}_{identifier.lstrip('_') or prefix}"
-    return identifier
-
-
-def _type_graphql_name(contract: TypeContract) -> str:
-    return _ascii_identifier(contract.model_name, "Concept")
-
-
-def _field_graphql_name(field_name: str) -> str:
-    if (
-        _GRAPHQL_NAME_RE.fullmatch(field_name) is not None
-        and field_name not in _GENERIC_FIELDS
-        and not field_name.startswith("__")
-    ):
-        return field_name
-    return f"field_{_ascii_identifier(field_name, 'value')}"
-
-
-def _projection(contracts: Sequence[TypeContract]) -> _Projection:
+def _native_projection(
+    path: str,
+    exclude: Sequence[str],
+    *,
+    infer_types: bool,
+    casts: Sequence[str],
+    spec_template: str | None,
+) -> _Projection:
+    result = native_schema(
+        SchemaRequest(
+            path=path,
+            target="graphql",
+            exclude=tuple(exclude),
+            infer_types=infer_types,
+            casts=tuple(casts),
+            spec_template=spec_template,
+        ),
+        {**SCHEMA_ERRORS, "graphql_name_collision": GraphQLNameCollisionError},
+    )
+    answer = _GraphqlAnswer.model_validate(result)
+    contracts = contracts_from_json({"contracts": answer.contracts})
     type_names: dict[str, str] = {}
-    type_owners: dict[str, str] = {}
     fields: dict[str, tuple[_ProjectedField, ...]] = {}
-
     for contract in contracts:
-        type_name = _type_graphql_name(contract)
-        previous_type = type_owners.get(type_name)
-        if previous_type is not None and previous_type != contract.concept_type:
-            message = (
-                f"concept types {previous_type!r} and {contract.concept_type!r} "
-                f"both map to GraphQL type {type_name!r}"
-            )
-            raise GraphQLNameCollisionError(message)
-        type_owners[type_name] = contract.concept_type
-        type_names[contract.concept_type] = type_name
-
-        projected: list[_ProjectedField] = []
-        field_owners: dict[str, str] = {}
-        for field_contract in contract.root.fields:
-            if field_contract.name in {"type", "title", "description"}:
-                continue
-            graphql_name = _field_graphql_name(field_contract.name)
-            previous_field = field_owners.get(graphql_name)
-            if previous_field is not None and previous_field != field_contract.name:
-                message = (
-                    f"fields {contract.concept_type}.{previous_field} and "
-                    f"{contract.concept_type}.{field_contract.name} both map to "
-                    f"GraphQL field {type_name}.{graphql_name}"
-                )
-                raise GraphQLNameCollisionError(message)
-            field_owners[graphql_name] = field_contract.name
-            projected.append(_ProjectedField(field_contract.name, graphql_name, field_contract))
-        fields[contract.concept_type] = tuple(projected)
-
-    return _Projection(type_names, fields)
-
-
-def _is_graphql_int(node: ScalarNode) -> bool:
-    declared = node.declared_type
-    if declared is None:
-        return False
-    return declared.family == "integer" and declared.sql.upper() in {
-        "TINYINT",
-        "SMALLINT",
-        "INTEGER",
-        "UTINYINT",
-        "USMALLINT",
-    }
+        graphql_type = answer.types[contract.concept_type]
+        type_names[contract.concept_type] = graphql_type.name
+        by_original = {field.name: field for field in contract.root.fields}
+        fields[contract.concept_type] = tuple(
+            _ProjectedField(original, graphql_name, by_original[original])
+            for graphql_name, original in graphql_type.fields.items()
+        )
+    return _Projection(answer.sdl, type_names, fields)
 
 
 def _scalar_graphql_type(node: ScalarNode) -> str:
     declared = node.declared_type
     if declared is not None:
         if declared.family == "integer":
-            return "Int" if _is_graphql_int(node) else "BigInt"
+            return "Int" if declared.sql.upper() in _SMALL_INTEGERS else "BigInt"
         declared_types = {
             "string": "String",
             "boolean": "Boolean",
@@ -190,7 +146,6 @@ def _scalar_graphql_type(node: ScalarNode) -> str:
             "uuid": "UUID",
         }
         return declared_types.get(declared.family, "JSON")
-
     observed_types = {
         "string": "String",
         "boolean": "Boolean",
@@ -202,116 +157,6 @@ def _scalar_graphql_type(node: ScalarNode) -> str:
     return observed_types[node.kind]
 
 
-def _node_graphql_type(node: ContractNode) -> str:
-    if isinstance(node, ScalarNode):
-        return _scalar_graphql_type(node)
-    if isinstance(node, LiteralNode):
-        return "String"
-    if isinstance(node, ListNode):
-        item = _node_graphql_type(node.item)
-        if not node.item_nullable:
-            item = f"{item}!"
-        return f"[{item}]"
-    if isinstance(node, (AnyNode, ObjectNode)):
-        return "JSON"
-    message = f"unsupported GraphQL contract node: {type(node).__name__}"
-    raise TypeError(message)
-
-
-def _field_graphql_type(field_contract: FieldContract) -> str:
-    rendered = _node_graphql_type(field_contract.value)
-    if field_contract.required and not field_contract.nullable:
-        return f"{rendered}!"
-    return rendered
-
-
-def render_graphql_sdl(contracts: Sequence[TypeContract]) -> str:
-    """Render deterministic read-only GraphQL SDL from shared TypeContract objects."""
-    projection = _projection(contracts)
-    lines = [
-        "scalar JSON",
-        "scalar BigInt",
-        "scalar Decimal",
-        "scalar Date",
-        "scalar DateTime",
-        "scalar UUID",
-        "",
-        "directive @okfType(name: String!) on OBJECT",
-        "directive @okfField(name: String!) on FIELD_DEFINITION",
-        "",
-        "type Link {",
-        "  sourceId: ID!",
-        "  rawTarget: String!",
-        "  targetId: ID",
-        "  exists: Boolean!",
-        "  origin: String!",
-        "}",
-        "",
-        "type Diagnostic {",
-        "  code: String!",
-        "  severity: String!",
-        "  path: String!",
-        "  message: String!",
-        "}",
-        "",
-        "interface Concept {",
-        "  id: ID!",
-        "  logicalKey: String",
-        "  path: String!",
-        "  type: String!",
-        "  title: String",
-        "  description: String",
-        "  sourceDigest: String!",
-        "  parsedDigest: String!",
-        "  body: String!",
-        "  frontmatter: JSON!",
-        "  links: [Link!]!",
-        "  reverseLinks: [Link!]!",
-        "  diagnostics: [Diagnostic!]!",
-        "}",
-        "",
-    ]
-    generic_lines = [
-        "  id: ID!",
-        "  logicalKey: String",
-        "  path: String!",
-        "  type: String!",
-        "  title: String",
-        "  description: String",
-        "  sourceDigest: String!",
-        "  parsedDigest: String!",
-        "  body: String!",
-        "  frontmatter: JSON!",
-        "  links: [Link!]!",
-        "  reverseLinks: [Link!]!",
-        "  diagnostics: [Diagnostic!]!",
-    ]
-    for contract in contracts:
-        type_name = projection.type_names[contract.concept_type]
-        authored_type = json.dumps(contract.concept_type, ensure_ascii=False)
-        lines.append(f"type {type_name} implements Concept @okfType(name: {authored_type}) {{")
-        lines.extend(generic_lines)
-        for projected in projection.fields[contract.concept_type]:
-            field_type = _field_graphql_type(projected.contract)
-            if projected.graphql_name == projected.original_name:
-                lines.append(f"  {projected.graphql_name}: {field_type}")
-            else:
-                original = json.dumps(projected.original_name, ensure_ascii=False)
-                lines.append(
-                    f"  {projected.graphql_name}: {field_type} @okfField(name: {original})"
-                )
-        lines.extend(["}", ""])
-    lines.extend(
-        [
-            "type Query {",
-            "  concept(id: ID!): Concept",
-            "  concepts(type: String, first: Int = 50, offset: Int = 0): [Concept!]!",
-            "}",
-        ]
-    )
-    return "\n".join(lines) + "\n"
-
-
 def export_graphql_sdl(
     path: str,
     exclude: Sequence[str] = (),
@@ -321,14 +166,13 @@ def export_graphql_sdl(
     spec_template: str | None = None,
 ) -> str:
     """Export deterministic GraphQL SDL without requiring the GraphQL runtime extra."""
-    contracts = build_schema_contracts(
+    return _native_projection(
         path,
         exclude,
         infer_types=infer_types,
         casts=casts,
         spec_template=spec_template,
-    )
-    return render_graphql_sdl(contracts)
+    ).sdl
 
 
 def _typed_values(
@@ -542,16 +386,15 @@ class GraphQLReadAdapter:
     ) -> None:
         """Build a host-embeddable read-only schema for one OKF bundle snapshot."""
         bundle = load_bundle(Path(path), exclude)
-        contracts = build_schema_contracts(
+        projection = _native_projection(
             path,
             exclude,
             infer_types=infer_types,
             casts=casts,
             spec_template=spec_template,
         )
-        projection = _projection(contracts)
         runtime = _Runtime(bundle, projection, _typed_values(bundle, spec_template))
-        self._schema = _build_executable_schema(render_graphql_sdl(contracts), runtime)
+        self._schema = _build_executable_schema(projection.sdl, runtime)
 
     @property
     def schema(self) -> GraphQLSchema:
@@ -600,5 +443,4 @@ __all__ = [
     "GraphQLResult",
     "build_graphql_schema",
     "export_graphql_sdl",
-    "render_graphql_sdl",
 ]

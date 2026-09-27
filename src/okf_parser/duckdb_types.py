@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from okf_parser.schema_lexemes import CastKind
+    from okf_parser.schema_contract import CastKind
 
 type DuckDBTypeFamily = Literal[
     "string",

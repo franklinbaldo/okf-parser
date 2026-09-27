@@ -299,10 +299,19 @@ commit messages as OKF and type packs move with their commands; cyclopts and
   read, the plan, the canonical rendering, `verify-identical` by parsed
   digest, the preview token (now bound to DuckDB's text of every value) and
   the staged writes. The CLI command and MCP `import_*` tools are native and
-  `import_bundle()` is a wrapper; only `schema` is still delegated.
-- **6b:** the schema exporters (JSON Schema, Zod, Pydantic source, GraphQL SDL).
-- **6c:** type packs and git commit messages; cyclopts, `mcp_bridge.py`,
-  markdown-it-py and PyYAML leave.
+  `import_bundle()` is a wrapper.
+- **6b (0.48.0):** the schema exporters run in the binary (`okf_db::schema`):
+  observation compilation and lexeme inference, declared `.schema.sql` types,
+  relational references (`--refs key|embed`), projection documents, and the
+  JSON Schema, Zod and GraphQL SDL renderers. `schema` is native on the CLI
+  and in MCP, so `mcp_bridge.py` is deleted and the server delegates nothing.
+  Pydantic stays Python: the binary pipes its contracts to
+  `python -m okf_parser.pydantic_source`, and `build_pydantic_models()` and
+  the executable GraphQL adapter decode the same contracts over `__schema`.
+  The inference corpus (`conformance/schema-inference.json`) is pinned by a
+  Rust test.
+- **6c:** type packs and git commit messages; cyclopts, markdown-it-py and
+  PyYAML leave.
 
 ## Relationship to other RFCs
 
