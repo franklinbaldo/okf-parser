@@ -293,7 +293,6 @@ version = "0.48.0"
 source = { editable = "." }
 dependencies = [
     { name = "cyclopts" },
-    { name = "duckdb" },
     { name = "markdown-it-py" },
     { name = "mdformat" },
     { name = "mdformat-frontmatter" },
@@ -312,6 +311,7 @@ networkx = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "duckdb" },
     { name = "graphql-core" },
     { name = "jsonschema" },
     { name = "networkx" },
@@ -325,7 +325,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cyclopts", specifier = ">=4.22,<5" },
-    { name = "duckdb", specifier = ">=1.4,<2" },
     { name = "graphql-core", marker = "extra == 'graphql'", specifier = ">=3.2,<4" },
     { name = "markdown-it-py", specifier = ">=4,<5" },
     { name = "mdformat", specifier = ">=1,<1.1" },
@@ -339,6 +338,7 @@ provides-extras = ["graphql", "networkx"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "duckdb", specifier = ">=1.4,<2" },
     { name = "graphql-core", specifier = ">=3.2,<4" },
     { name = "jsonschema", specifier = ">=4.26,<5" },
     { name = "networkx", specifier = ">=3.4,<4" },

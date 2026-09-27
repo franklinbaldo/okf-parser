@@ -23,6 +23,7 @@ use tokio::io::AsyncWriteExt;
 
 use okf_db::export::ExportOptions;
 use okf_db::query::QueryOptions;
+use okf_engine::search::{Detail, Mode, SearchOutput, SearchRequest};
 
 use crate::{commands, python};
 
@@ -67,6 +68,60 @@ pub struct CheckArgs {
     relational_schema: Option<PathBuf>,
     #[serde(default)]
     classify: bool,
+}
+
+/// At most this many passages answer a `search` call.
+const SEARCH_LIMIT: usize = 100;
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchModeArg {
+    /// Ranked by BM25 over case-folded words.
+    #[default]
+    Lexical,
+    /// Lines containing the case-folded query.
+    Literal,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SearchDetailArg {
+    /// `location<TAB>snippet` rows: the cheapest answer.
+    #[default]
+    Compact,
+    /// Rows with a `score` column.
+    Score,
+    /// Structured hits with concept id, type, body lines and source digest.
+    Full,
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SearchArgs {
+    path: PathBuf,
+    query: String,
+    #[serde(default)]
+    mode: SearchModeArg,
+    /// Answer at most this many passages (1-100).
+    #[serde(default = "default_search_limit")]
+    limit: usize,
+    /// Widen each hit by this many body lines on each side.
+    #[serde(default)]
+    context: usize,
+    /// Only concepts of this type.
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    concept_type: Option<String>,
+    /// Only documents matching this gitignore-style pattern.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    path_glob: Option<String>,
+    #[serde(default)]
+    detail: SearchDetailArg,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exclude: Option<Vec<String>>,
+}
+
+const fn default_search_limit() -> usize {
+    10
 }
 
 /// At most this many rows answer a `sql` call unless it asks for fewer.
@@ -510,6 +565,52 @@ impl OkfServer {
     }
 
     #[tool(
+        description = "Search concept bodies offline. Each non-blank body line is a passage; \
+            `lexical` ranks them by BM25, `literal` keeps those containing the query. \
+            Compact rows are `location<TAB>snippet` with locations like `path#B12`; \
+            `full` adds concept id, type and source digest. Use `context` to read around a hit.",
+        annotations(
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
+        )
+    )]
+    async fn search(&self, Parameters(args): Parameters<SearchArgs>) -> CallToolResult {
+        let answer = tokio::task::spawn_blocking(move || {
+            let request = SearchRequest {
+                query: &args.query,
+                mode: match args.mode {
+                    SearchModeArg::Lexical => Mode::Lexical,
+                    SearchModeArg::Literal => Mode::Literal,
+                },
+                limit: args.limit.clamp(1, SEARCH_LIMIT),
+                context: args.context,
+                concept_type: args.concept_type.as_deref(),
+                path_glob: args.path_glob.as_deref(),
+                detail: match args.detail {
+                    SearchDetailArg::Compact => Detail::Compact,
+                    SearchDetailArg::Score => Detail::Score,
+                    SearchDetailArg::Full => Detail::Full,
+                },
+            };
+            commands::search(&args.path, exclude(&args.exclude), &request)
+        })
+        .await;
+        match answer {
+            Ok(Ok(SearchOutput::Rows(rows))) => {
+                CallToolResult::success(vec![ContentBlock::text(rows)])
+            }
+            Ok(Ok(full)) => match serde_json::to_value(full) {
+                Ok(value) => CallToolResult::structured(value),
+                Err(error) => tool_error(&error),
+            },
+            Ok(Err(error)) => tool_error(&error),
+            Err(error) => tool_error(&error),
+        }
+    }
+
+    #[tool(
         description = "Summarize resolved concept relationships.",
         annotations(
             read_only_hint = true,
@@ -773,6 +874,7 @@ mod tests {
                 "init_preview",
                 "inventory",
                 "schema",
+                "search",
                 "sql",
             ]
         );
@@ -781,7 +883,7 @@ mod tests {
     #[test]
     fn allow_write_adds_exactly_the_commit_tools() {
         let names = tool_names(&OkfServer::new(true, PathBuf::from("python")));
-        assert_eq!(names.len(), 14);
+        assert_eq!(names.len(), 15);
         for tool in WRITE_TOOLS {
             assert!(names.iter().any(|name| name == tool), "missing {tool}");
         }

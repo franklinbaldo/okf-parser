@@ -106,7 +106,11 @@ jobs:
           } > "$RUNNER_TEMP/fixture/note.md"
           "$bin/okf-parser" --version
           "$bin/okf-parser" check "$RUNNER_TEMP/fixture"
+          "$bin/okf-parser" search "$RUNNER_TEMP/fixture" note
+          "$bin/okf-parser" sql "$RUNNER_TEMP/fixture" "SELECT concept_type FROM concepts"
           "$bin/okf-parser" duckdb "$RUNNER_TEMP/fixture" "$RUNNER_TEMP/bundle.duckdb"
+          # The wheel does not depend on duckdb; install it only to read the export back.
+          uv pip install --python "$python" --quiet "duckdb>=1.4,<2"
           BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$python" - <<'PY'
           import os
           import duckdb
@@ -181,7 +185,11 @@ jobs:
           } > "$RUNNER_TEMP/fixture/note.md"
           "$bin/okf-parser" --version
           "$bin/okf-parser" check "$RUNNER_TEMP/fixture"
+          "$bin/okf-parser" search "$RUNNER_TEMP/fixture" note
+          "$bin/okf-parser" sql "$RUNNER_TEMP/fixture" "SELECT concept_type FROM concepts"
           "$bin/okf-parser" duckdb "$RUNNER_TEMP/fixture" "$RUNNER_TEMP/bundle.duckdb"
+          # The wheel does not depend on duckdb; install it only to read the export back.
+          uv pip install --python "$python" --quiet "duckdb>=1.4,<2"
           BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$python" - <<'PY'
           import os
           import duckdb
@@ -263,7 +271,11 @@ jobs:
           } > "$RUNNER_TEMP/fixture/note.md"
           "$bin/okf-parser" --version
           "$bin/okf-parser" check "$RUNNER_TEMP/fixture"
+          "$bin/okf-parser" search "$RUNNER_TEMP/fixture" note
+          "$bin/okf-parser" sql "$RUNNER_TEMP/fixture" "SELECT concept_type FROM concepts"
           "$bin/okf-parser" duckdb "$RUNNER_TEMP/fixture" "$RUNNER_TEMP/bundle.duckdb"
+          # The wheel does not depend on duckdb; install it only to read the export back.
+          uv pip install --python "$python" --quiet "duckdb>=1.4,<2"
           BUNDLE="$RUNNER_TEMP/bundle.duckdb" "$python" - <<'PY'
           import os
           import duckdb

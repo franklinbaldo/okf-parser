@@ -33,6 +33,7 @@ type JsonObject = dict[str, Any]
 
 DEFAULT_TOOLS = {
     "check",
+    "search",
     "sql",
     "inventory",
     "graph",
@@ -44,6 +45,7 @@ DEFAULT_TOOLS = {
 }
 NATIVE_TOOLS = {
     "check",
+    "search",
     "inventory",
     "graph",
     "sql",
@@ -188,11 +190,26 @@ def test_mcp_public_schemas_keep_aliases_and_preview_write_pairs_match() -> None
 
 
 @native
+def test_search_answers_rows_as_text_and_full_results_as_structure(tmp_path: Path) -> None:
+    (tmp_path / "a.md").write_text("---\ntype: Note\n---\nretry budget\n", encoding="utf-8")
+    with McpSession() as session:
+        rows = session.call("search", {"path": str(tmp_path), "query": "retry"})
+        full = session.call(
+            "search", {"path": str(tmp_path), "query": "retry", "detail": "full", "type": "Note"}
+        )
+
+    assert rows["isError"] is False
+    assert rows["content"][0]["text"] == "location\tsnippet\na.md#B1\tretry budget"
+    assert full["structuredContent"]["results"][0]["concept_type"] == "Note"
+
+
+@native
 def test_mcp_effect_annotations_describe_maximum_possible_effect() -> None:
     with McpSession("--allow-write") as session:
         tools = session.tools()
     expected = {
         "check": (True, False, True, False),
+        "search": (True, False, True, False),
         "sql": (True, False, True, False),
         "inventory": (True, False, True, False),
         "graph": (True, False, True, False),

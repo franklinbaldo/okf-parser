@@ -273,6 +273,36 @@ script or a write conflict.
 
 MCP tools: `apply_preview`; `apply_write` with `--allow-write`. Both accept `spec_template`.
 
+## `search`
+
+```bash
+uv run okf-parser search path/to/bundle "QUERY" [--mode lexical|literal] [--limit N] [--context N] [--type TYPE] [--path PATTERN] [--detail compact|score|full] [--exclude PATTERN]...
+```
+
+Searches concept bodies offline (RFC 0016). Every non-blank body line is a
+passage. `lexical` (the default) ranks passages with BM25 over Unicode
+case-folded words, runs of letters, digits and `_`; `literal` keeps the lines
+that contain the case-folded query, so `STRASSE` finds `Straße`. Ties fall back
+to path, then line, so the answer is deterministic.
+
+The default answer is tab-separated rows, cheap for agents and `cut` alike:
+
+```text
+location	snippet
+runbooks/deploy.md#B12	Keep the retry budget under 3 attempts.
+```
+
+A location is the document path (`%` and `#` percent-escaped) and its body
+line, `#B<start>-B<end>` when `--context N` widens each hit by `N` lines on each
+side; context is added after the `--limit` best passages are chosen. `--detail
+score` adds a `score` column; `--detail full` prints JSON with each hit's rank,
+score, concept id and type, body lines, source digest and text. `--type`
+filters by concept type and `--path` by one gitignore-style pattern
+(`legal/**`).
+
+MCP tool: `search`, read-only, with `limit` capped at 100; compact rows come
+back as text. The Python API is `Bundle.search()`.
+
 ## `sql`
 
 ```bash
@@ -350,13 +380,13 @@ Tool arguments are validated at the server: an unknown key is a tool error,
 and defaulted flags keep concrete, non-nullable schemas (`digests` defaults to
 `false`, `database` to `knowledge.duckdb`). The legacy
 `sse` transport is gone: the MCP specification deprecated it in favor of
-Streamable HTTP. `check`, `inventory`, `graph`, `sql`, `apply_*`, `init_*`
+Streamable HTTP. `check`, `inventory`, `graph`, `search`, `sql`, `apply_*`, `init_*`
 and `duckdb_export` are answered natively by the binary. The tools still written in
 Python (`schema`, `format_*`, `import_*`) are delegated to
 `python -m okf_parser.mcp_bridge`, which runs the CLI's own service function.
 The interpreter is the one installed next to the binary; set `OKF_PYTHON` to
 point a binary outside any Python environment at one. The default
-profile exposes `check`, `inventory`, `graph`, `schema`, `format_check`,
+profile exposes `check`, `inventory`, `graph`, `search`, `sql`, `schema`, `format_check`,
 `apply_preview`, `init_preview`, and `import_preview`. `--allow-write` additionally
 exposes `format_write`, `apply_write`, `init_write`, `import_write`, and
 `duckdb_export`. Because `schema` may execute trusted RFC 0006

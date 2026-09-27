@@ -58,6 +58,8 @@ uv run okf-parser check path/to/bundle
 uv run okf-parser check path/to/bundle --relational-schema okf.schema.sql
 uv run okf-parser inventory path/to/bundle
 uv run okf-parser graph path/to/bundle
+uv run okf-parser search path/to/bundle "retry budget" --context 1
+uv run okf-parser sql path/to/bundle "SELECT concept_type, count(*) FROM concepts GROUP BY 1"
 uv run okf-parser format path/to/bundle
 uv run okf-parser format path/to/bundle --write
 uv run okf-parser duckdb path/to/bundle knowledge.duckdb
@@ -233,10 +235,10 @@ Python accepts `load_bundle(root, rust_core=Path(".../okf-parser"))`; TypeScript
 `loadBundle(root, { rustCore: ".../okf-core" })`. The native process owns discovery,
 bounded parallel reads, YAML/frontmatter, Markdown facts, validation, link resolution,
 and content digests. The packaged `okf-parser` executable is the single Python command
-and declares the whole command line: `check`, `inventory`, `graph`, `init`, `serve` and the
-private engine operations run natively, and only the commands that still need DuckDB or the
-Python formatter (`import`, `schema`, `format`, `apply`, `duckdb`, the type packs,
-`check --relational-schema` and `init --infer-schema`) are handed to the Python CLI. Omitting the option keeps the portable language-native fallback.
+and declares the whole command line: `check`, `inventory`, `graph`, `search`, `sql`,
+`apply`, `duckdb`, `init`, `serve` and the private engine operations run natively, and only
+the commands still written in Python (`import`'s document building, `schema`, `format` and
+the type packs) are handed to the Python CLI. Omitting the option keeps the portable language-native fallback.
 
 The composite action installs a pinned uv version and executes the same
 `validate_path()` function used by the Python API, CLI, and MCP server.
@@ -295,17 +297,13 @@ uv run okf-parser duckdb knowledge/ knowledge.duckdb
 or, from Python:
 
 ```python
-import duckdb
-
+from okf_parser.bundle import load_bundle
 from okf_parser.service import export_duckdb
 
-export_duckdb("knowledge/", "knowledge.duckdb")
+export_duckdb("knowledge/", "knowledge.duckdb")  # opens in any DuckDB client
 
-duckdb.sql("""
-    SELECT concept_type, count(*)
-    FROM 'knowledge.duckdb'.okf.concepts
-    GROUP BY concept_type
-""").show()
+bundle = load_bundle("knowledge/")  # or query the snapshot directly
+bundle.sql("SELECT concept_type, count(*) FROM concepts GROUP BY 1").to_dicts()
 ```
 
 The export creates `okf.concepts`, `okf.links`, `okf.reserved`, and

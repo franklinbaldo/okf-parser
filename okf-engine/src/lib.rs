@@ -2,6 +2,7 @@ pub mod check;
 pub mod engine;
 pub mod frontmatter;
 pub mod graph;
+pub mod search;
 pub mod specs;
 pub mod write;
 mod yaml;

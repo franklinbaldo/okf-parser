@@ -126,8 +126,8 @@ def test_top_level_help_lists_native_and_delegated_commands() -> None:
     )
 
     listed = {line.split()[0] for line in completed.stdout.splitlines() if line.startswith("  ")}
-    native = {"check", "sql", "inventory", "graph", "init", "duckdb", "serve"}
-    delegated = {"import", "schema", "format", "apply", "packs", "add-pack"}
+    native = {"check", "search", "sql", "apply", "inventory", "graph", "init", "duckdb", "serve"}
+    delegated = {"import", "schema", "format", "packs", "add-pack"}
     assert native | delegated <= listed
     assert not any(name.startswith("__") for name in listed)
 
@@ -139,3 +139,20 @@ def test_a_delegated_command_is_answered_by_the_python_cli(tmp_path: Path) -> No
 
     assert code == 0
     assert payload["markdown_count"] == 1
+
+
+def test_search_prints_rows_and_full_json(tmp_path: Path) -> None:
+    _write(tmp_path / "a.md", "---\ntype: Note\n---\nintro\nthe retry budget\n")
+    assert _BINARY is not None
+
+    rows = subprocess.run(  # noqa: S603 - fixed argv to the binary under test
+        [str(_BINARY), "search", str(tmp_path), "RETRY", "--context", "1"],
+        capture_output=True,
+        check=True,
+        encoding="utf-8",
+    )
+    code, payload = _run("search", str(tmp_path), "retry", "--detail", "full")
+
+    assert rows.stdout == "location\tsnippet\na.md#B1-B2\tintro the retry budget\n"
+    assert code == 0
+    assert payload["results"][0]["location"] == "a.md#B2"

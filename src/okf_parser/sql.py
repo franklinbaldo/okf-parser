@@ -204,7 +204,8 @@ class _Result(BaseModel):
     truncated: bool
 
 
-def _records(bundle: Bundle) -> Mapping[str, JsonValue]:
+def bundle_records(bundle: Bundle) -> Mapping[str, JsonValue]:
+    """The records a `Bundle` holds, as the binary's requests carry them."""
     return {
         "root": str(bundle.root),
         "concepts": [record.model_dump(mode="json") for record in bundle.concepts],
@@ -226,7 +227,7 @@ def query_bundle(
     result = native_result(
         "__sql",
         _SqlRequest(
-            bundle=dict(_records(bundle)),
+            bundle=dict(bundle_records(bundle)),
             query=query,
             spec_template=spec_template,
             limit=limit,

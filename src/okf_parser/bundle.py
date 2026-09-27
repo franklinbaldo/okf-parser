@@ -29,6 +29,7 @@ from okf_parser.rust_core import (
     native_result,
     rust_load_bundle,
 )
+from okf_parser.search import search_bundle
 from okf_parser.sql import query_bundle
 from okf_parser.type_specs import SpecTemplateError
 
@@ -37,6 +38,7 @@ if TYPE_CHECKING:
 
     import networkx as nx
 
+    from okf_parser.search import SearchDetail, SearchMode
     from okf_parser.sql import SqlResult
 
 
@@ -90,6 +92,37 @@ class Bundle:
         Python values by their DuckDB type (``Decimal``, ``date``, ...).
         """
         return query_bundle(self, query, spec_template=spec_template, limit=limit)
+
+    def search(  # noqa: PLR0913 - the RFC 0016 request is intentionally flat.
+        self,
+        query: str,
+        *,
+        mode: SearchMode = "lexical",
+        limit: int = 10,
+        context: int = 0,
+        concept_type: str | None = None,
+        path_glob: str | None = None,
+        detail: SearchDetail = "compact",
+    ) -> str | dict[str, object]:
+        """Search this bundle's body lines (RFC 0016), offline.
+
+        ``lexical`` ranks passages (non-blank body lines) with BM25 over
+        case-folded words; ``literal`` keeps those containing the query.
+        ``compact`` answers ``location<TAB>snippet`` rows (``score`` adds a
+        score column); ``full`` answers a mapping with each hit's concept,
+        body lines and source digest. ``context`` widens each hit by whole
+        body lines after the ``limit`` best are chosen.
+        """
+        return search_bundle(
+            self,
+            query,
+            mode=mode,
+            limit=limit,
+            context=context,
+            concept_type=concept_type,
+            path_glob=path_glob,
+            detail=detail,
+        )
 
     @property
     def is_conformant(self) -> bool:

@@ -31,7 +31,6 @@ classifiers = [
 ]
 dependencies = [
   "cyclopts>=4.22,<5",
-  "duckdb>=1.4,<2",
   "markdown-it-py>=4,<5",
   # okf_parser.markdown_style overrides mdformat's ordered-list renderer, which
   # needs symbols mdformat does not export. Keep this range as narrow as that
@@ -59,6 +58,8 @@ journalism = "okf_parser.type_packs:journalism_pack"
 
 [dependency-groups]
 dev = [
+  # Tests read the databases `okf-parser duckdb` writes.
+  "duckdb>=1.4,<2",
   "graphql-core>=3.2,<4",
   "jsonschema>=4.26,<5",
   "networkx>=3.4,<4",
