@@ -213,7 +213,7 @@ pub fn import_source(request: &ImportRequest<'_>) -> Result<ImportReport, Import
     Ok(report)
 }
 
-type Row<'a> = &'a [Option<String>];
+type Row<'a> = &'a [Option<Value>];
 
 /// Each row's bundle-relative destination, in source order.
 type Plan<'a> = Vec<(String, Row<'a>)>;
@@ -242,9 +242,18 @@ fn plan<'a>(
     for (index, row) in source.rows.iter().enumerate() {
         let concept_id = match id_index {
             None => format!("{index:06}"),
-            Some(position) => match row[position].as_deref().map(str::trim) {
-                Some(id) if !id.is_empty() => row[position].clone().unwrap_or_default(),
-                _ => {
+            Some(position) => match row[position].as_ref() {
+                Some(value) => {
+                    let id = source_scalar_text(value);
+                    if id.trim().is_empty() {
+                        return Err(ImportError::MissingId {
+                            row: index,
+                            column: columns[position].clone(),
+                        });
+                    }
+                    id
+                }
+                None => {
                     return Err(ImportError::MissingId {
                         row: index,
                         column: columns[position].clone(),
@@ -267,13 +276,40 @@ fn plan<'a>(
     Ok((plan, duplicates))
 }
 
-/// The row's document: `type`, then every non-null column as text.
+fn source_scalar_text(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::Null => String::new(),
+        Value::Array(_) | Value::Object(_) => value.to_string(),
+    }
+}
+
+/// Preserve collection shape while keeping the OKF scalar contract: every
+/// number/boolean leaf is stored as its authored string spelling.
+fn okf_value(value: &Value) -> Value {
+    match value {
+        Value::Bool(_) | Value::Number(_) => Value::String(source_scalar_text(value)),
+        Value::Array(items) => Value::Array(items.iter().map(okf_value).collect()),
+        Value::Object(mapping) => Value::Object(
+            mapping
+                .iter()
+                .map(|(key, value)| (key.clone(), okf_value(value)))
+                .collect(),
+        ),
+        Value::Null | Value::String(_) => value.clone(),
+    }
+}
+
+/// The row's document: `type`, then every non-null column, preserving list
+/// and struct shape while normalizing scalar leaves to OKF strings.
 fn render(concept_type: &str, columns: &[String], row: Row<'_>) -> Result<String, ImportError> {
     let mut frontmatter = Map::new();
     frontmatter.insert("type".to_owned(), Value::String(concept_type.to_owned()));
     for (column, value) in columns.iter().zip(row) {
         if let Some(value) = value {
-            frontmatter.insert(column.clone(), Value::String(value.clone()));
+            frontmatter.insert(column.clone(), okf_value(value));
         }
     }
     render_document(&frontmatter, "").map_err(ImportError::Render)
@@ -470,6 +506,42 @@ mod tests {
         assert_eq!(report.matched_existing, ["customer-account/x.md"]);
         assert_eq!(report.conflicting_existing, ["customer-account/y.md"]);
         assert!(report.blocked() && !report.written);
+    }
+
+    #[test]
+    fn structured_source_values_keep_shape_and_scalar_leaves_stay_strings() {
+        let dir =
+            std::env::temp_dir().join(format!("okf-import-structured-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("bundle")).unwrap();
+        let source_path = dir.join("source.json");
+        fs::write(
+            &source_path,
+            r#"[{"id":"c-1","folders":["u1","u2"],"meta":{"city":"Porto Velho","number":42},"count":915,"active":true}]"#,
+        )
+        .unwrap();
+        let source = source_path.display().to_string();
+        let root = dir.join("bundle");
+
+        let preview = import_source(&request(&source, &root)).unwrap();
+        let report = import_source(&ImportRequest {
+            write: true,
+            expected_preview_token: Some(&preview.preview_token),
+            ..request(&source, &root)
+        })
+        .unwrap();
+
+        assert_eq!(report.created, ["customer-account/c-1.md"]);
+        let text = fs::read_to_string(root.join("customer-account/c-1.md")).unwrap();
+        let frontmatter = okf_engine::frontmatter_of(&text).unwrap();
+        assert_eq!(frontmatter["folders"], json!(["u1", "u2"]));
+        assert_eq!(
+            frontmatter["meta"],
+            json!({"city": "Porto Velho", "number": "42"})
+        );
+        assert_eq!(frontmatter["count"], "915");
+        assert_eq!(frontmatter["active"], "true");
+        let _ = fs::remove_dir_all(dir);
     }
 
     #[test]
