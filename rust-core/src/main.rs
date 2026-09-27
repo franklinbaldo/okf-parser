@@ -3,12 +3,10 @@ mod engine;
 mod mcp;
 mod protocol;
 mod python;
-use clap::{Args, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 use serde::Deserialize;
-use std::ffi::OsString;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
-use std::process::Command as ProcessCommand;
 
 use commands::SchemaFormat;
 use mcp::Transport;
@@ -366,12 +364,22 @@ enum Command {
         #[arg(long, value_name = "TEMPLATE")]
         spec_template: Option<String>,
     },
-    /// List opt-in OKF type packs registered by installed package metadata.
-    #[command(disable_help_flag = true)]
-    Packs(Delegated),
-    /// Preview or install an opt-in type pack into an ordinary OKF bundle.
-    #[command(name = "add-pack", disable_help_flag = true)]
-    AddPack(Delegated),
+    /// List the opt-in OKF type packs embedded in okf-parser.
+    Packs,
+    /// Preview or install a type pack's specification files into a bundle.
+    ///
+    /// Exits 1 when a pack file would replace different existing content;
+    /// nothing is written then.
+    #[command(name = "add-pack")]
+    AddPack {
+        /// An embedded pack's name, or a directory holding a `pack.json`.
+        pack: String,
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        /// Copy the planned files; without it, only preview.
+        #[arg(long)]
+        write: bool,
+    },
     /// Serve effect-aware MCP tools, exposing explicit commit tools only on opt-in.
     Serve {
         #[arg(long, value_enum, default_value_t = Transport::Stdio)]
@@ -388,12 +396,6 @@ enum Command {
         #[arg(long)]
         allow_write: bool,
     },
-}
-/// The unparsed arguments of a command the Python CLI answers.
-#[derive(Args)]
-struct Delegated {
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-    args: Vec<OsString>,
 }
 #[derive(Deserialize)]
 struct Legacy {
@@ -539,8 +541,16 @@ fn run() -> Outcome {
         Command::SchemaRequest => {
             serde_json::to_writer(io::stdout().lock(), &protocol::schema(&stdin_text()?)?)?;
         }
-        Command::Packs(_) | Command::AddPack(_) => {
-            return python_cli();
+        Command::Packs => {
+            let packs = okf_engine::packs::builtin()?;
+            let summaries: Vec<_> = packs.iter().map(okf_engine::packs::Pack::summary).collect();
+            return print(&serde_json::json!({ "packs": summaries }), 0);
+        }
+        Command::AddPack { pack, path, write } => {
+            let pack = okf_engine::packs::resolve(&pack)?;
+            let report = okf_engine::packs::install(&pack, &path, write)?;
+            let code = i32::from(!report.collisions.is_empty());
+            return print(&report, code);
         }
         Command::Check {
             path,
@@ -695,16 +705,6 @@ fn run() -> Outcome {
     Ok(0)
 }
 
-/// Hand the whole command line to the Python CLI and return its exit code.
-fn python_cli() -> Outcome {
-    let status = ProcessCommand::new(python::interpreter()?)
-        .arg("-m")
-        .arg("okf_parser.cli")
-        .args(std::env::args_os().skip(1))
-        .status()?;
-    Ok(status.code().unwrap_or(1))
-}
-
 fn main() {
     match run() {
         Ok(code) => std::process::exit(code),
@@ -745,15 +745,5 @@ mod tests {
             );
         }
         assert!(!help.contains("__"), "{help}");
-    }
-
-    #[test]
-    fn delegated_commands_keep_every_argument_unparsed() {
-        let cli =
-            Cli::try_parse_from(["okf-parser", "add-pack", "b", "--write", "--help"]).unwrap();
-        let Command::AddPack(Delegated { args }) = cli.command else {
-            panic!("add-pack should be delegated");
-        };
-        assert_eq!(args, ["b", "--write", "--help"]);
     }
 }

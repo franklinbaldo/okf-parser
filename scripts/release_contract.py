@@ -153,7 +153,7 @@ class ContentPolicy:
 
 
 _WHEEL_CONTENT_POLICY: Final = ContentPolicy(
-    required=("okf_parser/__init__.py", "okf_parser/cli.py", "okf_parser/parser.py"),
+    required=("okf_parser/__init__.py", "okf_parser/rust_core.py", "okf_parser/parser.py"),
     forbidden_prefixes=("tests/", "scripts/", "typescript/", "typescript-duckdb/"),
 )
 CONTENT_POLICIES: Final[dict[str, ContentPolicy]] = {

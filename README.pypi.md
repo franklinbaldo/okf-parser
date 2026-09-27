@@ -228,9 +228,9 @@ Python accepts `load_bundle(root, rust_core=Path(".../okf-parser"))`; TypeScript
 bounded parallel reads, YAML/frontmatter, Markdown facts, validation, link resolution,
 and content digests. The packaged `okf-parser` executable is the single Python command
 and declares the whole command line: `check`, `inventory`, `graph`, `search`, `sql`,
-`apply`, `format`, `import`, `duckdb`, `init`, `serve` and the private engine operations run natively, and only
-the commands still written in Python (`schema` and the type packs) are handed to the
-Python CLI. Omitting the option keeps the portable language-native fallback.
+`apply`, `format`, `import`, `schema`, `duckdb`, `init`, `packs`, `add-pack`, `serve`
+and the private engine operations all run natively. Omitting the option keeps the
+portable language-native fallback.
 
 The composite action installs a pinned uv version and executes the same
 `validate_path()` function used by the Python API, CLI, and MCP server.

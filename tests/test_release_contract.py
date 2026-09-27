@@ -111,7 +111,7 @@ def _tar_member(archive: tarfile.TarFile, name: str, data: bytes) -> None:
     archive.addfile(member, io.BytesIO(data))
 
 
-WHEEL_MEMBERS = ("okf_parser/__init__.py", "okf_parser/cli.py", "okf_parser/parser.py")
+WHEEL_MEMBERS = ("okf_parser/__init__.py", "okf_parser/rust_core.py", "okf_parser/parser.py")
 SDIST_MEMBERS = ("README.md", "pyproject.toml", "src/okf_parser/__init__.py")
 NPM_NATIVE_MEMBERS = ("README.md", "bin/okf-core")
 NPM_MEMBERS = (
@@ -298,13 +298,13 @@ def test_verify_contents_rejects_missing_module(tmp_path: Path) -> None:
     _write_artifacts(release)
     wheel = release / "python" / WHEEL_FILENAMES["python-wheel-linux-x86_64"]
     with zipfile.ZipFile(wheel) as archive:
-        kept = [name for name in archive.namelist() if not name.endswith("cli.py")]
+        kept = [name for name in archive.namelist() if not name.endswith("rust_core.py")]
         contents = {name: archive.read(name) for name in kept}
     with zipfile.ZipFile(wheel, mode="w") as archive:
         for name, data in contents.items():
             archive.writestr(name, data)
     build_manifest(tmp_path, release, BUILD_CONTEXT)
-    with pytest.raises(ContractError, match=re.escape("missing okf_parser/cli.py")):
+    with pytest.raises(ContractError, match=re.escape("missing okf_parser/rust_core.py")):
         verify_contents(tmp_path, release / "manifest.json")
 
 

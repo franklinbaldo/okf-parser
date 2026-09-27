@@ -3,6 +3,7 @@ pub mod engine;
 pub mod format;
 pub mod frontmatter;
 pub mod graph;
+pub mod packs;
 pub mod search;
 pub mod specs;
 pub mod write;

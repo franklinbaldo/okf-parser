@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from importlib.resources import files
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
@@ -30,8 +29,12 @@ BODY_EXAMPLES = (
 )
 
 
+_ENGINE = Path(__file__).parents[1] / "okf-engine"
+
+
 def _resource_text(path: str) -> str:
-    return files("okf_parser").joinpath(*path.split("/")).read_text(encoding="utf-8")
+    """Read a pack source file; the packs are embedded in the binary from here."""
+    return (_ENGINE / path).read_text(encoding="utf-8")
 
 
 def _resource_json(path: str) -> dict[str, object]:

@@ -310,7 +310,12 @@ commit messages as OKF and type packs move with their commands; cyclopts and
   the executable GraphQL adapter decode the same contracts over `__schema`.
   The inference corpus (`conformance/schema-inference.json`) is pinned by a
   Rust test.
-- **6c:** type packs and git commit messages; cyclopts, markdown-it-py and
+- **6c (0.48.0):** type packs are data: a directory with a `pack.json`
+  manifest. `packs` and `add-pack` run in the binary (`okf_engine::packs`),
+  which embeds the shipped packs and installs any local pack directory; the
+  `okf_parser.packs` entry-point group is gone. With the last delegated
+  command native, `okf_parser.cli` and cyclopts leave.
+- **6d:** the document parser and git commit messages; markdown-it-py and
   PyYAML leave.
 
 ## Relationship to other RFCs
