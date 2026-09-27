@@ -573,6 +573,16 @@ fn digests(text: &str, mapping: &Map<String, Value>, body: &str) -> (String, Str
     )
 }
 
+/// The parsed digest of one document's text (its frontmatter value and body),
+/// or `None` when it has no parseable frontmatter. Two spellings of the same
+/// document share it.
+pub fn parsed_digest(text: &str) -> Option<String> {
+    let normalized = normalized_newlines(text);
+    let (frontmatter, body) = split_source(normalized.as_ref())?;
+    let mapping = parse_frontmatter(frontmatter).ok()?.mapping;
+    Some(digests(text, &mapping, body).1)
+}
+
 /// Identify a concept from its already-split source, or `None` if it is not
 /// one (invalid frontmatter or no `type`). Parses the frontmatter once and
 /// allocates only the identity it returns.

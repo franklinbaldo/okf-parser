@@ -12,12 +12,19 @@ use std::process::Command as ProcessCommand;
 
 use mcp::Transport;
 use okf_db::export::ExportOptions;
+use okf_db::import::{ConflictPolicy, ImportRequest};
 use okf_db::query::QueryOptions;
 use okf_engine::search::{Detail, Mode, SearchOutput, SearchRequest};
 /// The command line is declared here in full, so `--help` lists every public
 /// command. Commands that still need Python (RFC 0024 phases 4-6) are declared
 /// as pass-through: their arguments, `--help` included, go to the Python CLI
 /// unparsed.
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum OnConflict {
+    Skip,
+    VerifyIdentical,
+}
+
 #[derive(Clone, Copy, clap::ValueEnum)]
 enum SearchMode {
     Lexical,
@@ -70,6 +77,9 @@ enum Command {
     /// Plan and preview or commit an apply (JSON request on stdin).
     #[command(name = "__apply", hide = true)]
     ApplyRequest,
+    /// Import a tabular source for the Python API (JSON request on stdin).
+    #[command(name = "__import", hide = true)]
+    ImportRequest,
     /// Check or rewrite the canonical form for the Python API (JSON request on stdin).
     #[command(name = "__format", hide = true)]
     FormatRequest,
@@ -193,8 +203,37 @@ enum Command {
         exclude: Vec<String>,
     },
     /// Materialize every row of a DuckDB-readable source (CSV, Parquet, JSON) as a concept.
-    #[command(name = "import", disable_help_flag = true)]
-    Import(Delegated),
+    #[command(
+        after_help = "Each row becomes <type slug>/<id slug>.md with `type` and every \
+        non-null column as text. Without --write the command only previews, and prints a \
+        preview_token: pass it to --expected-preview-token to write only if neither the source \
+        nor the destinations changed.\n\n\
+        Exits 1 when two rows derive the same id or an existing document conflicts."
+    )]
+    Import {
+        /// A file (CSV, Parquet, JSON, NDJSON) or anything DuckDB's FROM accepts.
+        source: String,
+        /// The bundle to create the documents in.
+        path: PathBuf,
+        /// The concept type of every row.
+        #[arg(long = "type", value_name = "TYPE")]
+        concept_type: String,
+        /// The column naming each document; rows are numbered without it.
+        #[arg(long)]
+        id_column: Option<String>,
+        /// Create the documents; without it, only preview.
+        #[arg(long)]
+        write: bool,
+        /// Replace documents that already exist.
+        #[arg(long)]
+        overwrite: bool,
+        /// What an existing document means: skip it, or verify it is the same.
+        #[arg(long, value_enum, default_value_t = OnConflict::Skip)]
+        on_conflict: OnConflict,
+        /// Write only if this preview is still current.
+        #[arg(long, value_name = "TOKEN")]
+        expected_preview_token: Option<String>,
+    },
     /// Export JSON Schema, Zod, Pydantic source, or GraphQL SDL.
     #[command(disable_help_flag = true)]
     Schema(Delegated),
@@ -385,7 +424,36 @@ fn run() -> Outcome {
             let data = engine::load_bundle(&root, &exclude, read_concurrency)?;
             serde_json::to_writer(io::stdout().lock(), &protocol::LoadResponse::new(&data))?;
         }
-        Command::Import(_) | Command::Schema(_) | Command::Packs(_) | Command::AddPack(_) => {
+        Command::Import {
+            source,
+            path,
+            concept_type,
+            id_column,
+            write,
+            overwrite,
+            on_conflict,
+            expected_preview_token,
+        } => {
+            let report = commands::import(&ImportRequest {
+                source: &source,
+                root: &path,
+                concept_type: &concept_type,
+                id_column: id_column.as_deref(),
+                write,
+                overwrite,
+                on_conflict: match on_conflict {
+                    OnConflict::Skip => ConflictPolicy::Skip,
+                    OnConflict::VerifyIdentical => ConflictPolicy::VerifyIdentical,
+                },
+                expected_preview_token: expected_preview_token.as_deref(),
+            })?;
+            let code = i32::from(report.blocked());
+            return print(&report, code);
+        }
+        Command::ImportRequest => {
+            serde_json::to_writer(io::stdout().lock(), &protocol::import(&stdin_text()?)?)?;
+        }
+        Command::Schema(_) | Command::Packs(_) | Command::AddPack(_) => {
             return python_cli();
         }
         Command::Check {

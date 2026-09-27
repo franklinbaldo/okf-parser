@@ -58,11 +58,12 @@ arguments.
 ## `import`
 
 ```bash
-uv run okf-parser import SOURCE path/to/bundle --type TYPE [--id-column COLUMN] [--write] [--overwrite] [--on-conflict skip|verify-identical]
+uv run okf-parser import SOURCE path/to/bundle --type TYPE [--id-column COLUMN] [--write] [--overwrite] [--on-conflict skip|verify-identical] [--expected-preview-token TOKEN]
 ```
 
 Materializes every row of a DuckDB-readable source such as CSV, Parquet or JSON
-as one concept document of `TYPE`.
+as one concept document of `TYPE`, `<type slug>/<id slug>.md`, with `type` and
+every non-null column as text (DuckDB's own spelling of the value).
 
 - `SOURCE` — input readable by DuckDB.
 - `--type TYPE` — canonical concept `type` written to every imported document;
@@ -78,6 +79,8 @@ as one concept document of `TYPE`.
   are idempotent `matched_existing` rows, while any divergence is
   `conflicting_existing` and aborts the batch before writes. It cannot be
   combined with `--overwrite`.
+- `--expected-preview-token TOKEN` — write only if the source rows and every
+  destination are still what the dry run that printed `preview_token` saw.
 
 Exits `1` when the import plan contains duplicate ids or conflicting existing
 identities. Other invalid inputs are reported as command errors.
@@ -382,9 +385,9 @@ Tool arguments are validated at the server: an unknown key is a tool error,
 and defaulted flags keep concrete, non-nullable schemas (`digests` defaults to
 `false`, `database` to `knowledge.duckdb`). The legacy
 `sse` transport is gone: the MCP specification deprecated it in favor of
-Streamable HTTP. `check`, `inventory`, `graph`, `search`, `sql`, `format_*`, `apply_*`, `init_*`
+Streamable HTTP. `check`, `inventory`, `graph`, `search`, `sql`, `format_*`, `apply_*`, `import_*`, `init_*`
 and `duckdb_export` are answered natively by the binary. The tools still written in
-Python (`schema`, `import_*`) are delegated to
+Python (`schema`) are delegated to
 `python -m okf_parser.mcp_bridge`, which runs the CLI's own service function.
 The interpreter is the one installed next to the binary; set `OKF_PYTHON` to
 point a binary outside any Python environment at one. The default

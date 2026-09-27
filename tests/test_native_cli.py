@@ -138,7 +138,7 @@ def test_top_level_help_lists_native_and_delegated_commands() -> None:
         "duckdb",
         "serve",
     }
-    delegated = {"import", "schema", "packs", "add-pack"}
+    delegated = {"schema", "packs", "add-pack"}
     assert native | delegated <= listed
     assert not any(name.startswith("__") for name in listed)
 
@@ -186,3 +186,25 @@ def test_format_write_exits_nonzero_when_a_file_was_skipped(tmp_path: Path) -> N
 
     assert code == 1
     assert payload["skipped"] == [{"path": "unreadable.md", "reason": "not UTF-8"}]
+
+
+def test_import_exits_nonzero_for_a_divergent_existing_identity(tmp_path: Path) -> None:
+    source = tmp_path / "source.csv"
+    source.write_text("id,name\nr1,Expected\n", encoding="utf-8")
+    bundle = tmp_path / "bundle"
+    _write(bundle / "example" / "r1.md", "---\ntype: Example\nid: r1\nname: Different\n---\n")
+
+    code, payload = _run(
+        "import",
+        str(source),
+        str(bundle),
+        "--type",
+        "Example",
+        "--id-column",
+        "id",
+        "--on-conflict",
+        "verify-identical",
+    )
+
+    assert code == 1
+    assert payload["conflicting_existing"] == ["example/r1.md"]

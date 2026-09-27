@@ -6,31 +6,11 @@ from typing import TYPE_CHECKING, Literal
 
 import pytest
 
-from okf_parser.cli import app, import_command
+from okf_parser.cli import app
 from okf_parser.service import schema_bundle
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-
-def test_import_exits_nonzero_for_a_divergent_existing_identity(tmp_path: Path) -> None:
-    source = tmp_path / "source.csv"
-    source.write_text("id,name\nr1,Expected\n", encoding="utf-8")
-    bundle = tmp_path / "bundle"
-    destination = bundle / "example" / "r1.md"
-    destination.parent.mkdir(parents=True)
-    destination.write_text("---\ntype: Example\nid: r1\nname: Different\n---\n", encoding="utf-8")
-
-    result = import_command(
-        str(source),
-        str(bundle),
-        type="Example",
-        id_column="id",
-        on_conflict="verify-identical",
-    )
-
-    assert result.exit_code == 1
-    assert result.payload["conflicting_existing"] == ["example/r1.md"]
 
 
 @pytest.mark.parametrize("schema_format", ["zod", "pydantic"])

@@ -45,6 +45,8 @@ DEFAULT_TOOLS = {
 }
 NATIVE_TOOLS = {
     "check",
+    "import_preview",
+    "import_write",
     "format_check",
     "format_write",
     "search",
@@ -217,6 +219,26 @@ def test_format_tools_check_and_write_natively(tmp_path: Path) -> None:
     assert checked["structuredContent"]["succeeded"] is False
     assert written["structuredContent"]["succeeded"] is True
     assert document.read_text(encoding="utf-8") == "---\ntype: Note\n---\n\n- item\n"
+
+
+@native
+def test_import_preview_binds_the_write_with_its_token(tmp_path: Path) -> None:
+    source = tmp_path / "source.csv"
+    source.write_text("id,name\nr1,Ana\n", encoding="utf-8")
+    arguments = {"source": str(source), "path": str(tmp_path / "b"), "type": "Pessoa"}
+    with McpSession("--allow-write") as session:
+        preview = session.call("import_preview", {**arguments, "id_column": "id"})
+        token = preview["structuredContent"]["preview_token"]
+        stale = session.call(
+            "import_write", {**arguments, "id_column": "id", "expected_preview_token": "0"}
+        )
+        written = session.call(
+            "import_write", {**arguments, "id_column": "id", "expected_preview_token": token}
+        )
+
+    assert preview["structuredContent"]["would_create"] == ["pessoa/r1.md"]
+    assert stale["isError"] is True
+    assert written["structuredContent"]["created"] == ["pessoa/r1.md"]
 
 
 @native
@@ -503,48 +525,3 @@ def test_bridge_serves_every_tool_the_native_server_may_delegate() -> None:
 def test_bridge_rejects_an_unknown_tool_at_the_boundary() -> None:
     with pytest.raises(ValueError, match="literal_error"):
         mcp_bridge.ToolCall.model_validate({"tool": "rm_rf", "arguments": {}})
-
-
-def test_import_preview_and_write_share_service_with_review_binding_on_commit(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: list[dict[str, object]] = []
-
-    def fake_import_bundle(
-        source: str,
-        path: str,
-        concept_type: str,
-        **kwargs: object,
-    ) -> dict[str, object]:
-        calls.append({"source": source, "path": path, "type": concept_type, **kwargs})
-        result: dict[str, object] = {"written": bool(kwargs["write"])}
-        if not kwargs["write"]:
-            binding = f"opaque-binding-{len(calls)}"
-            result["preview_token"] = binding
-        return result
-
-    monkeypatch.setattr(mcp_bridge, "import_bundle", fake_import_bundle)
-
-    preview = mcp_bridge.mcp_import_preview(
-        "source.csv", "bundle", "Pessoa", on_conflict="verify-identical"
-    )
-    preview_token = preview["preview_token"]
-    assert isinstance(preview_token, str)
-    written = mcp_bridge.mcp_import_write(
-        "source.csv",
-        "bundle",
-        "Pessoa",
-        on_conflict="verify-identical",
-        expected_preview_token=preview_token,
-    )
-
-    assert preview["written"] is False
-    assert written == {"written": True}
-    assert (
-        calls[0]
-        | {
-            "write": True,
-            "expected_preview_token": preview_token,
-        }
-        == calls[1]
-    )

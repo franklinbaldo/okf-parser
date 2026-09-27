@@ -81,7 +81,7 @@ def import_bundle(  # each argument is an independent public CLI flag.
     overwrite: bool = False,
     on_conflict: Literal["skip", "verify-identical"] = "skip",
     expected_preview_token: str | None = None,
-) -> dict[str, object]:
+) -> dict[str, JsonValue]:
     """Materialize every row of a DuckDB-readable source as one concept document."""
     return _import_bundle(
         source,
