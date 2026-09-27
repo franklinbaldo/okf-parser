@@ -107,6 +107,9 @@ enum Command {
     /// Render new OKF documents canonically (JSON request on stdin).
     #[command(name = "__render", hide = true)]
     Render,
+    /// List a bundle's Markdown files for the Python API (JSON request on stdin).
+    #[command(name = "__discover", hide = true)]
+    DiscoverRequest,
     /// Parse documents strictly for the Python API (JSON request on stdin).
     #[command(name = "__parse", hide = true)]
     ParseRequest,
@@ -485,6 +488,9 @@ fn run() -> Outcome {
         }
         Command::Render => {
             serde_json::to_writer(io::stdout().lock(), &protocol::render(&stdin_text()?)?)?;
+        }
+        Command::DiscoverRequest => {
+            serde_json::to_writer(io::stdout().lock(), &protocol::discover(&stdin_text()?)?)?;
         }
         Command::ParseRequest => {
             serde_json::to_writer(io::stdout().lock(), &protocol::parse(&stdin_text()?)?)?;

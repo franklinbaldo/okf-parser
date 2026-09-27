@@ -437,6 +437,21 @@ pub(crate) fn exclusions(root: &Path, patterns: &[String]) -> Result<Gitignore, 
     }
     builder.build().map_err(ExclusionError)
 }
+/// Whether `relative` (a path below the bundle root) is excluded. The rule
+/// nearest the path decides, so `vendor` then `!vendor/knowledge` really
+/// re-includes: unlike `.gitignore`, which cannot reconsider a directory it
+/// pruned. A path no rule names inherits its nearest directory's decision.
+pub fn is_excluded(rules: &Gitignore, relative: &Path, is_dir: bool) -> bool {
+    rules
+        .matched_path_or_any_parents(relative, is_dir)
+        .is_ignore()
+}
+
+/// The `.okfignore` rules of `root` plus `patterns`, as [`discover`] reads them.
+pub fn exclusion_rules(root: &Path, patterns: &[String]) -> Result<Gitignore, ExclusionError> {
+    exclusions(root, patterns)
+}
+
 /// Every Markdown file below `root` that no exclusion rule could hide: only
 /// symlinks and the always-ignored directories are skipped. This is what a
 /// bundle would contain with no `.okfignore` and no `--exclude`.
@@ -458,8 +473,7 @@ fn walk_markdown(root: &Path, rules: Option<&Gitignore>) -> Result<Vec<PathBuf>,
         if entry.file_type().is_file() && !entry.file_type().is_symlink() && markdown(entry.path())
         {
             let rel = entry.path().strip_prefix(root).unwrap();
-            if !rules.is_some_and(|rules| rules.matched_path_or_any_parents(rel, false).is_ignore())
-            {
+            if !rules.is_some_and(|rules| is_excluded(rules, rel, false)) {
                 paths.push(entry.into_path());
             }
         }
@@ -1019,6 +1033,30 @@ pub fn load_bundle(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `conformance/exclusion.json`, shared with the TypeScript package.
+    #[test]
+    fn exclusion_follows_the_shared_corpus() {
+        let cases: Value =
+            serde_json::from_str(include_str!("../../conformance/exclusion.json")).unwrap();
+        let root = std::env::temp_dir().join(format!("okf-exclusion-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        for case in cases.as_array().unwrap() {
+            let patterns: Vec<String> = serde_json::from_value(case["patterns"].clone()).unwrap();
+            let rules = exclusion_rules(&root, &patterns).unwrap();
+            for item in case["paths"].as_array().unwrap() {
+                let path = item["path"].as_str().unwrap();
+                let is_dir = item["is_dir"].as_bool().unwrap_or(false);
+                assert_eq!(
+                    is_excluded(&rules, Path::new(path), is_dir),
+                    item["excluded"].as_bool().unwrap(),
+                    "{}: {path}",
+                    case["name"]
+                );
+            }
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn parse_text_is_strict_and_optional_frontmatter_may_be_absent() {
