@@ -1,0 +1,10 @@
+{
+  "name": "journalism",
+  "version": "1",
+  "description": "Journalism types based on the IPTC ninjs 3.2 news model.",
+  "types": ["Body", "NewsItem"],
+  "standard": "IPTC ninjs",
+  "standard_version": "3.2",
+  "standard_schema": "https://www.iptc.org/std/ninjs/ninjs-schema_3.2.json",
+  "files": ["body-mapping.json", "ninjs-mapping.json", "specs", "standards"]
+}

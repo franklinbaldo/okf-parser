@@ -10,13 +10,13 @@ Type packs are opt-in starters made from ordinary OKF specs and schemas. Install
 those files into the consumer bundle. From that point onward they are normal authored OKF files:
 the project may edit or fork them and does not depend on a pack-specific runtime.
 
-Available packs are registered through Python package metadata in `pyproject.toml` under the
-`okf_parser.packs` entry-point group. Pack contents stay inside the `okf-parser` distribution for
-now.
+A pack is a directory with a `pack.json` manifest and the files it installs. The packs shipped
+with okf-parser are embedded in the binary from `okf-engine/packs/`; any other pack is a local
+directory named by path, so a pack is plain data you can review before installing it.
 
 ## Commands
 
-List installed packs:
+List the embedded packs:
 
 ```console
 okf-parser packs
@@ -34,8 +34,36 @@ Materialize it explicitly:
 okf-parser add-pack journalism . --write
 ```
 
+Install a pack from a directory instead of by name:
+
+```console
+okf-parser add-pack ./my-pack . --write
+```
+
 Installation never overwrites different authored files. Existing byte-identical files are reported
-as unchanged; any collision aborts the whole write batch.
+as unchanged; any collision aborts the whole write batch and exits `1`. Paths that would leave the
+destination, including through a symbolic link, are refused.
+
+## Manifest
+
+```json
+{
+  "name": "journalism",
+  "version": "1",
+  "description": "Journalism types based on the IPTC ninjs 3.2 news model.",
+  "types": ["Body", "NewsItem"],
+  "standard": "IPTC ninjs",
+  "standard_version": "3.2",
+  "standard_schema": "https://www.iptc.org/std/ninjs/ninjs-schema_3.2.json",
+  "files": ["body-mapping.json", "ninjs-mapping.json", "specs", "standards"]
+}
+```
+
+`standard`, `standard_version` and `standard_schema` are optional. `files` lists the pack-relative
+files and directories to install; without it, every file but `pack.json` is installed. Anything
+else in the directory, such as the examples a pack is developed from, stays behind. Unknown keys,
+entries that leave the pack and entries that match nothing are errors, and a pack may not contain
+symbolic links.
 
 ## Dogfood contract
 

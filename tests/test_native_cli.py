@@ -1,8 +1,8 @@
-"""The commands the native binary answers itself (RFC 0024 phase 3b).
+"""The commands the native binary answers itself (RFC 0024).
 
-``check``, ``inventory``, ``graph`` and ``init`` run in ``okf-engine``; these
-tests drive the real binary and pin its output contract: indented JSON with
-sorted keys, and the exit status each command has always had.
+Every command runs in the binary; these tests drive it and pin its output
+contract: indented JSON with sorted keys, and the exit status each command
+has always had.
 """
 
 from __future__ import annotations
@@ -120,7 +120,7 @@ def test_frontmatter_json_has_one_spelling_in_the_binary_and_every_python_record
     assert parse_document(tmp_path / "a.md").frontmatter_json == expected
 
 
-def test_top_level_help_lists_native_and_delegated_commands() -> None:
+def test_top_level_help_lists_every_command() -> None:
     assert _BINARY is not None
     completed = subprocess.run(  # noqa: S603 - fixed argv to the binary under test
         [str(_BINARY), "--help"], capture_output=True, check=True, encoding="utf-8"
@@ -139,18 +139,12 @@ def test_top_level_help_lists_native_and_delegated_commands() -> None:
         "duckdb",
         "schema",
         "import",
+        "packs",
+        "add-pack",
         "serve",
     }
-    delegated = {"packs", "add-pack"}
-    assert native | delegated <= listed
+    assert native <= listed
     assert not any(name.startswith("__") for name in listed)
-
-
-def test_a_delegated_command_is_answered_by_the_python_cli() -> None:
-    code, payload = _run("packs")
-
-    assert code == 0
-    assert "packs" in payload
 
 
 def test_search_prints_rows_and_full_json(tmp_path: Path) -> None:
