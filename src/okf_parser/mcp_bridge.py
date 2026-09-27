@@ -2,8 +2,8 @@
 
 The MCP protocol itself (transports, tool schemas, effect annotations) lives
 in the Rust binary (``rust-core/src/mcp.rs``, built on ``rmcp``), which also
-answers ``check``, ``inventory``, ``graph``, ``init_*`` and
-``duckdb_export`` natively. The tools whose logic is still Python are
+answers ``check``, ``inventory``, ``graph``, ``sql``, ``apply_*``,
+``init_*`` and ``duckdb_export`` natively. The tools whose logic is still Python are
 answered here: the binary pipes
 ``{"tool": ..., "arguments": {...}}`` to ``python -m okf_parser.mcp_bridge``
 and relays the JSON this module prints.
@@ -26,7 +26,6 @@ from okf_parser.cli import (  # noqa: TC001
     ZodImport,
 )
 from okf_parser.service import (
-    apply_bundle,
     check_format,
     import_bundle,
     schema_bundle,
@@ -62,56 +61,6 @@ def mcp_schema(
 def mcp_format_check(path: str, exclude: RepeatableStrings = None) -> dict[str, object]:
     """Check mdformat style without modifying files."""
     return check_format(path, exclude or ())
-
-
-def mcp_apply_preview(
-    path: str,
-    *,
-    sql: str | None = None,
-    type: str | None = None,
-    field: str | None = None,
-    from_: Annotated[str | None, Field(alias="from")] = None,
-    to: str | None = None,
-    exclude: RepeatableStrings = None,
-    spec_template: str | None = None,
-) -> dict[str, object]:
-    """Compute an apply candidate without committing bundle changes."""
-    return apply_bundle(
-        path,
-        sql=sql,
-        type_name=type,
-        field_name=field,
-        from_value=from_,
-        to_value=to,
-        write=False,
-        exclude=exclude or (),
-        spec_template=spec_template,
-    )
-
-
-def mcp_apply_write(
-    path: str,
-    *,
-    sql: str | None = None,
-    type: str | None = None,
-    field: str | None = None,
-    from_: Annotated[str | None, Field(alias="from")] = None,
-    to: str | None = None,
-    exclude: RepeatableStrings = None,
-    spec_template: str | None = None,
-) -> dict[str, object]:
-    """Commit an apply mutation using the same guarded service path as the CLI."""
-    return apply_bundle(
-        path,
-        sql=sql,
-        type_name=type,
-        field_name=field,
-        from_value=from_,
-        to_value=to,
-        write=True,
-        exclude=exclude or (),
-        spec_template=spec_template,
-    )
 
 
 def mcp_import_preview(
@@ -166,20 +115,16 @@ def mcp_format_write(path: str, exclude: RepeatableStrings = None) -> dict[str, 
 type ToolName = Literal[
     "schema",
     "format_check",
-    "apply_preview",
     "import_preview",
     "format_write",
-    "apply_write",
     "import_write",
 ]
 
 TOOLS: dict[ToolName, Callable[..., object]] = {
     "schema": mcp_schema,
     "format_check": mcp_format_check,
-    "apply_preview": mcp_apply_preview,
     "import_preview": mcp_import_preview,
     "format_write": mcp_format_write,
-    "apply_write": mcp_apply_write,
     "import_write": mcp_import_write,
 }
 """Every tool the native server may delegate, keyed by its MCP name."""

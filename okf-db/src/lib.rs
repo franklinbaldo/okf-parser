@@ -6,10 +6,12 @@
 //! `check --relational-schema`. The binary enables the `bundled` feature,
 //! so no DuckDB installation is needed.
 
+pub mod apply;
 pub mod catalog;
 pub mod declared;
 pub mod export;
 pub mod infer;
 pub mod query;
 pub mod relational;
+pub mod source;
 pub mod typed;

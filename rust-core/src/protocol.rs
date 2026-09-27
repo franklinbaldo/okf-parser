@@ -6,8 +6,7 @@
 
 use okf_engine::frontmatter::render_document;
 use okf_engine::write::{
-    ApplyOutcome, ApplyReport, ApplyRequest, EditOutcome, EditReport, EditRequest,
-    PlanningSnapshot, ValidationItem, WriteError, apply_commit, edit_concept, planning_snapshot,
+    EditOutcome, EditReport, EditRequest, ValidationItem, WriteError, edit_concept,
 };
 use serde_json::{Map, Value};
 use std::path::PathBuf;
@@ -16,11 +15,15 @@ use okf_db::declared::{DeclaredSchema, parse_declared_schema};
 use okf_db::export::{ExportError, ExportOptions};
 use okf_db::query::{QueryError, QueryOptions, QueryResult, query_bundle};
 use okf_db::relational::{RelationalSchema, RelationalSchemaError, parse_relational_schema};
+use okf_db::source::SourceRows;
 use okf_engine::check::{CheckError, CheckReport};
 use okf_engine::{BundleData, ConceptGraph, GraphSummary, LoadError};
 use serde::{Deserialize, Serialize};
 
-use crate::commands::{CheckFailure, CheckOptions, ExportAnswer, InitError, InitReport};
+use crate::commands::{
+    ApplyFailure, ApplyInput, ApplyResult, CheckFailure, CheckOptions, ExportAnswer, InitError,
+    InitReport,
+};
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
@@ -390,86 +393,28 @@ pub fn edit(request: &str) -> Result<Response<EditResult>, serde_json::Error> {
     }))
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ApplySnapshotRequest {
-    path: PathBuf,
-    #[serde(default)]
-    exclude: Vec<String>,
-}
-
-/// `__apply-snapshot`: the concepts `apply` plans against, and their digest.
-pub fn apply_snapshot(request: &str) -> Result<Response<PlanningSnapshot>, serde_json::Error> {
-    let request: ApplySnapshotRequest = serde_json::from_str(request)?;
-    Ok(planning_snapshot(&request.path, &request.exclude)
-        .map_err(|error| ProtocolError::from_write(&error, "apply"))
+/// `__apply`: plan an apply in DuckDB and commit it on the write engine.
+pub fn apply(request: &str) -> Result<Response<ApplyResult>, serde_json::Error> {
+    let request: ApplyInput = serde_json::from_str(request)?;
+    Ok(crate::commands::apply(&request)
+        .map_err(|error| match &error {
+            ApplyFailure::Request(_) => ProtocolError::request(&error),
+            ApplyFailure::Write(write) => ProtocolError::from_write(write, "apply"),
+        })
         .into())
 }
 
-/// The JSON shape `apply` has always returned; built only here, from the
-/// engine's `ApplyReport`.
-#[derive(Debug, Default, Serialize, PartialEq, Eq)]
-pub struct ApplyResult {
-    changed_paths: Vec<String>,
-    skipped_paths: Vec<String>,
-    succeeded: bool,
-    written: bool,
-    validation: Vec<ValidationItem>,
-    conflict_paths: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    preview_token: Option<String>,
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReadSourceRequest {
+    source: String,
 }
 
-impl From<ApplyReport> for ApplyResult {
-    fn from(report: ApplyReport) -> Self {
-        let refused = |error: &'static str| Self {
-            error: Some(error),
-            ..Self::default()
-        };
-        let mut result = match report.outcome {
-            ApplyOutcome::Unchanged => Self::default(),
-            ApplyOutcome::Replanned => refused("the bundle changed while apply was planning it"),
-            ApplyOutcome::Lossy(paths) => Self {
-                skipped_paths: paths,
-                ..refused("one or more matched documents cannot round-trip losslessly")
-            },
-            ApplyOutcome::TokenMismatch(paths) => Self {
-                changed_paths: paths.clone(),
-                conflict_paths: paths,
-                ..refused("apply candidate no longer matches the reviewed preview")
-            },
-            ApplyOutcome::Previewed(paths) => Self {
-                changed_paths: paths,
-                ..Self::default()
-            },
-            ApplyOutcome::Written(paths) => Self {
-                changed_paths: paths,
-                written: true,
-                ..Self::default()
-            },
-            ApplyOutcome::Invalid(items) => Self {
-                validation: items,
-                ..refused("candidate bundle introduces new normative diagnostics")
-            },
-            ApplyOutcome::Conflict(paths) => Self {
-                conflict_paths: paths,
-                ..refused("the bundle changed since apply validated it")
-            },
-        };
-        result.succeeded = result.error.is_none();
-        result.preview_token = report.preview_token;
-        result
-    }
-}
-
-/// `__apply-commit`: edit, fingerprint and optionally commit a planned apply.
-pub fn apply(request: &str) -> Result<Response<ApplyResult>, serde_json::Error> {
-    let request: ApplyRequest = serde_json::from_str(request)?;
-    Ok(apply_commit(&request)
-        .map(ApplyResult::from)
-        .map_err(|error| ProtocolError::from_write(&error, "apply"))
+/// `__read-source`: every row of a DuckDB-readable source, for `import`.
+pub fn read_source(request: &str) -> Result<Response<SourceRows>, serde_json::Error> {
+    let request: ReadSourceRequest = serde_json::from_str(request)?;
+    Ok(okf_db::source::read_source(&request.source)
+        .map_err(|error| ProtocolError::request(&error))
         .into())
 }
 
@@ -726,6 +671,7 @@ mod tests {
 
     #[test]
     fn apply_outcomes_keep_the_legacy_shape() {
+        use okf_engine::write::{ApplyOutcome, ApplyReport};
         let result = |outcome| {
             serde_json::to_value(ApplyResult::from(ApplyReport {
                 outcome,
@@ -755,6 +701,41 @@ mod tests {
         .unwrap();
         assert!(lossy.get("preview_token").is_none());
         assert_eq!(lossy["skipped_paths"], serde_json::json!(["b.md"]));
+    }
+
+    #[test]
+    fn apply_plans_and_previews_in_one_request() {
+        let root = bundle(
+            "apply",
+            &[
+                ("a.md", "---\ntype: Note\nstatus: draft # keep\n---\n"),
+                ("b.md", "---\ntype: Note\nstatus: final\n---\n"),
+            ],
+        );
+        let sugar = serde_json::json!({
+            "path": root, "type": "Note", "field": "status", "from": "draft", "to": "final"
+        });
+        let preview = serde_json::to_value(apply(&sugar.to_string()).unwrap()).unwrap();
+        let broken = serde_json::json!({"path": root, "sql": "UPDATE Nope SET x = 1"});
+        let failed = serde_json::to_value(apply(&broken.to_string()).unwrap()).unwrap();
+        let incomplete = serde_json::json!({"path": root, "type": "Note"});
+        let refused = serde_json::to_value(apply(&incomplete.to_string()).unwrap()).unwrap();
+        let untouched = std::fs::read_to_string(root.join("a.md")).unwrap();
+        std::fs::remove_dir_all(&root).unwrap();
+        assert_eq!(
+            preview["result"]["changed_paths"],
+            serde_json::json!(["a.md"])
+        );
+        assert_eq!(preview["result"]["written"], false);
+        assert!(untouched.contains("draft"));
+        assert_eq!(failed["result"]["succeeded"], false);
+        assert!(
+            failed["result"]["error"]
+                .as_str()
+                .unwrap()
+                .starts_with("script failed")
+        );
+        assert_eq!(refused["error"]["kind"], "request");
     }
 
     #[test]

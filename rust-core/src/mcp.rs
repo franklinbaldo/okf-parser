@@ -2,8 +2,8 @@
 //!
 //! The protocol, the tool schemas and the effect annotations live here. A tool
 //! is answered natively once its logic exists in Rust: `check`, `inventory`,
-//! `graph`, `sql`, `init_*` and `duckdb_export`. The others (`schema`, `format_*`,
-//! `apply_*`, `import_*`) are delegated to `python -m okf_parser.mcp_bridge`,
+//! `graph`, `sql`, `apply_*`, `init_*` and `duckdb_export`. The others
+//! (`schema`, `format_*`, `import_*`) are delegated to `python -m okf_parser.mcp_bridge`,
 //! which runs the same service function the Python CLI does.
 
 use std::path::{Path, PathBuf};
@@ -159,6 +159,65 @@ pub struct ApplyArgs {
     exclude: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     spec_template: Option<String>,
+}
+
+impl ApplyArgs {
+    fn into_input(
+        self,
+        write: bool,
+        expected_preview_token: Option<String>,
+    ) -> commands::ApplyInput {
+        commands::ApplyInput {
+            path: self.path,
+            sql: self.sql,
+            type_name: self.type_name,
+            field: self.field,
+            from_value: self.from_value,
+            to: self.to,
+            exclude: self.exclude.unwrap_or_default(),
+            spec_template: self.spec_template,
+            write,
+            expected_preview_token,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ApplyWriteArgs {
+    path: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    sql: Option<String>,
+    #[serde(default, rename = "type", skip_serializing_if = "Option::is_none")]
+    type_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    field: Option<String>,
+    #[serde(default, rename = "from", skip_serializing_if = "Option::is_none")]
+    from_value: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    exclude: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    spec_template: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expected_preview_token: Option<String>,
+}
+
+impl ApplyWriteArgs {
+    fn into_input(self) -> commands::ApplyInput {
+        let apply = ApplyArgs {
+            path: self.path,
+            sql: self.sql,
+            type_name: self.type_name,
+            field: self.field,
+            from_value: self.from_value,
+            to: self.to,
+            exclude: self.exclude,
+            spec_template: self.spec_template,
+        };
+        apply.into_input(true, self.expected_preview_token)
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -490,16 +549,18 @@ impl OkfServer {
     }
 
     #[tool(
-        description = "Compute an apply candidate without committing bundle changes.",
+        description = "Preview a frontmatter edit written as SQL: each concept type is a \
+            table, each scalar field a VARCHAR column; the final tables say what changes. \
+            Returns the changed paths and a preview_token for apply_write.",
         annotations(
-            read_only_hint = false,
-            destructive_hint = true,
-            idempotent_hint = false,
-            open_world_hint = true
+            read_only_hint = true,
+            destructive_hint = false,
+            idempotent_hint = true,
+            open_world_hint = false
         )
     )]
     async fn apply_preview(&self, Parameters(args): Parameters<ApplyArgs>) -> CallToolResult {
-        self.delegate("apply_preview", args).await
+        native(move || commands::apply(&args.into_input(false, None))).await
     }
 
     #[tool(
@@ -545,16 +606,17 @@ impl OkfServer {
     }
 
     #[tool(
-        description = "Commit an apply mutation using the same guarded service path as the CLI.",
+        description = "Commit a frontmatter edit written as SQL, as apply_preview describes it. \
+            Pass the preview's token as expected_preview_token to refuse a changed candidate.",
         annotations(
             read_only_hint = false,
             destructive_hint = true,
             idempotent_hint = false,
-            open_world_hint = true
+            open_world_hint = false
         )
     )]
-    async fn apply_write(&self, Parameters(args): Parameters<ApplyArgs>) -> CallToolResult {
-        self.delegate("apply_write", args).await
+    async fn apply_write(&self, Parameters(args): Parameters<ApplyWriteArgs>) -> CallToolResult {
+        native(move || commands::apply(&args.into_input())).await
     }
 
     #[tool(

@@ -18,9 +18,10 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
-import duckdb
+from pydantic import BaseModel, ConfigDict
 
 from okf_parser.parser import DocumentParseError, parse_document, parse_document_text
+from okf_parser.rust_core import native_result
 from okf_parser.serialization import render_documents
 from okf_parser.type_specs import type_slug
 
@@ -37,21 +38,32 @@ class BundleImportError(ValueError):
 type ImportConflictPolicy = Literal["skip", "verify-identical"]
 
 
+class _ReadSourceRequest(BaseModel):
+    """The ``__read-source`` request the binary validates."""
+
+    model_config = ConfigDict(frozen=True)
+
+    source: str
+
+
+class _SourceColumn(BaseModel):
+    name: str
+
+
+class _SourceRows(BaseModel):
+    columns: tuple[_SourceColumn, ...]
+    rows: tuple[tuple[str | None, ...], ...]
+
+
 def _read_rows(source: str) -> tuple[list[str], list[dict[str, object]]]:
-    escaped = source.replace("'", "''")
-    con = duckdb.connect()
-    try:
-        try:
-            # The string literal is '-doubled above, not interpolated raw.
-            relation = con.sql(f"SELECT * FROM '{escaped}'")
-        except duckdb.Error as exc:
-            message = f"could not read {source!r}: {exc}"
-            raise BundleImportError(message) from exc
-        columns = list(relation.columns)
-        rows = [dict(zip(columns, row, strict=True)) for row in relation.fetchall()]
-    finally:
-        con.close()
-    return columns, rows
+    """Every row of ``source``, each value as DuckDB's own text for it."""
+    answer = _SourceRows.model_validate(
+        native_result(
+            "__read-source", _ReadSourceRequest(source=source), {"request": BundleImportError}
+        )
+    )
+    columns = [column.name for column in answer.columns]
+    return columns, [dict(zip(columns, row, strict=True)) for row in answer.rows]
 
 
 def _concept_id(row: dict[str, object], index: int, id_column: str | None) -> str:

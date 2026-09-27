@@ -241,22 +241,35 @@ or, for the simple replace-one-field case:
 uv run okf-parser apply path/to/bundle --type TYPE --field FIELD --from VALUE --to VALUE [--write] [--exclude PATTERN]...
 ```
 
-Mutates concept frontmatter through RFC 0005's bounded relational write path.
-The SQL form accepts zero or more leading `ALTER TABLE` statements followed by
-exactly one `UPDATE`; DuckDB parses, binds and executes the script, and the
-final relational state is compiled back into the affected documents.
+Edits concept frontmatter with SQL. Each concept type is a table (one row per
+document, one `VARCHAR` column per scalar field); the script runs whole, in a
+sandboxed in-memory DuckDB (no files, network or extensions), and may be any
+sequence of statements: `UPDATE`, `ALTER TABLE`, temporary tables, several
+types at once. The final state of the tables is the truth, compared with the
+starting one:
 
-The `--type/--field/--from/--to` form is convenience syntax for a simple value
-replacement without hand-writing SQL.
+- a changed value sets the field, as text;
+- `NULL` where a value existed removes the field (an explicit `field: null`
+  that stays `NULL` is kept);
+- a dropped or renamed column removes its field; a new column adds its non-null
+  values.
 
-`--spec-template TEMPLATE` opts declared fields into RFC 0006's typed query
-surface. Each declared value keeps a compiler-owned raw carrier and appears to SQL
-as a DuckDB virtual generated `TRY_CAST` column. Declared columns are queryable but
-not directly writable; undeclared scalar fields retain RFC 0005 write semantics.
+Apply edits fields, not documents: adding or removing rows, dropping a type's
+table, writing the `__okf_*` columns, or writing over a structured (list or
+mapping) field is refused with the reason, and nothing is written.
 
-`--write` is required to touch the bundle. Without it the command computes and
-reports the candidate changes. Exits `1` when `payload["succeeded"]` is false,
-including validation or write-conflict failures.
+The `--type/--field/--from/--to` form is convenience syntax for
+`UPDATE "TYPE" SET "FIELD" = 'TO' WHERE "FIELD" = 'FROM'`.
+
+`--spec-template TEMPLATE` adds the declared fields of RFC 0006 as typed,
+read-only columns (`TRY_CAST` generated columns) to filter on; run apply
+without it to edit them as text.
+
+`--write` is required to touch the bundle. Without it the command reports the
+changes and a `preview_token`; pass that token back with
+`--expected-preview-token` to write only if the bundle and the plan are still
+the ones previewed. Exits `1` when `succeeded` is false, including a refused
+script or a write conflict.
 
 MCP tools: `apply_preview`; `apply_write` with `--allow-write`. Both accept `spec_template`.
 
@@ -337,15 +350,15 @@ Tool arguments are validated at the server: an unknown key is a tool error,
 and defaulted flags keep concrete, non-nullable schemas (`digests` defaults to
 `false`, `database` to `knowledge.duckdb`). The legacy
 `sse` transport is gone: the MCP specification deprecated it in favor of
-Streamable HTTP. `check`, `inventory`, `graph`, `sql`, `init_preview`,
-`init_write` and `duckdb_export` are answered natively by the binary. The tools still written in
-Python (`schema`, `format_*`, `apply_*`, `import_*`) are delegated to
+Streamable HTTP. `check`, `inventory`, `graph`, `sql`, `apply_*`, `init_*`
+and `duckdb_export` are answered natively by the binary. The tools still written in
+Python (`schema`, `format_*`, `import_*`) are delegated to
 `python -m okf_parser.mcp_bridge`, which runs the CLI's own service function.
 The interpreter is the one installed next to the binary; set `OKF_PYTHON` to
 point a binary outside any Python environment at one. The default
 profile exposes `check`, `inventory`, `graph`, `schema`, `format_check`,
 `apply_preview`, `init_preview`, and `import_preview`. `--allow-write` additionally
 exposes `format_write`, `apply_write`, `init_write`, `import_write`, and
-`duckdb_export`. Because `schema` and `apply_preview` may execute trusted RFC 0006
+`duckdb_export`. Because `schema` may execute trusted RFC 0006
 `.schema.sql`, commit-disabled is intentionally not advertised as globally
 side-effect-free.

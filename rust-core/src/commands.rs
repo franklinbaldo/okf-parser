@@ -6,6 +6,7 @@
 use std::path::Path;
 use std::{fmt, io};
 
+use okf_db::apply::{plan_apply, sugar_sql};
 use okf_db::export::{ExportError, ExportOptions, ExportReport, export_bundle};
 use okf_db::infer::{InferError, scaffold_starter_schemas};
 use okf_db::query::{QueryError, QueryOptions, QueryResult, query_bundle};
@@ -16,8 +17,12 @@ use okf_engine::check::{
 use okf_engine::specs::{
     Scaffold, SpecTemplate, SpecTemplateError, commit_scaffold, plan_scaffold,
 };
+use okf_engine::write::{
+    ApplyOutcome, ApplyReport, ApplyRequest, ValidationItem, WriteError, apply_commit,
+    planning_snapshot,
+};
 use okf_engine::{ConceptGraph, GraphSummary, LoadError, Severity, load_bundle};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 /// Why `check` could not produce a report.
@@ -261,6 +266,170 @@ pub fn sql(
 ) -> Result<QueryResult, SqlError> {
     let data = load_bundle(path, exclude, READ_CONCURRENCY).map_err(SqlError::Load)?;
     query_bundle(&data, query, options).map_err(SqlError::Query)
+}
+
+/// What `apply` should do: `sql`, or the `type`/`field`/`from`/`to` shorthand
+/// for one `UPDATE`.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ApplyInput {
+    pub path: std::path::PathBuf,
+    #[serde(default)]
+    pub sql: Option<String>,
+    #[serde(default, rename = "type")]
+    pub type_name: Option<String>,
+    #[serde(default)]
+    pub field: Option<String>,
+    #[serde(default, rename = "from")]
+    pub from_value: Option<String>,
+    #[serde(default)]
+    pub to: Option<String>,
+    #[serde(default)]
+    pub exclude: Vec<String>,
+    #[serde(default)]
+    pub spec_template: Option<String>,
+    #[serde(default)]
+    pub write: bool,
+    #[serde(default)]
+    pub expected_preview_token: Option<String>,
+}
+
+/// Why `apply` could not even try.
+#[derive(Debug)]
+pub enum ApplyFailure {
+    Request(&'static str),
+    Write(WriteError),
+}
+
+impl fmt::Display for ApplyFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Request(message) => f.write_str(message),
+            Self::Write(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for ApplyFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Request(_) => None,
+            Self::Write(error) => Some(error),
+        }
+    }
+}
+
+/// The JSON shape `apply` has always answered. A plan the script could not
+/// produce, or a commit the engine refused, is an answer with `error`.
+#[derive(Debug, Default, Serialize, PartialEq, Eq)]
+pub struct ApplyResult {
+    changed_paths: Vec<String>,
+    skipped_paths: Vec<String>,
+    succeeded: bool,
+    written: bool,
+    validation: Vec<ValidationItem>,
+    conflict_paths: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    preview_token: Option<String>,
+}
+
+impl ApplyResult {
+    fn failed(error: String) -> Self {
+        Self {
+            error: Some(error),
+            ..Self::default()
+        }
+    }
+
+    pub fn succeeded(&self) -> bool {
+        self.succeeded
+    }
+}
+
+impl From<ApplyReport> for ApplyResult {
+    fn from(report: ApplyReport) -> Self {
+        let refused = |error: &str| Self::failed(error.to_owned());
+        let mut result = match report.outcome {
+            ApplyOutcome::Unchanged => Self::default(),
+            ApplyOutcome::Replanned => refused("the bundle changed while apply was planning it"),
+            ApplyOutcome::Lossy(paths) => Self {
+                skipped_paths: paths,
+                ..refused("one or more matched documents cannot round-trip losslessly")
+            },
+            ApplyOutcome::TokenMismatch(paths) => Self {
+                changed_paths: paths.clone(),
+                conflict_paths: paths,
+                ..refused("apply candidate no longer matches the reviewed preview")
+            },
+            ApplyOutcome::Previewed(paths) => Self {
+                changed_paths: paths,
+                ..Self::default()
+            },
+            ApplyOutcome::Written(paths) => Self {
+                changed_paths: paths,
+                written: true,
+                ..Self::default()
+            },
+            ApplyOutcome::Invalid(items) => Self {
+                validation: items,
+                ..refused("candidate bundle introduces new normative diagnostics")
+            },
+            ApplyOutcome::Conflict(paths) => Self {
+                conflict_paths: paths,
+                ..refused("the bundle changed since apply validated it")
+            },
+        };
+        result.succeeded = result.error.is_none();
+        result.preview_token = report.preview_token;
+        result
+    }
+}
+
+/// `okf-parser apply`: run the script over a snapshot of the bundle, read the
+/// changes back from the final tables, and preview or commit them.
+pub fn apply(input: &ApplyInput) -> Result<ApplyResult, ApplyFailure> {
+    let sql = match (
+        &input.sql,
+        &input.type_name,
+        &input.field,
+        &input.from_value,
+        &input.to,
+    ) {
+        (Some(sql), ..) => sql.clone(),
+        (None, Some(type_name), Some(field), Some(from), Some(to)) => {
+            sugar_sql(type_name, field, from, to)
+        }
+        _ => {
+            return Err(ApplyFailure::Request(
+                "either --sql, or --type/--field/--from/--to together, are required",
+            ));
+        }
+    };
+    let snapshot = planning_snapshot(&input.path, &input.exclude).map_err(ApplyFailure::Write)?;
+    let changes = match plan_apply(
+        Path::new(&snapshot.root),
+        &snapshot.concepts,
+        &sql,
+        input.spec_template.as_deref(),
+    ) {
+        Ok(changes) => changes,
+        Err(error) => return Ok(ApplyResult::failed(error.to_string())),
+    };
+    let request = ApplyRequest {
+        path: input.path.clone(),
+        exclude: input.exclude.clone(),
+        spec_template: input.spec_template.clone(),
+        sql,
+        snapshot_digest: snapshot.digest,
+        changes,
+        expected_preview_token: input.expected_preview_token.clone(),
+        write: input.write,
+    };
+    apply_commit(&request)
+        .map(ApplyResult::from)
+        .map_err(ApplyFailure::Write)
 }
 
 /// Whether the caller, not the environment, is at fault for a load failure.
