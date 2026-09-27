@@ -40,3 +40,41 @@ pub fn interpreter() -> std::io::Result<PathBuf> {
     let fallback = if cfg!(windows) { "python" } else { "python3" };
     Ok(find_python(&executable).map_or_else(|| PathBuf::from(fallback), PathBuf::from))
 }
+
+/// Pydantic v2 source for `contracts`, rendered by the Python shell: its
+/// naming rules are Python's own (`keyword`, `str.isidentifier`, the
+/// attributes of `BaseModel`), so they are not re-derived here.
+pub fn render_pydantic(contracts: &serde_json::Value) -> std::io::Result<String> {
+    use std::io::{Read, Write};
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new(interpreter()?)
+        .args(["-m", "okf_parser.pydantic_source"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let request = serde_json::json!({ "contracts": contracts }).to_string();
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| std::io::Error::other("no stdin for the Pydantic renderer"))?
+        .write_all(request.as_bytes())?;
+    let mut source = String::new();
+    child
+        .stdout
+        .take()
+        .ok_or_else(|| std::io::Error::other("no stdout from the Pydantic renderer"))?
+        .read_to_string(&mut source)?;
+    let mut stderr = String::new();
+    if let Some(mut pipe) = child.stderr.take() {
+        pipe.read_to_string(&mut stderr)?;
+    }
+    if !child.wait()?.success() {
+        return Err(std::io::Error::other(format!(
+            "the Pydantic renderer failed: {}",
+            stderr.trim()
+        )));
+    }
+    Ok(source)
+}

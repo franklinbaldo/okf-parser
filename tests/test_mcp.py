@@ -1,7 +1,7 @@
 """RFC 0008 effect-aware MCP profile, served natively by ``okf-parser serve``.
 
-The protocol tests drive the real binary over stdio. The service-sharing tests
-exercise ``okf_parser.mcp_bridge``, which the binary delegates unported tools to.
+The tests drive the real binary over stdio; every tool is answered natively,
+and ``schema`` answers what the Python service returns for the same bundle.
 """
 
 from __future__ import annotations
@@ -14,12 +14,12 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Self, get_args
+from typing import TYPE_CHECKING, Any, Self
 
 import pytest
 
-from okf_parser import mcp_bridge
 from okf_parser.rust_core import packaged_rust_core
+from okf_parser.service import schema_bundle
 
 if TYPE_CHECKING:
     from types import TracebackType
@@ -43,23 +43,6 @@ DEFAULT_TOOLS = {
     "init_preview",
     "import_preview",
 }
-NATIVE_TOOLS = {
-    "check",
-    "import_preview",
-    "import_write",
-    "format_check",
-    "format_write",
-    "search",
-    "inventory",
-    "graph",
-    "sql",
-    "init_preview",
-    "init_write",
-    "apply_preview",
-    "apply_write",
-    "duckdb_export",
-}
-"""Answered by the binary itself, never delegated to the bridge."""
 WRITE_TOOLS = {
     "format_write",
     "apply_write",
@@ -364,18 +347,18 @@ def test_check_validates_a_relational_schema_natively(tmp_path: Path) -> None:
 
 
 @native
-def test_delegated_tool_answers_through_the_python_bridge(tmp_path: Path) -> None:
+def test_schema_tool_answers_the_service_payload(tmp_path: Path) -> None:
     bundle = _bundle(tmp_path)
 
     with McpSession() as session:
         result = session.call("schema", {"path": str(bundle)})
 
     assert result["isError"] is False
-    assert result["structuredContent"] == mcp_bridge.mcp_schema(str(bundle))
+    assert result["structuredContent"] == schema_bundle(str(bundle))
 
 
 @native
-def test_delegated_tool_failure_is_a_tool_error_not_a_crash(tmp_path: Path) -> None:
+def test_tool_failure_is_a_tool_error_not_a_crash(tmp_path: Path) -> None:
     with McpSession() as session:
         failed = session.call("check", {"path": str(tmp_path / "missing")})
         recovered = session.call("check", {"path": str(_bundle(tmp_path))})
@@ -386,15 +369,27 @@ def test_delegated_tool_failure_is_a_tool_error_not_a_crash(tmp_path: Path) -> N
 
 
 @native
-def test_delegated_text_result_stays_text(tmp_path: Path) -> None:
+@pytest.mark.parametrize("schema_format", ["zod", "pydantic", "graphql"])
+def test_text_schema_result_stays_text(tmp_path: Path, schema_format: str) -> None:
     bundle = _bundle(tmp_path)
 
     with McpSession() as session:
-        result = session.call("schema", {"path": str(bundle), "format": "zod"})
+        result = session.call("schema", {"path": str(bundle), "format": schema_format})
 
     assert result["isError"] is False
     assert "structuredContent" not in result
-    assert "z.object" in result["content"][0]["text"]
+    assert result["content"][0]["text"] == schema_bundle(str(bundle), schema_format)
+
+
+@native
+def test_schema_error_is_a_tool_error(tmp_path: Path) -> None:
+    bundle = _bundle(tmp_path)
+
+    with McpSession() as session:
+        result = session.call("schema", {"path": str(bundle), "cast": ["x=nonsense"]})
+
+    assert result["isError"] is True
+    assert "invalid cast" in result["content"][0]["text"]
 
 
 @native
@@ -404,7 +399,7 @@ def test_delegated_text_result_stays_text(tmp_path: Path) -> None:
         ("apply_preview", {"path": ".", "write": True}),
         ("graph", {"path": ".", "bogus": 1}),
     ],
-    ids=["delegated", "native"],
+    ids=["preview", "read"],
 )
 def test_unknown_argument_is_rejected_at_the_native_boundary(
     tool: str, arguments: JsonObject
@@ -492,36 +487,3 @@ def test_http_host_validation_is_separate_from_the_bind_address(
     finally:
         server.terminate()
         server.wait(timeout=10)
-
-
-def test_bridge_accepts_wire_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
-    calls: list[tuple[object, ...]] = []
-
-    def fake_schema_bundle(path: str, schema_format: str, *args: object, **_: object) -> str:
-        calls.append((path, schema_format, *args))
-        return ""
-
-    monkeypatch.setattr(mcp_bridge, "schema_bundle", fake_schema_bundle)
-
-    mcp_bridge.run_tool_call(
-        mcp_bridge.ToolCall(tool="schema", arguments={"path": "b", "format": "zod"})
-    )
-
-    assert calls[0][:2] == ("b", "zod")
-
-
-def test_bridge_rejects_arguments_a_tool_does_not_take() -> None:
-    with pytest.raises(ValueError, match="unexpected_keyword_argument"):
-        mcp_bridge.run_tool_call(
-            mcp_bridge.ToolCall(tool="schema", arguments={"path": ".", "write": True})
-        )
-
-
-def test_bridge_serves_every_tool_the_native_server_may_delegate() -> None:
-    assert set(mcp_bridge.TOOLS) == (DEFAULT_TOOLS | WRITE_TOOLS) - NATIVE_TOOLS
-    assert set(get_args(mcp_bridge.ToolName.__value__)) == set(mcp_bridge.TOOLS)
-
-
-def test_bridge_rejects_an_unknown_tool_at_the_boundary() -> None:
-    with pytest.raises(ValueError, match="literal_error"):
-        mcp_bridge.ToolCall.model_validate({"tool": "rm_rf", "arguments": {}})

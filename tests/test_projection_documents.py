@@ -1,18 +1,23 @@
-"""Tests for RFC 0018 step 4: `type: Projection` documents and their resolution."""
+"""Tests for RFC 0018 step 4: `type: Projection` documents and their resolution.
+
+Projection documents are read by the binary (``okf-db/src/schema/relations.rs``);
+each test writes a bundle and reads back the contracts it compiles to.
+"""
 
 from __future__ import annotations
 
+import json
 from typing import TYPE_CHECKING
 
 import pytest
 
-from okf_parser.projections import (
-    Projection,
+from okf_parser.schema_contract import (
+    FieldContract,
+    ListNode,
     ProjectionError,
-    load_projections,
-    parse_projections,
+    RefNode,
+    TypeContract,
 )
-from okf_parser.relational_schema import ForeignKeyConstraint, parse_relational_schema
 from okf_parser.schema_export import build_schema_contracts
 
 if TYPE_CHECKING:
@@ -38,15 +43,10 @@ CREATE TABLE "EventoProcessual" (
 );
 """
 
-CONCEPT_TYPES = ("EventoProcessual", "Processo", "Publicacao")
 
-
-def _foreign_keys() -> tuple[ForeignKeyConstraint, ...]:
-    return parse_relational_schema(SCHEMA_SQL).foreign_keys
-
-
-def _parse(document: dict[str, object]) -> tuple[Projection, ...]:
-    return parse_projections([document], _foreign_keys(), concept_types=CONCEPT_TYPES)
+def _write(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
 
 
 def _document(**overrides: object) -> dict[str, object]:
@@ -60,76 +60,112 @@ def _document(**overrides: object) -> dict[str, object]:
     return document
 
 
-def _write(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+def _frontmatter(document: dict[str, object]) -> str:
+    # JSON values are YAML flow values, so each key is one line.
+    lines = [f"{key}: {json.dumps(value)}" for key, value in document.items()]
+    return "---\n" + "\n".join(lines) + "\n---\n"
 
 
-def test_relation_pointing_at_the_root_is_a_collection() -> None:
-    projection = _parse(_document())[0]
-    assert projection.name == "ProcessoConsultar"
-    assert projection.root == "Processo"
-    member = projection.members[0]
-    assert member.alias == "publicacoes"
-    assert member.concept_type == "Publicacao"
-    assert member.collection is True
-    assert member.optional is False
-    assert member.foreign_key.columns == ("processo",)
+def _bundle(root: Path, *projections: dict[str, object]) -> Path:
+    _write(root / "okf.schema.sql", SCHEMA_SQL)
+    _write(root / "processo.md", "---\ntype: Processo\ncnj: '1'\napenso_de: '1'\n---\n")
+    _write(
+        root / "publicacao.md",
+        "---\ntype: Publicacao\nfonte: djen\nsource_id: a\nprocesso: '1'\n---\n",
+    )
+    _write(
+        root / "evento.md",
+        "---\ntype: EventoProcessual\nid: e1\npublicacao_fonte: djen\n"
+        "publicacao_source_id: a\n---\n",
+    )
+    for index, projection in enumerate(projections):
+        _write(root / f"projection-{index}.md", _frontmatter(projection))
+    return root
 
 
-def test_relation_on_the_root_is_a_single_value() -> None:
+def _contracts(root: Path, *projections: dict[str, object]) -> tuple[TypeContract, ...]:
+    _bundle(root, *projections)
+    return build_schema_contracts(str(root), relational_schema="okf.schema.sql")
+
+
+def _projection(root: Path, document: dict[str, object]) -> TypeContract:
+    contracts = _contracts(root, document)
+    return next(contract for contract in contracts if contract.concept_type == document["name"])
+
+
+def _members(contract: TypeContract) -> list[FieldContract]:
+    return [field for field in contract.root.fields if _reference(field) is not None]
+
+
+def _reference(field: FieldContract) -> RefNode | None:
+    value = field.value.item if isinstance(field.value, ListNode) else field.value
+    return value if isinstance(value, RefNode) and value.embedded else None
+
+
+def test_relation_pointing_at_the_root_is_a_collection(tmp_path: Path) -> None:
+    contract = _projection(tmp_path, _document())
+    assert contract.model_name == "ProcessoConsultarProjection"
+    [member] = _members(contract)
+    assert member.name == "publicacoes"
+    assert isinstance(member.value, ListNode)
+    reference = _reference(member)
+    assert reference is not None
+    assert reference.concept_type == "Publicacao"
+    assert reference.columns == ("processo",)
+    assert member.nullable is False
+
+
+def test_relation_on_the_root_is_a_single_value(tmp_path: Path) -> None:
     document = _document(
         name="ProcessoApenso",
-        include=[{"relation": "Processo.apenso_de", "as": "apenso_de"}],
+        include=[{"relation": "Processo.apenso_de", "as": "apenso"}],
     )
-    member = _parse(document)[0].members[0]
-    assert member.collection is False
-    assert member.concept_type == "Processo"
+    [member] = _members(_projection(tmp_path, document))
+    assert isinstance(member.value, RefNode)
+    assert member.value.concept_type == "Processo"
 
 
-def test_optional_member_is_carried_through() -> None:
+def test_optional_member_is_nullable(tmp_path: Path) -> None:
     document = _document(
         include=[{"relation": "Publicacao.processo", "as": "publicacoes", "optional": True}],
     )
-    assert _parse(document)[0].members[0].optional is True
+    [member] = _members(_projection(tmp_path, document))
+    assert member.nullable is True
 
 
-def test_composite_relation_resolves_by_any_participating_column() -> None:
+def test_composite_relation_resolves_by_any_participating_column(tmp_path: Path) -> None:
     document = _document(
         name="PublicacaoConsultar",
         root="Publicacao",
         include=[{"relation": "EventoProcessual.publicacao_source_id", "as": "eventos"}],
     )
-    member = _parse(document)[0].members[0]
-    assert member.collection is True
-    assert member.foreign_key.columns == ("publicacao_fonte", "publicacao_source_id")
+    [member] = _members(_projection(tmp_path, document))
+    assert isinstance(member.value, ListNode)
+    reference = _reference(member)
+    assert reference is not None
+    assert reference.columns == ("publicacao_fonte", "publicacao_source_id")
 
 
-def test_members_keep_their_declared_order() -> None:
+def test_members_follow_the_root_fields_in_declared_order(tmp_path: Path) -> None:
     document = _document(
         include=[
-            {"relation": "Processo.apenso_de", "as": "apenso_de"},
+            {"relation": "Processo.apenso_de", "as": "apenso"},
             {"relation": "Publicacao.processo", "as": "publicacoes"},
         ],
     )
-    assert [member.alias for member in _parse(document)[0].members] == [
-        "apenso_de",
-        "publicacoes",
-    ]
+    contract = _projection(tmp_path, document)
+    assert [field.name for field in contract.root.fields][-2:] == ["apenso", "publicacoes"]
 
 
-def test_projection_without_members_is_allowed() -> None:
-    projection = _parse(_document(include=[]))[0]
-    assert projection.members == ()
+def test_projection_without_members_is_its_root(tmp_path: Path) -> None:
+    contracts = _contracts(tmp_path, _document(include=[]))
+    by_type = {contract.concept_type: contract for contract in contracts}
+    assert by_type["ProcessoConsultar"].root == by_type["Processo"].root
 
 
-def test_projections_are_ordered_by_name() -> None:
-    projections = parse_projections(
-        [_document(name="Zeta"), _document(name="Alpha")],
-        _foreign_keys(),
-        concept_types=CONCEPT_TYPES,
-    )
-    assert [item.name for item in projections] == ["Alpha", "Zeta"]
+def test_projections_follow_the_concept_types_ordered_by_name(tmp_path: Path) -> None:
+    contracts = _contracts(tmp_path, _document(name="Zeta"), _document(name="Alpha"))
+    assert [contract.concept_type for contract in contracts][-2:] == ["Alpha", "Zeta"]
 
 
 @pytest.mark.parametrize(
@@ -173,69 +209,24 @@ def test_projections_are_ordered_by_name() -> None:
         ),
     ],
 )
-def test_normative_errors(overrides: dict[str, object], expected: str) -> None:
+def test_normative_errors(tmp_path: Path, overrides: dict[str, object], expected: str) -> None:
     with pytest.raises(ProjectionError, match=expected):
-        _parse(_document(**overrides))
+        _contracts(tmp_path, _document(**overrides))
 
 
-def test_duplicate_projection_names_are_refused() -> None:
+def test_duplicate_projection_names_are_refused(tmp_path: Path) -> None:
     with pytest.raises(ProjectionError, match="declared twice"):
-        parse_projections(
-            [_document(), _document()],
-            _foreign_keys(),
-            concept_types=CONCEPT_TYPES,
-        )
+        _contracts(tmp_path, _document(), _document())
 
 
-def _bundle(tmp_path: Path) -> Path:
-    _write(tmp_path / "okf.schema.sql", SCHEMA_SQL)
-    _write(tmp_path / "processo.md", "---\ntype: Processo\ncnj: '1'\napenso_de: '1'\n---\n")
-    _write(
-        tmp_path / "publicacao.md",
-        "---\ntype: Publicacao\nfonte: djen\nsource_id: a\nprocesso: '1'\n---\n",
-    )
-    _write(
-        tmp_path / "projection.md",
-        "---\ntype: Projection\nname: ProcessoConsultar\nroot: Processo\n"
-        "include:\n  - relation: Publicacao.processo\n    as: publicacoes\n---\n",
-    )
-    return tmp_path
-
-
-def test_load_projections_reads_the_bundle(tmp_path: Path) -> None:
-    root = _bundle(tmp_path)
-    projections = load_projections(str(root), relational_schema="okf.schema.sql")
-    assert [item.name for item in projections] == ["ProcessoConsultar"]
-    assert projections[0].members[0].collection is True
-
-
-def test_load_projections_restores_authored_optional_boolean(tmp_path: Path) -> None:
-    root = _bundle(tmp_path)
-    _write(
-        root / "projection.md",
-        "---\ntype: Projection\nname: ProcessoConsultar\nroot: Processo\n"
-        "include:\n  - relation: Publicacao.processo\n    as: publicacoes\n"
-        "    optional: true\n---\n",
-    )
-    projections = load_projections(str(root), relational_schema="okf.schema.sql")
-    assert projections[0].members[0].optional is True
-
-
-def test_load_projections_needs_a_relational_schema(tmp_path: Path) -> None:
-    root = _bundle(tmp_path)
+def test_projections_need_a_relational_schema(tmp_path: Path) -> None:
+    _bundle(tmp_path, _document())
     with pytest.raises(ProjectionError, match="relational schema"):
-        load_projections(str(root), relational_schema=None)
-
-
-def test_a_bundle_with_no_projection_documents_yields_none(tmp_path: Path) -> None:
-    _write(tmp_path / "okf.schema.sql", SCHEMA_SQL)
-    _write(tmp_path / "processo.md", "---\ntype: Processo\ncnj: '1'\n---\n")
-    assert load_projections(str(tmp_path), relational_schema="okf.schema.sql") == ()
+        build_schema_contracts(str(tmp_path))
 
 
 def test_projection_documents_export_by_authored_name_not_marker_type(tmp_path: Path) -> None:
-    root = _bundle(tmp_path)
-    contracts = build_schema_contracts(str(root), relational_schema="okf.schema.sql")
+    contracts = _contracts(tmp_path, _document())
     contract_types = {contract.concept_type for contract in contracts}
     assert "Projection" not in contract_types
-    assert contract_types == {"Processo", "Publicacao", "ProcessoConsultar"}
+    assert contract_types == {"EventoProcessual", "Processo", "Publicacao", "ProcessoConsultar"}

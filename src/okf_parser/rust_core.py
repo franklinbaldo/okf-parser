@@ -140,7 +140,18 @@ def rust_load_bundle(
 
 
 type ErrorKind = Literal[
-    "request", "spec_template", "declared_schema", "relational_schema", "query", "io"
+    "request",
+    "spec_template",
+    "declared_schema",
+    "relational_schema",
+    "query",
+    "io",
+    "schema_cast",
+    "schema_name_collision",
+    "graphql_name_collision",
+    "schema_reference",
+    "projection",
+    "schema_export",
 ]
 
 

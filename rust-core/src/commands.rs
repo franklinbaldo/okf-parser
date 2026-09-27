@@ -12,6 +12,10 @@ use okf_db::import::{ImportError, ImportReport, ImportRequest, import_source};
 use okf_db::infer::{InferError, scaffold_starter_schemas};
 use okf_db::query::{QueryError, QueryOptions, QueryResult, query_bundle};
 use okf_db::relational::{RelationalSchemaError, load_relational_schema, validate_relations};
+use okf_db::schema::{
+    RefsMode, SchemaError, SchemaOptions, ZodImport, build_contracts, render_graphql,
+    render_json_schema, render_zod,
+};
 use okf_engine::check::{
     self, CheckError, CheckReport, Inventory, READ_CONCURRENCY, SpecRules, check_loaded,
 };
@@ -496,6 +500,97 @@ pub fn format(
 /// `okf-parser import`: plan, and with `write` perform, one import.
 pub fn import(request: &ImportRequest<'_>) -> Result<ImportReport, ImportError> {
     import_source(request)
+}
+
+/// What `okf-parser schema` renders.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, clap::ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum SchemaFormat {
+    #[default]
+    Json,
+    Zod,
+    Pydantic,
+    Graphql,
+}
+
+/// A rendered schema: JSON Schema is a document, the rest are source text.
+#[derive(Debug)]
+pub enum SchemaAnswer {
+    Json(Value),
+    Text(String),
+}
+
+/// Why no schema was rendered.
+#[derive(Debug)]
+pub enum SchemaFailure {
+    Schema(SchemaError),
+    /// The Python shell could not render Pydantic source.
+    Python(io::Error),
+}
+
+impl fmt::Display for SchemaFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Schema(error) => error.fmt(f),
+            Self::Python(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for SchemaFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Schema(error) => Some(error),
+            Self::Python(error) => Some(error),
+        }
+    }
+}
+
+/// `okf-parser schema`: the bundle's contracts in one format. GraphQL keeps
+/// its own shape, so it reads no relational schema.
+pub fn schema(
+    path: &Path,
+    format: SchemaFormat,
+    options: &SchemaOptions,
+    zod_import: ZodImport,
+) -> Result<SchemaAnswer, SchemaFailure> {
+    let failed = SchemaFailure::Schema;
+    let graphql_options;
+    let options = if format == SchemaFormat::Graphql {
+        graphql_options = SchemaOptions {
+            relational_schema: None,
+            refs: RefsMode::Key,
+            ..options.clone()
+        };
+        &graphql_options
+    } else {
+        options
+    };
+    let contracts = build_contracts(path, options).map_err(failed)?;
+    Ok(match format {
+        SchemaFormat::Json => {
+            let root = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+            SchemaAnswer::Json(render_json_schema(
+                &root.display().to_string(),
+                &contracts,
+                options.infer_types,
+                &options.casts,
+            ))
+        }
+        SchemaFormat::Zod => {
+            SchemaAnswer::Text(render_zod(&contracts, zod_import).map_err(failed)?)
+        }
+        SchemaFormat::Graphql => {
+            SchemaAnswer::Text(render_graphql(&contracts).map_err(failed)?.sdl)
+        }
+        SchemaFormat::Pydantic => {
+            let contracts = serde_json::to_value(&contracts)
+                .map_err(|error| SchemaFailure::Python(io::Error::other(error.to_string())))?;
+            SchemaAnswer::Text(
+                crate::python::render_pydantic(&contracts).map_err(SchemaFailure::Python)?,
+            )
+        }
+    })
 }
 
 /// Why `search` found nothing to answer.

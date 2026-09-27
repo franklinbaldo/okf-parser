@@ -1,23 +1,26 @@
-"""Language-neutral schema contract shared by Python exporters and conformance tests."""
+"""The schema contract IR the binary compiles, as Python dataclasses.
+
+The native binary (``okf-db/src/schema``) compiles observations, declared
+schemas, relational references, and projections into contracts and renders
+JSON Schema, Zod, and GraphQL SDL. Python keeps only what cannot exist
+outside Python: Pydantic models and source. This module decodes the binary's
+contract JSON into the IR those renderers walk.
+"""
 
 from __future__ import annotations
 
-import json
 import unicodedata
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, cast
+from dataclasses import dataclass
+from typing import Annotated, Literal
 
-from okf_parser.schema_lexemes import CastKind, can_classify_as, classify_lexemes
+from pydantic import BaseModel, ConfigDict, Field
 
-if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+from okf_parser.duckdb_types import DuckDBLogicalType, logical_type_from_catalog
 
-    from okf_parser.duckdb_types import DuckDBLogicalType
-
+type CastKind = Literal["string", "boolean", "integer", "number", "date", "datetime"]
 type ZodImport = Literal["zod", "astro"]
+type RefsMode = Literal["key", "embed"]
 type ContractNode = ScalarNode | LiteralNode | ObjectNode | ListNode | AnyNode | RefNode
-
-_CAST_KINDS = frozenset({"string", "boolean", "integer", "number", "date", "datetime"})
 
 
 class SchemaExportError(ValueError):
@@ -30,6 +33,14 @@ class SchemaCastError(SchemaExportError):
 
 class SchemaNameCollisionError(SchemaExportError):
     """Raised when distinct concept types normalize to the same generated name."""
+
+
+class SchemaReferenceError(SchemaExportError):
+    """Report a declared foreign key that the compiled contracts cannot carry."""
+
+
+class ProjectionError(SchemaExportError):
+    """Report a projection document the relational contract cannot support."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,35 +131,6 @@ class TypeContract:
     root: ObjectNode
 
 
-@dataclass(slots=True)
-class _CompileOptions:
-    infer_types: bool
-    casts: dict[str, CastKind]
-    declared_by_type: Mapping[str, Mapping[str, DuckDBLogicalType]] = field(default_factory=dict)
-    used_casts: set[str] = field(default_factory=set)
-
-
-def parse_casts(specifications: Sequence[str]) -> dict[str, CastKind]:
-    """Parse repeatable ``FIELD=TYPE`` declarations and reject ambiguity."""
-    casts: dict[str, CastKind] = {}
-    for specification in specifications:
-        path, separator, raw_kind = specification.rpartition("=")
-        path = path.strip()
-        kind = raw_kind.strip().lower()
-        if not separator or not path or kind not in _CAST_KINDS:
-            allowed = ", ".join(sorted(_CAST_KINDS))
-            message = (
-                f"invalid cast {specification!r}; expected FIELD=TYPE, where TYPE is {allowed}"
-            )
-            raise SchemaCastError(message)
-        previous = casts.get(path)
-        if previous is not None and previous != kind:
-            message = f"field {path!r} has conflicting casts: {previous} and {kind}"
-            raise SchemaCastError(message)
-        casts[path] = cast("CastKind", kind)
-    return casts
-
-
 def model_name(value: str, suffix: str) -> str:
     """Return the shared deterministic Unicode-aware generated identifier."""
     normalized = unicodedata.normalize("NFKC", value)
@@ -165,439 +147,146 @@ def model_name(value: str, suffix: str) -> str:
     return f"{name}{suffix}"
 
 
-def unique_model_names(values: Sequence[str], suffix: str) -> dict[str, str]:
-    """Generate names while rejecting collisions instead of silently overwriting."""
-    names: dict[str, str] = {}
-    owners: dict[str, str] = {}
-    for value in sorted(values):
-        name = model_name(value, suffix)
-        previous = owners.get(name)
-        if previous is not None and previous != value:
-            message = f"concept types {previous!r} and {value!r} both normalize to {name!r}"
-            raise SchemaNameCollisionError(message)
-        names[value] = name
-        owners[name] = value
-    return names
+class _Wire(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
 
-def _scalar_node(
-    values: Sequence[str], path: str, options: _CompileOptions, _concept_type: str | None
-) -> ScalarNode:
-    explicit = options.casts.get(path)
-    if explicit is not None:
-        options.used_casts.add(path)
-        if not can_classify_as(values, explicit):
-            sample = next(
-                (value for value in values if not can_classify_as((value,), explicit)),
-                values[0],
-            )
-            message = f"cannot cast {path!r} to {explicit}: {sample!r} is incompatible"
-            raise SchemaCastError(message)
-        return ScalarNode(explicit)
-    kind = classify_lexemes(values) if options.infer_types else "string"
-    return ScalarNode(kind)
+class _WireType(_Wire):
+    sql: str
+    family: str
+    precision: int | None = None
+    scale: int | None = None
+    element: _WireType | None = None
 
 
-def _declared_node(declared: DuckDBLogicalType) -> ContractNode:
-    """Project a lossless DuckDB type into the language-neutral contract tree."""
-    if declared.family == "list" and declared.element is not None:
-        return ListNode(
-            item=_declared_node(declared.element),
-            item_nullable=False,
-            declared_type=declared,
-        )
-    return ScalarNode(declared.cast_kind or "string", declared_type=declared)
+class _WireScalar(_Wire):
+    node: Literal["scalar"]
+    kind: CastKind
+    declared_type: _WireType | None = None
 
 
-def _compile_value(
-    values: Sequence[object],
-    *,
-    path: str,
-    options: _CompileOptions,
-    concept_type: str | None,
-) -> ContractNode:
-    non_null = [value for value in values if value is not None]
-    declared = (
-        options.declared_by_type.get(concept_type, {}).get(path)
-        if concept_type is not None and path not in options.casts
-        else None
+class _WireLiteral(_Wire):
+    node: Literal["literal"]
+    value: str
+
+
+class _WireAny(_Wire):
+    node: Literal["any"]
+
+
+class _WireList(_Wire):
+    node: Literal["list"]
+    item: _WireNode
+    item_nullable: bool
+    declared_type: _WireType | None = None
+
+
+class _WireRef(_Wire):
+    node: Literal["ref"]
+    concept_type: str
+    columns: tuple[str, ...]
+    referenced_columns: tuple[str, ...]
+    position: int
+    value: _WireNode
+    embedded: bool
+
+
+class _WireField(_Wire):
+    name: str
+    required: bool
+    nullable: bool
+    value: _WireNode
+
+
+class _WireObject(_Wire):
+    node: Literal["object"]
+    fields: tuple[_WireField, ...]
+
+
+type _WireNode = Annotated[
+    _WireScalar | _WireLiteral | _WireAny | _WireList | _WireRef | _WireObject,
+    Field(discriminator="node"),
+]
+
+
+class _WireContract(_Wire):
+    concept_type: str
+    model_name: str
+    fields: tuple[_WireField, ...]
+
+
+class _WireContracts(_Wire):
+    contracts: tuple[_WireContract, ...]
+
+
+def _logical_type(wire: _WireType) -> DuckDBLogicalType:
+    # The catalog classifier is the one source of the family; the binary's
+    # precision and scale are DuckDB's own and win over the spelling.
+    return logical_type_from_catalog(
+        wire.sql, numeric_precision=wire.precision, numeric_scale=wire.scale
     )
-    if declared is not None:
-        node = _declared_node(declared)
-        if isinstance(node, ListNode):
-            items = [
-                item
-                for value in non_null
-                if isinstance(value, list)
-                for item in cast("list[object]", value)
-            ]
-            node = ListNode(
-                node.item,
-                item_nullable=any(item is None for item in items),
-                declared_type=node.declared_type,
+
+
+def _field(wire: _WireField) -> FieldContract:
+    return FieldContract(wire.name, wire.required, wire.nullable, _node(wire.value))
+
+
+def _node(wire: _WireNode) -> ContractNode:
+    match wire:
+        case _WireScalar():
+            declared = None if wire.declared_type is None else _logical_type(wire.declared_type)
+            return ScalarNode(wire.kind, declared)
+        case _WireLiteral():
+            return LiteralNode(wire.value)
+        case _WireAny():
+            return AnyNode()
+        case _WireList():
+            declared = None if wire.declared_type is None else _logical_type(wire.declared_type)
+            return ListNode(_node(wire.item), wire.item_nullable, declared)
+        case _WireRef():
+            return RefNode(
+                concept_type=wire.concept_type,
+                columns=wire.columns,
+                referenced_columns=wire.referenced_columns,
+                position=wire.position,
+                value=_node(wire.value),
+                embedded=wire.embedded,
             )
-        return node
-    if not non_null:
-        return _scalar_node((), path, options, concept_type)
-
-    if all(isinstance(value, dict) for value in non_null):
-        if path in options.casts:
-            message = f"cannot cast {path!r}: the field contains objects"
-            raise SchemaCastError(message)
-        documents = [cast("dict[str, object]", value) for value in non_null]
-        return _compile_object(documents, parent_path=path, options=options)
-
-    if all(isinstance(value, list) for value in non_null):
-        items = [item for value in non_null for item in cast("list[object]", value)]
-        return ListNode(
-            item=_compile_value(items, path=path, options=options, concept_type=None),
-            item_nullable=any(item is None for item in items),
-        )
-
-    if any(isinstance(value, (dict, list)) for value in non_null):
-        if path in options.casts:
-            message = f"cannot cast {path!r}: the field mixes scalar and structured values"
-            raise SchemaCastError(message)
-        return AnyNode()
-
-    return _scalar_node([str(value) for value in non_null], path, options, concept_type)
+        case _WireObject():
+            return ObjectNode(tuple(_field(field) for field in wire.fields))
 
 
-def _compile_object(
-    documents: Sequence[Mapping[str, object]],
-    *,
-    parent_path: str,
-    options: _CompileOptions,
-    concept_type: str | None = None,
-) -> ObjectNode:
-    keys = {key for document in documents for key in document}
-    if concept_type is not None:
-        keys.update(("type", "title", "description"))
-        if not parent_path:
-            keys.update(options.declared_by_type.get(concept_type, {}))
-
-    fields: list[FieldContract] = []
-    for name in sorted(keys):
-        field_path = f"{parent_path}.{name}" if parent_path else name
-        present = [document[name] for document in documents if name in document]
-        required = len(present) == len(documents)
-        nullable = any(value is None for value in present)
-        if name == "type" and concept_type is not None:
-            required = True
-            nullable = False
-            value: ContractNode = LiteralNode(concept_type)
-        else:
-            value = _compile_value(
-                present, path=field_path, options=options, concept_type=concept_type
-            )
-        fields.append(FieldContract(name, required, nullable, value))
-    return ObjectNode(tuple(fields))
-
-
-def compile_contracts(
-    documents_by_type: Mapping[str, Sequence[Mapping[str, object]]],
-    *,
-    infer_types: bool = False,
-    casts: Sequence[str] = (),
-    declared_types_by_type: Mapping[str, Mapping[str, DuckDBLogicalType]] | None = None,
-) -> tuple[TypeContract, ...]:
-    """Compile all observations into one language-neutral contract per type.
-
-    `casts` (explicit `--cast FIELD=TYPE`) stays a single global table, same
-    as always - a caller asking for a cast by field path alone accepts that
-    it applies wherever that path appears. `declared_types_by_type` is the
-    opposite shape on purpose: each type's `.schema.sql` only ever describes
-    that type, so a declared kind is looked up scoped to `(concept_type,
-    field)` and never bleeds into another type's same-named field. Where
-    both apply to one type's field, the explicit cast wins (`_scalar_node`
-    checks it first) - precedence still resolved per type, not globally.
-    """
-    options = _CompileOptions(
-        infer_types=infer_types,
-        casts=parse_casts(casts),
-        declared_by_type=declared_types_by_type or {},
-    )
-    names = unique_model_names(tuple(documents_by_type), "Concept")
-    contracts = tuple(
-        TypeContract(
-            concept_type=concept_type,
-            model_name=names[concept_type],
-            root=_compile_object(
-                documents,
-                parent_path="",
-                options=options,
-                concept_type=concept_type,
-            ),
-        )
-        for concept_type, documents in sorted(documents_by_type.items())
-    )
-    unused = set(options.casts) - options.used_casts
-    if unused:
-        fields = ", ".join(repr(item) for item in sorted(unused))
-        message = f"cast field was not found in the bundle: {fields}"
-        raise SchemaCastError(message)
-    return contracts
-
-
-def _title_for(name: str) -> str:
-    return name[:1].upper() + name[1:]
-
-
-def _declared_scalar_schema(declared: DuckDBLogicalType) -> dict[str, object]:
-    """Render one declared physical type without discarding DuckDB intent."""
-    schema: dict[str, object] = {"x-okf-duckdb-type": declared.sql}
-    if declared.family == "string":
-        schema["type"] = "string"
-    elif declared.family == "boolean":
-        schema["type"] = "boolean"
-    elif declared.family == "integer":
-        schema["type"] = "integer"
-    elif declared.family in {"float", "decimal"}:
-        schema["type"] = "number"
-        if declared.family == "decimal" and declared.scale:
-            schema["multipleOf"] = 10.0**-declared.scale
-    elif declared.family == "date":
-        schema.update({"type": "string", "format": "date"})
-    elif declared.family == "timestamp":
-        schema.update({"type": "string", "x-okf-temporal-kind": "timestamp-without-time-zone"})
-    elif declared.family == "timestamptz":
-        schema.update({"type": "string", "format": "date-time"})
-    elif declared.family == "uuid":
-        schema.update({"type": "string", "format": "uuid"})
-    return schema
-
-
-def _scalar_schema(node: ScalarNode) -> dict[str, object]:
-    if node.declared_type is not None:
-        return _declared_scalar_schema(node.declared_type)
-    schemas: dict[CastKind, dict[str, object]] = {
-        "boolean": {"type": "boolean"},
-        "integer": {"type": "integer"},
-        "number": {"type": "number"},
-        "date": {"type": "string", "format": "date"},
-        "datetime": {"type": "string", "format": "date-time"},
-        "string": {"type": "string"},
-    }
-    return schemas[node.kind]
-
-
-def _reference_json_schema(node: RefNode) -> dict[str, object]:
-    """Render a reference: a `$ref` when embedded, the carried scalar otherwise."""
-    if node.embedded:
-        return {
-            "$ref": f"#/$defs/{node.concept_type}",
-            "x-okf-references": node.reference_metadata,
-        }
-    return {
-        **node_json_schema(node.value),
-        "x-okf-references": node.reference_metadata,
-    }
-
-
-def node_json_schema(node: ContractNode) -> dict[str, object]:
-    """Render one canonical JSON Schema fragment from the shared contract."""
-    if isinstance(node, RefNode):
-        return _reference_json_schema(node)
-    if isinstance(node, ScalarNode):
-        return _scalar_schema(node)
-    if isinstance(node, LiteralNode):
-        return {"type": "string", "const": node.value}
-    if isinstance(node, AnyNode):
-        return {}
-    if isinstance(node, ListNode):
-        item = node_json_schema(node.item)
-        if node.item_nullable:
-            item = {"anyOf": [item, {"type": "null"}]}
-        schema: dict[str, object] = {"type": "array", "items": item}
-        if node.declared_type is not None:
-            schema["x-okf-duckdb-type"] = node.declared_type.sql
-        return schema
-
-    return _object_json_schema(node)
-
-
-def _object_json_schema(node: ObjectNode) -> dict[str, object]:
-    """Render one object node, keeping field order and required-ness authored."""
-    properties: dict[str, object] = {}
-    required: list[str] = []
-    for field_contract in node.fields:
-        base = node_json_schema(field_contract.value)
-        property_schema: dict[str, object] = (
-            {"anyOf": [base, {"type": "null"}]} if field_contract.nullable else dict(base)
-        )
-        property_schema["title"] = _title_for(field_contract.name)
-        properties[field_contract.name] = property_schema
-        if field_contract.required:
-            required.append(field_contract.name)
-    schema: dict[str, object] = {"type": "object", "properties": properties}
-    if required:
-        schema["required"] = required
-    return schema
-
-
-def contract_json_schema(contract: TypeContract) -> dict[str, object]:
-    """Render one complete canonical concept schema."""
-    return {**node_json_schema(contract.root), "title": contract.model_name}
-
-
-def _declared_scalar_zod(declared: DuckDBLogicalType) -> str:
-    if declared.family == "integer":
-        return (
-            "z.number().int()"
-            if declared.is_js_safe_integer
-            else "z.union([z.number().int(), z.bigint()])"
-        )
-    renderers: dict[str, str] = {
-        "string": "z.string()",
-        "boolean": "z.boolean()",
-        "float": "z.number()",
-        "decimal": "z.string()",
-        "date": "z.iso.date()",
-        "timestamp": "z.string()",
-        "timestamptz": "z.iso.datetime({ offset: true })",
-        "uuid": "z.uuid()",
-    }
-    return renderers.get(declared.family, "z.unknown()")
-
-
-def _scalar_zod(node: ScalarNode) -> str:
-    if node.declared_type is not None:
-        return _declared_scalar_zod(node.declared_type)
-    renderers: dict[CastKind, str] = {
-        "boolean": "z.boolean()",
-        "integer": "z.number().int()",
-        "number": "z.number()",
-        "date": "z.iso.date()",
-        "datetime": "z.iso.datetime({ offset: true, local: true })",
-        "string": "z.string()",
-    }
-    return renderers[node.kind]
-
-
-def _reference_zod(
-    node: RefNode,
-    indent: str,
-    *,
-    ref_names: Mapping[str, str] | None,
-    lazy_refs: frozenset[str],
-) -> str:
-    """Render a reference: the sibling variable when embedded, the scalar otherwise."""
-    if node.embedded:
-        name = _ref_variable(node.concept_type, ref_names)
-        return f"z.lazy(() => {name})" if node.concept_type in lazy_refs else name
-    described = json.dumps(node.description, ensure_ascii=False)
-    rendered = node_zod(node.value, indent, ref_names=ref_names, lazy_refs=lazy_refs)
-    return f"{rendered}.describe({described})"
-
-
-def node_zod(
-    node: ContractNode,
-    indent: str = "",
-    *,
-    ref_names: Mapping[str, str] | None = None,
-    lazy_refs: frozenset[str] = frozenset(),
-) -> str:
-    """Render one canonical Zod expression from the shared contract.
-
-    `ref_names` maps a concept type to the variable its schema is declared
-    under; `lazy_refs` names the targets whose declaration cannot precede this
-    one, which are emitted through `z.lazy` so a cycle closes by name.
-    """
-    if isinstance(node, RefNode):
-        return _reference_zod(node, indent, ref_names=ref_names, lazy_refs=lazy_refs)
-    if isinstance(node, ScalarNode):
-        return _scalar_zod(node)
-    if isinstance(node, LiteralNode):
-        return f"z.literal({json.dumps(node.value, ensure_ascii=False)})"
-    if isinstance(node, AnyNode):
-        return "z.unknown()"
-    if isinstance(node, ListNode):
-        item = node_zod(node.item, indent, ref_names=ref_names, lazy_refs=lazy_refs)
-        if node.item_nullable:
-            item += ".nullable()"
-        return f"z.array({item})"
-
-    child_indent = f"{indent}  "
-    rows: list[str] = []
-    for field_contract in node.fields:
-        rendered = node_zod(
-            field_contract.value, child_indent, ref_names=ref_names, lazy_refs=lazy_refs
-        )
-        if field_contract.nullable:
-            rendered += ".nullable()"
-        if not field_contract.required:
-            rendered += ".optional()"
-        rows.append(
-            f"{child_indent}{json.dumps(field_contract.name, ensure_ascii=False)}: {rendered}"
-        )
-    return f"z.object({{\n{',\n'.join(rows)}\n{indent}}})"
-
-
-def _ref_variable(concept_type: str, ref_names: Mapping[str, str] | None) -> str:
-    """Return the variable a referenced concept type is declared under."""
-    if ref_names is not None and concept_type in ref_names:
-        return ref_names[concept_type]
-    return model_name(concept_type, "Schema")
-
-
-def _embedded_targets(contract: TypeContract) -> tuple[str, ...]:
-    """Return the concept types this contract embeds, in authored field order."""
+def contracts_from_json(payload: object) -> tuple[TypeContract, ...]:
+    """Decode the binary's ``{"contracts": [...]}`` answer into the IR."""
+    wire = _WireContracts.model_validate(payload)
     return tuple(
-        field_contract.value.concept_type
-        for field_contract in contract.root.fields
-        if isinstance(field_contract.value, RefNode) and field_contract.value.embedded
+        TypeContract(
+            concept_type=contract.concept_type,
+            model_name=contract.model_name,
+            root=ObjectNode(tuple(_field(field) for field in contract.fields)),
+        )
+        for contract in wire.contracts
     )
 
 
-def _declaration_order(
-    contracts: Sequence[TypeContract],
-) -> tuple[tuple[TypeContract, ...], frozenset[str]]:
-    """Order declarations so a target precedes its user, naming the back edges.
-
-    A JavaScript `const` cannot be read before it is declared, so an embedded
-    reference needs its target declared first. A cycle makes that impossible
-    for at least one edge; those edges are returned so the renderer can close
-    them with `z.lazy`, which defers the read to call time.
-    """
-    by_type = {contract.concept_type: contract for contract in contracts}
-    ordered: list[TypeContract] = []
-    emitted: set[str] = set()
-    visiting: list[str] = []
-    lazy: set[str] = set()
-
-    def visit(concept_type: str) -> None:
-        if concept_type in emitted or concept_type not in by_type:
-            return
-        if concept_type in visiting:
-            lazy.add(concept_type)
-            return
-        visiting.append(concept_type)
-        for target in _embedded_targets(by_type[concept_type]):
-            visit(target)
-        visiting.pop()
-        emitted.add(concept_type)
-        ordered.append(by_type[concept_type])
-
-    for contract in contracts:
-        visit(contract.concept_type)
-    return tuple(ordered), frozenset(lazy)
-
-
-def render_zod(contracts: Sequence[TypeContract], *, zod_import: ZodImport = "zod") -> str:
-    """Render complete deterministic Zod declarations for all concept types."""
-    variable_names = unique_model_names(
-        tuple(contract.concept_type for contract in contracts),
-        "Schema",
-    )
-    import_line = (
-        "import { z } from 'astro:content';"
-        if zod_import == "astro"
-        else "import { z } from 'zod';"
-    )
-    lines = ["// Generated by okf-parser", import_line, ""]
-    ordered, lazy_refs = _declaration_order(contracts)
-    for contract in ordered:
-        rendered = node_zod(contract.root, ref_names=variable_names, lazy_refs=lazy_refs)
-        lines.append(f"export const {variable_names[contract.concept_type]} = {rendered};")
-        lines.append("")
-    return "\n".join(lines)
+__all__ = [
+    "AnyNode",
+    "CastKind",
+    "ContractNode",
+    "FieldContract",
+    "ListNode",
+    "LiteralNode",
+    "ObjectNode",
+    "ProjectionError",
+    "RefNode",
+    "RefsMode",
+    "ScalarNode",
+    "SchemaCastError",
+    "SchemaExportError",
+    "SchemaNameCollisionError",
+    "SchemaReferenceError",
+    "TypeContract",
+    "ZodImport",
+    "contracts_from_json",
+    "model_name",
+]

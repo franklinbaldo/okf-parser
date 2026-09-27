@@ -1,15 +1,11 @@
 //! `okf-parser serve`: the effect-aware MCP server (RFC 0008, RFC 0024).
 //!
-//! The protocol, the tool schemas and the effect annotations live here. A tool
-//! is answered natively once its logic exists in Rust: `check`, `inventory`,
-//! `graph`, `sql`, `apply_*`, `init_*` and `duckdb_export`. The others
-//! (`schema`, `format_*`, `import_*`) are delegated to `python -m okf_parser.mcp_bridge`,
-//! which runs the same service function the Python CLI does.
+//! The protocol, the tool schemas and the effect annotations live here, and
+//! every tool is answered by the binary itself. Only `schema --format
+//! pydantic` calls into the Python shell, to render Python source.
 
-use std::path::{Path, PathBuf};
-use std::process::Stdio;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::{fmt, io};
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
@@ -18,15 +14,14 @@ use rmcp::transport::streamable_http_server::session::local::LocalSessionManager
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
 use rmcp::{ServerHandler, ServiceExt, schemars, tool, tool_handler, tool_router};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use tokio::io::AsyncWriteExt;
 
 use okf_db::export::ExportOptions;
 use okf_db::import::{ConflictPolicy, ImportRequest};
 use okf_db::query::QueryOptions;
+use okf_db::schema::{RefsMode, SchemaOptions};
 use okf_engine::search::{Detail, Mode, SearchOutput, SearchRequest};
 
-use crate::{commands, python};
+use crate::commands;
 
 const INSTRUCTIONS: &str = "Deterministic OKF inspection and preview tools. Explicit commit tools \
 are available only when the server is launched with --allow-write. Tool annotations describe \
@@ -195,6 +190,21 @@ pub struct SchemaArgs {
     zod_import: ZodImport,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     spec_template: Option<String>,
+    /// The bundle's `okf.schema.sql`: declared foreign keys become references.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    relational_schema: Option<String>,
+    /// A reference's shape: the key's value (`key`) or the embedded schema.
+    #[serde(default)]
+    refs: RefsArg,
+}
+
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, schemars::JsonSchema)]
+#[serde(rename_all = "lowercase")]
+#[schemars(inline)]
+pub enum RefsArg {
+    #[default]
+    Key,
+    Embed,
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -376,77 +386,23 @@ fn default_schema() -> String {
 #[derive(Clone)]
 pub struct OkfServer {
     tool_router: ToolRouter<Self>,
-    python: Arc<PathBuf>,
 }
 
 impl OkfServer {
-    pub fn new(allow_write: bool, python: PathBuf) -> Self {
+    pub fn new(allow_write: bool) -> Self {
         let mut tool_router = Self::tool_router();
         if !allow_write {
             for name in WRITE_TOOLS {
                 tool_router.remove_route(name);
             }
         }
-        Self {
-            tool_router,
-            python: Arc::new(python),
-        }
-    }
-
-    async fn delegate(&self, tool: &str, arguments: impl Serialize) -> CallToolResult {
-        let request = json!({"tool": tool, "arguments": arguments});
-        match python_bridge(&self.python, &request).await {
-            Ok(Value::String(text)) => CallToolResult::success(vec![ContentBlock::text(text)]),
-            Ok(value) => CallToolResult::structured(value),
-            Err(error) => tool_error(&error),
-        }
+        Self { tool_router }
     }
 }
 
 /// A tool failure as the client sees it; the only place errors become text.
 fn tool_error(error: &dyn std::error::Error) -> CallToolResult {
     CallToolResult::error(vec![ContentBlock::text(error.to_string())])
-}
-
-/// Why a delegated call produced no result.
-#[derive(Debug)]
-enum BridgeError {
-    Spawn {
-        python: PathBuf,
-        source: io::Error,
-    },
-    NoStdin,
-    Io(io::Error),
-    Encode(serde_json::Error),
-    /// The bridge exited non-zero; this is the Python exception it reported.
-    Raised(String),
-    InvalidResponse(serde_json::Error),
-}
-
-impl fmt::Display for BridgeError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Spawn { python, source } => {
-                write!(f, "cannot start {}: {source}", python.display())
-            }
-            Self::NoStdin => f.write_str("python bridge has no stdin"),
-            Self::Io(error) => error.fmt(f),
-            Self::Encode(error) => write!(f, "cannot encode bridge request: {error}"),
-            Self::Raised(exception) => f.write_str(exception),
-            Self::InvalidResponse(error) => write!(f, "invalid bridge response: {error}"),
-        }
-    }
-}
-
-impl std::error::Error for BridgeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            Self::Spawn { source, .. } => Some(source),
-            Self::Io(error) => Some(error),
-            Self::Encode(error) | Self::InvalidResponse(error) => Some(error),
-            Self::NoStdin | Self::Raised(_) => None,
-        }
-    }
 }
 
 impl OkfServer {
@@ -463,43 +419,6 @@ impl OkfServer {
         })
         .await
     }
-}
-
-/// Run one delegated call and return its JSON result, or the error it raised.
-async fn python_bridge(python: &Path, request: &Value) -> Result<Value, BridgeError> {
-    let mut child = tokio::process::Command::new(python)
-        .args(["-m", "okf_parser.mcp_bridge"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|source| BridgeError::Spawn {
-            python: python.to_owned(),
-            source,
-        })?;
-    let mut stdin = child.stdin.take().ok_or(BridgeError::NoStdin)?;
-    let body = serde_json::to_vec(request).map_err(BridgeError::Encode)?;
-    stdin.write_all(&body).await.map_err(BridgeError::Io)?;
-    drop(stdin);
-    let output = child.wait_with_output().await.map_err(BridgeError::Io)?;
-    if !output.status.success() {
-        return Err(BridgeError::Raised(bridge_error(&String::from_utf8_lossy(
-            &output.stderr,
-        ))));
-    }
-    serde_json::from_slice(&output.stdout).map_err(BridgeError::InvalidResponse)
-}
-
-/// Keep the exception line of a Python traceback, which is what a caller can act on.
-fn bridge_error(stderr: &str) -> String {
-    stderr
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("python bridge failed without output")
-        .trim()
-        .to_owned()
 }
 
 /// Run a native command off the async runtime and return its report as
@@ -652,7 +571,39 @@ impl OkfServer {
         )
     )]
     async fn schema(&self, Parameters(args): Parameters<SchemaArgs>) -> CallToolResult {
-        self.delegate("schema", args).await
+        let answer = tokio::task::spawn_blocking(move || {
+            let options = SchemaOptions {
+                exclude: args.exclude.unwrap_or_default(),
+                infer_types: args.infer_types,
+                casts: args.cast.unwrap_or_default(),
+                spec_template: args.spec_template,
+                relational_schema: args.relational_schema,
+                refs: match args.refs {
+                    RefsArg::Key => RefsMode::Key,
+                    RefsArg::Embed => RefsMode::Embed,
+                },
+            };
+            let format = match args.schema_format {
+                SchemaFormat::Json => commands::SchemaFormat::Json,
+                SchemaFormat::Zod => commands::SchemaFormat::Zod,
+                SchemaFormat::Pydantic => commands::SchemaFormat::Pydantic,
+                SchemaFormat::Graphql => commands::SchemaFormat::Graphql,
+            };
+            let zod_import = match args.zod_import {
+                ZodImport::Zod => okf_db::schema::ZodImport::Zod,
+                ZodImport::Astro => okf_db::schema::ZodImport::Astro,
+            };
+            commands::schema(&args.path, format, &options, zod_import)
+        })
+        .await;
+        match answer {
+            Ok(Ok(commands::SchemaAnswer::Json(value))) => CallToolResult::structured(value),
+            Ok(Ok(commands::SchemaAnswer::Text(text))) => {
+                CallToolResult::success(vec![ContentBlock::text(text)])
+            }
+            Ok(Err(error)) => tool_error(&error),
+            Err(error) => tool_error(&error),
+        }
     }
 
     #[tool(
@@ -850,12 +801,11 @@ pub fn serve(
     allowed_host: &[String],
     allow_write: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let python = python::interpreter()?;
     let runtime = tokio::runtime::Runtime::new()?;
     runtime.block_on(async move {
         match transport {
             Transport::Stdio => {
-                let service = OkfServer::new(allow_write, python)
+                let service = OkfServer::new(allow_write)
                     .serve(rmcp::transport::stdio())
                     .await?;
                 service.waiting().await?;
@@ -864,7 +814,7 @@ pub fn serve(
                 let mut config = StreamableHttpServerConfig::default();
                 config.allowed_hosts = allowed_hosts(&config.allowed_hosts, host, allowed_host);
                 let service = StreamableHttpService::new(
-                    move || Ok(OkfServer::new(allow_write, python.clone())),
+                    move || Ok(OkfServer::new(allow_write)),
                     Arc::new(LocalSessionManager::default()),
                     config,
                 );
@@ -881,6 +831,8 @@ pub fn serve(
 mod tests {
     use super::*;
     use okf_engine::LoadError;
+    use serde_json::json;
+    use std::path::Path;
 
     fn tool_names(server: &OkfServer) -> Vec<String> {
         let mut names: Vec<_> = server
@@ -895,7 +847,7 @@ mod tests {
 
     #[test]
     fn default_profile_hides_every_commit_tool() {
-        let names = tool_names(&OkfServer::new(false, PathBuf::from("python")));
+        let names = tool_names(&OkfServer::new(false));
         assert_eq!(
             names,
             [
@@ -915,7 +867,7 @@ mod tests {
 
     #[test]
     fn allow_write_adds_exactly_the_commit_tools() {
-        let names = tool_names(&OkfServer::new(true, PathBuf::from("python")));
+        let names = tool_names(&OkfServer::new(true));
         assert_eq!(names.len(), 15);
         for tool in WRITE_TOOLS {
             assert!(names.iter().any(|name| name == tool), "missing {tool}");
@@ -923,7 +875,7 @@ mod tests {
     }
 
     #[test]
-    fn delegated_arguments_keep_their_wire_names() {
+    fn arguments_keep_their_wire_names() {
         let args: ApplyArgs =
             serde_json::from_value(json!({"path": "b", "type": "T", "from": "x"})).unwrap();
         assert_eq!(
@@ -1000,19 +952,15 @@ mod tests {
     }
 
     #[test]
-    fn bridge_errors_render_only_at_the_tool_boundary() {
-        let error = BridgeError::Raised("ValueError: bad bundle".into());
+    fn schema_errors_render_only_at_the_tool_boundary() {
+        let error = commands::SchemaFailure::Schema(okf_db::schema::SchemaError::Cast(
+            "invalid cast 'x'".into(),
+        ));
         let result = tool_error(&error);
         assert_eq!(result.is_error, Some(true));
         assert_eq!(
             serde_json::to_value(&result.content).unwrap()[0]["text"],
-            "ValueError: bad bundle"
+            "invalid cast 'x'"
         );
-    }
-
-    #[test]
-    fn bridge_error_keeps_the_exception_line() {
-        let stderr = "Traceback (most recent call last):\n  ...\nValueError: bad bundle\n\n";
-        assert_eq!(bridge_error(stderr), "ValueError: bad bundle");
     }
 }

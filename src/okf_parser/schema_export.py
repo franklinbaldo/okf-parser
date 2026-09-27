@@ -1,162 +1,77 @@
-"""Export canonical JSON Schema, Zod, and Pydantic schemas for OKF frontmatter."""
+"""Export canonical JSON Schema, Zod, and Pydantic schemas for OKF frontmatter.
+
+The binary compiles the contracts and renders every text format
+(``okf-db/src/schema``); Pydantic models and source are built here from the
+contracts it returns.
+"""
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Literal, cast
+from typing import TYPE_CHECKING, Any, Literal
 
-from okf_parser.bundle import load_bundle
-from okf_parser.declared_schema import (
-    DeclaredSchemaError,
-    declared_schema_relative_path,
-    parse_declared_schema,
-)
-from okf_parser.parser import DocumentParseError, parse_document
-from okf_parser.projection_export import compile_projections
-from okf_parser.projections import PROJECTION_TYPE, load_projections
+from pydantic import BaseModel, ConfigDict, JsonValue
+
 from okf_parser.pydantic_projection import (
     build_dynamic_pydantic_models,
     render_pydantic_source,
 )
-from okf_parser.relational_schema import load_relational_schema
+from okf_parser.relational_schema import RelationalSchemaError
+from okf_parser.rust_core import ErrorKind, native_result
 from okf_parser.schema_contract import (
-    ListNode,
-    ObjectNode,
-    RefNode,
+    ProjectionError,
+    RefsMode,
     SchemaCastError,
     SchemaExportError,
     SchemaNameCollisionError,
+    SchemaReferenceError,
     TypeContract,
     ZodImport,
-    compile_contracts,
-    contract_json_schema,
-    render_zod,
+    contracts_from_json,
 )
-from okf_parser.schema_references import apply_references
-from okf_parser.type_specs import SPEC_SLUG_PLACEHOLDER
-
-type RefsMode = Literal["key", "embed"]
+from okf_parser.type_specs import SpecTemplateError
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
-    from pydantic import BaseModel
-
-    from okf_parser.duckdb_types import DuckDBLogicalType
+    from collections.abc import Callable, Mapping, Sequence
 
 
-def _restore_projection_booleans(frontmatter: dict[str, object]) -> None:
-    """Restore bools lost by the bundle's scalar-normalized frontmatter view."""
-    include = frontmatter.get("include")
-    if not isinstance(include, list):
-        return
-    for member in include:
-        if not isinstance(member, dict):
-            continue
-        typed_member = cast("dict[str, object]", member)
-        optional = typed_member.get("optional")
-        if optional == "true":
-            typed_member["optional"] = True
-        elif optional == "false":
-            typed_member["optional"] = False
+type SchemaTarget = Literal["contracts", "json", "zod", "graphql"]
 
 
-def documents_by_type(
-    path: str,
-    exclude: Sequence[str],
-) -> dict[str, list[dict[str, object]]]:
-    """Every concept's raw frontmatter, grouped by its authored `type`."""
-    bundle = load_bundle(Path(path), exclude)
-    by_type: dict[str, list[dict[str, object]]] = {}
-    for row in [concept.model_dump() for concept in bundle.concepts]:
-        concept_type = str(row.get("concept_type") or "concept")
-        frontmatter_raw = row.get("frontmatter_json")
-        if not isinstance(frontmatter_raw, str):
-            message = f"concept {row.get('path')!r} has no serialized frontmatter"
-            raise SchemaExportError(message)
-        frontmatter = json.loads(frontmatter_raw)
-        if not isinstance(frontmatter, dict):
-            message = f"concept {row.get('path')!r} frontmatter is not an object"
-            raise SchemaExportError(message)
-        typed_frontmatter = cast("dict[str, object]", frontmatter)
-        if concept_type == PROJECTION_TYPE:
-            _restore_projection_booleans(typed_frontmatter)
-        by_type.setdefault(concept_type, []).append(typed_frontmatter)
-    return by_type
+class SchemaRequest(BaseModel):
+    """One ``__schema`` request: a bundle, its compile options, and a target."""
+
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    target: SchemaTarget
+    exclude: tuple[str, ...] = ()
+    infer_types: bool = False
+    casts: tuple[str, ...] = ()
+    zod_import: ZodImport = "zod"
+    spec_template: str | None = None
+    relational_schema: str | None = None
+    refs: RefsMode = "key"
 
 
-def _declared_concept_types(root: str, spec_template: str | None) -> set[str]:
-    """Discover types whose authored specs have sibling declared schemas.
-
-    A declared schema is a contract even before the first concept instance
-    exists. Discovery follows the same spec template used for normal type
-    validation and reads the authored ``concept_type`` from each matching
-    ConceptSpecification rather than attempting to reverse a filesystem slug.
-    """
-    if spec_template is None or SPEC_SLUG_PLACEHOLDER not in spec_template:
-        return set()
-
-    root_path = Path(root)
-    pattern = spec_template.replace(SPEC_SLUG_PLACEHOLDER, "*")
-    concept_types: set[str] = set()
-    for spec_path in sorted(root_path.glob(pattern)):
-        if not spec_path.is_file():
-            continue
-        try:
-            parsed = parse_document(spec_path)
-        except (OSError, UnicodeError, DocumentParseError) as exc:
-            message = f"invalid specification document at {spec_path}: {exc}"
-            raise SchemaExportError(message) from exc
-
-        frontmatter = parsed.frontmatter
-        if frontmatter.get("type") != "ConceptSpecification":
-            continue
-        concept_type = frontmatter.get("concept_type")
-        if not isinstance(concept_type, str) or not concept_type:
-            continue
-        relative = declared_schema_relative_path(spec_template, concept_type)
-        if relative is not None and (root_path / relative).is_file():
-            concept_types.add(concept_type)
-    return concept_types
+SCHEMA_ERRORS: Mapping[ErrorKind, Callable[[str], Exception]] = {
+    "io": SchemaExportError,
+    "schema_export": SchemaExportError,
+    "schema_cast": SchemaCastError,
+    "schema_name_collision": SchemaNameCollisionError,
+    "schema_reference": SchemaReferenceError,
+    "projection": ProjectionError,
+    "spec_template": SpecTemplateError,
+    "relational_schema": RelationalSchemaError,
+}
 
 
-def _declared_types_by_type(
-    root: str,
-    concept_types: Sequence[str],
-    spec_template: str | None,
-) -> dict[str, dict[str, DuckDBLogicalType]]:
-    """Read each type's declaration while retaining DuckDB's full catalog types."""
-    if spec_template is None:
-        return {}
-
-    types_by_path: dict[str, list[str]] = {}
-    for concept_type in concept_types:
-        relative = declared_schema_relative_path(spec_template, concept_type)
-        if relative is not None:
-            types_by_path.setdefault(relative, []).append(concept_type)
-
-    by_type: dict[str, dict[str, DuckDBLogicalType]] = {}
-    for relative, owners in sorted(types_by_path.items()):
-        schema_path = Path(root) / relative
-        if not schema_path.is_file():
-            continue
-        if len(owners) > 1:
-            names = ", ".join(repr(name) for name in sorted(owners))
-            message = f"declared schema path collision at {relative!r}: {names}"
-            raise SchemaExportError(message)
-
-        concept_type = owners[0]
-        try:
-            sql_text = schema_path.read_text(encoding="utf-8")
-            declared = parse_declared_schema(sql_text, concept_type)
-        except (OSError, UnicodeError, DeclaredSchemaError) as exc:
-            message = f"invalid declared schema for {concept_type!r} at {relative!r}: {exc}"
-            raise SchemaExportError(message) from exc
-
-        if declared.columns:
-            by_type[concept_type] = dict(declared.columns)
-    return by_type
+def native_schema(
+    request: SchemaRequest,
+    errors: Mapping[ErrorKind, Callable[[str], Exception]] = SCHEMA_ERRORS,
+) -> dict[str, JsonValue]:
+    """Answer one ``__schema`` request, raising the schema error it names."""
+    return native_result("__schema", request, errors)
 
 
 def build_schema_contracts(
@@ -174,52 +89,25 @@ def build_schema_contracts(
     A type with a declared ``.schema.sql`` beside its authored specification is
     exportable even before the bundle contains its first concrete document.
 
-    `relational_schema` is the opt-in half: given the bundle's `okf.schema.sql`,
-    every field participating in a declared foreign key compiles to a reference
-    node. Projection documents compose a root contract with named sibling-schema
-    references; they never become concept types themselves.
+    `relational_schema` is the opt-in half: given the bundle's `okf.schema.sql`
+    (relative to the bundle root, or absolute), every field participating in a
+    declared foreign key compiles to a reference node. Projection documents
+    compose a root contract with named sibling-schema references; they never
+    become concept types themselves.
     """
-    observed = {
-        # A projection is a composed shape over the concept types, not one of
-        # them: RFC 0018 section 5. Compiling it as observations would mint a
-        # contract whose fields are `name`, `root` and `include`.
-        concept_type: documents
-        for concept_type, documents in documents_by_type(path, exclude).items()
-        if concept_type != PROJECTION_TYPE
-    }
-    declared_types = _declared_concept_types(path, spec_template)
-    for concept_type in declared_types:
-        observed.setdefault(concept_type, [])
-    declared_by_type = _declared_types_by_type(path, tuple(observed), spec_template)
-    concept_contracts = compile_contracts(
-        observed,
-        infer_types=infer_types,
-        casts=casts,
-        declared_types_by_type=declared_by_type,
+    result = native_schema(
+        SchemaRequest(
+            path=path,
+            target="contracts",
+            exclude=tuple(exclude),
+            infer_types=infer_types,
+            casts=tuple(casts),
+            spec_template=spec_template,
+            relational_schema=relational_schema,
+            refs=refs,
+        )
     )
-    projections = load_projections(path, exclude, relational_schema=relational_schema)
-    if relational_schema is None:
-        if refs == "embed":
-            message = "--refs=embed needs a relational schema to know what to embed"
-            raise SchemaExportError(message)
-        return concept_contracts
-
-    declared = Path(relational_schema)
-    # `check --relational-schema` resolves a relative path against the bundle
-    # root; the same flag has to mean the same file here.
-    resolved = declared if declared.is_absolute() else Path(path) / declared
-    schema = load_relational_schema(resolved)
-
-    # A projection controls composition itself. Its root therefore keeps the
-    # row-shaped/key form while only declared members become embedded sibling
-    # references. Flat concept exports continue to honor the run-level refs mode.
-    key_contracts = apply_references(concept_contracts, schema.foreign_keys, embed=False)
-    flat_contracts = (
-        key_contracts
-        if refs == "key"
-        else apply_references(concept_contracts, schema.foreign_keys, embed=True)
-    )
-    return (*flat_contracts, *compile_projections(projections, key_contracts))
+    return contracts_from_json(result)
 
 
 def build_pydantic_models(
@@ -268,17 +156,6 @@ def export_pydantic_source(
     return render_pydantic_source(contracts)
 
 
-def _has_embedded_reference(node: object) -> bool:
-    """Whether a contract subtree needs the shared sibling-schema definition pool."""
-    if isinstance(node, RefNode):
-        return node.embedded
-    if isinstance(node, ListNode):
-        return _has_embedded_reference(node.item)
-    if isinstance(node, ObjectNode):
-        return any(_has_embedded_reference(field.value) for field in node.fields)
-    return False
-
-
 def export_json_schema(
     path: str,
     exclude: Sequence[str] = (),
@@ -290,26 +167,18 @@ def export_json_schema(
     refs: RefsMode = "key",
 ) -> dict[str, Any]:
     """Export the canonical JSON Schema representation for each concept type."""
-    contracts = build_schema_contracts(
-        path,
-        exclude,
-        infer_types=infer_types,
-        casts=casts,
-        spec_template=spec_template,
-        relational_schema=relational_schema,
-        refs=refs,
+    return native_schema(
+        SchemaRequest(
+            path=str(Path(path)),
+            target="json",
+            exclude=tuple(exclude),
+            infer_types=infer_types,
+            casts=tuple(casts),
+            spec_template=spec_template,
+            relational_schema=relational_schema,
+            refs=refs,
+        )
     )
-    schemas = {contract.concept_type: contract_json_schema(contract) for contract in contracts}
-    payload: dict[str, Any] = {
-        "root": str(Path(path).resolve()),
-        "total_types": len(schemas),
-        "inferred_types": infer_types,
-        "casts": list(casts),
-        "schemas": schemas,
-    }
-    if any(_has_embedded_reference(contract.root) for contract in contracts):
-        payload["defs"] = schemas
-    return payload
 
 
 def export_zod_schema(
@@ -324,22 +193,32 @@ def export_zod_schema(
     refs: RefsMode = "key",
 ) -> str:
     """Generate canonical Zod declarations, using generic Zod by default."""
-    contracts = build_schema_contracts(
-        path,
-        exclude,
-        infer_types=infer_types,
-        casts=casts,
-        spec_template=spec_template,
-        relational_schema=relational_schema,
-        refs=refs,
+    result = native_schema(
+        SchemaRequest(
+            path=path,
+            target="zod",
+            exclude=tuple(exclude),
+            infer_types=infer_types,
+            casts=tuple(casts),
+            zod_import=zod_import,
+            spec_template=spec_template,
+            relational_schema=relational_schema,
+            refs=refs,
+        )
     )
-    return render_zod(contracts, zod_import=zod_import)
+    text = result.get("text")
+    if not isinstance(text, str):
+        message = "okf-parser __schema answered zod without text"
+        raise SchemaExportError(message)
+    return text
 
 
 __all__ = [
+    "ProjectionError",
     "SchemaCastError",
     "SchemaExportError",
     "SchemaNameCollisionError",
+    "SchemaReferenceError",
     "build_pydantic_models",
     "build_schema_contracts",
     "export_json_schema",

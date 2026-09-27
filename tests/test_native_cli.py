@@ -18,6 +18,7 @@ import pytest
 from okf_parser.bundle import load_bundle
 from okf_parser.parser import parse_document
 from okf_parser.rust_core import packaged_rust_core
+from okf_parser.service import schema_bundle
 
 _CONFIGURED = os.environ.get("OKF_CORE")
 _BINARY = Path(_CONFIGURED) if _CONFIGURED else packaged_rust_core()
@@ -136,9 +137,11 @@ def test_top_level_help_lists_native_and_delegated_commands() -> None:
         "graph",
         "init",
         "duckdb",
+        "schema",
+        "import",
         "serve",
     }
-    delegated = {"schema", "packs", "add-pack"}
+    delegated = {"packs", "add-pack"}
     assert native | delegated <= listed
     assert not any(name.startswith("__") for name in listed)
 
@@ -208,3 +211,47 @@ def test_import_exits_nonzero_for_a_divergent_existing_identity(tmp_path: Path) 
 
     assert code == 1
     assert payload["conflicting_existing"] == ["example/r1.md"]
+
+
+@pytest.mark.parametrize("schema_format", ["zod", "pydantic", "graphql"])
+def test_text_schema_prints_the_service_text_with_one_trailing_newline(
+    tmp_path: Path, schema_format: str
+) -> None:
+    _write(tmp_path / "concept.md", "---\ntype: Example\nname: value\n---\nBody\n")
+    assert _BINARY is not None
+
+    completed = subprocess.run(  # noqa: S603 - fixed argv to the binary under test
+        [str(_BINARY), "schema", str(tmp_path), "--format", schema_format],
+        capture_output=True,
+        check=True,
+        encoding="utf-8",
+    )
+
+    expected = schema_bundle(str(tmp_path), schema_format)
+    assert isinstance(expected, str)
+    assert completed.stdout == expected.rstrip("\n") + "\n"
+
+
+def test_json_schema_is_the_service_payload(tmp_path: Path) -> None:
+    _write(tmp_path / "concept.md", "---\ntype: Example\ncount: 3\n---\n")
+
+    code, payload = _run("schema", str(tmp_path), "--infer-types")
+
+    assert code == 0
+    assert payload == schema_bundle(str(tmp_path), infer_types=True)
+    assert payload["schemas"]["Example"]["properties"]["count"]["type"] == "integer"
+
+
+def test_a_schema_error_exits_nonzero_with_its_message(tmp_path: Path) -> None:
+    _write(tmp_path / "concept.md", "---\ntype: Example\ncount: many\n---\n")
+    assert _BINARY is not None
+
+    completed = subprocess.run(  # noqa: S603 - fixed argv to the binary under test
+        [str(_BINARY), "schema", str(tmp_path), "--cast", "count=integer"],
+        capture_output=True,
+        check=False,
+        encoding="utf-8",
+    )
+
+    assert completed.returncode != 0
+    assert "cannot cast 'count' to integer" in completed.stderr

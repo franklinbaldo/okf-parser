@@ -573,6 +573,13 @@ fn digests(text: &str, mapping: &Map<String, Value>, body: &str) -> (String, Str
     )
 }
 
+/// One document's frontmatter mapping, or `None` when it has none that parses.
+pub fn frontmatter_of(text: &str) -> Option<Map<String, Value>> {
+    let normalized = normalized_newlines(text);
+    let (frontmatter, _) = split_source(normalized.as_ref())?;
+    Some(parse_frontmatter(frontmatter).ok()?.mapping)
+}
+
 /// The parsed digest of one document's text (its frontmatter value and body),
 /// or `None` when it has no parseable frontmatter. Two spellings of the same
 /// document share it.

@@ -8,7 +8,7 @@ use okf_engine::frontmatter::render_document;
 use okf_engine::write::{
     EditOutcome, EditReport, EditRequest, ValidationItem, WriteError, edit_concept,
 };
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use std::path::PathBuf;
 
 use okf_db::declared::{DeclaredSchema, parse_declared_schema};
@@ -435,6 +435,92 @@ impl From<SearchOutput> for SearchAnswer {
 pub fn search(request: &str) -> Result<Response<SearchAnswer>, serde_json::Error> {
     let request: SearchRequestJson = serde_json::from_str(request)?;
     Ok(run_search(&request).map(SearchAnswer::from).into())
+}
+
+/// What `__schema` answers: the contracts themselves, or one rendering.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum SchemaTarget {
+    Contracts,
+    Json,
+    Zod,
+    Graphql,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SchemaRequestJson {
+    path: PathBuf,
+    target: SchemaTarget,
+    #[serde(default)]
+    exclude: Vec<String>,
+    #[serde(default)]
+    infer_types: bool,
+    #[serde(default)]
+    casts: Vec<String>,
+    #[serde(default)]
+    zod_import: okf_db::schema::ZodImport,
+    #[serde(default)]
+    spec_template: Option<String>,
+    #[serde(default)]
+    relational_schema: Option<String>,
+    #[serde(default)]
+    refs: okf_db::schema::RefsMode,
+}
+
+fn schema_error(error: &okf_db::schema::SchemaError) -> ProtocolError {
+    match error {
+        okf_db::schema::SchemaError::Load(load) => ProtocolError::from_load(load),
+        other => ProtocolError {
+            kind: other.kind(),
+            message: other.to_string(),
+        },
+    }
+}
+
+fn run_schema(request: SchemaRequestJson) -> Result<Value, ProtocolError> {
+    use okf_db::schema::{
+        RefsMode, SchemaOptions, build_contracts, render_graphql, render_json_schema, render_zod,
+    };
+    let graphql = matches!(request.target, SchemaTarget::Graphql);
+    let options = SchemaOptions {
+        exclude: request.exclude,
+        infer_types: request.infer_types,
+        casts: request.casts,
+        spec_template: request.spec_template,
+        relational_schema: if graphql {
+            None
+        } else {
+            request.relational_schema
+        },
+        refs: if graphql { RefsMode::Key } else { request.refs },
+    };
+    let contracts = build_contracts(&request.path, &options).map_err(|e| schema_error(&e))?;
+    Ok(match request.target {
+        SchemaTarget::Contracts => json!({ "contracts": contracts }),
+        SchemaTarget::Json => {
+            let root = std::fs::canonicalize(&request.path).unwrap_or(request.path.clone());
+            render_json_schema(
+                &root.display().to_string(),
+                &contracts,
+                options.infer_types,
+                &options.casts,
+            )
+        }
+        SchemaTarget::Zod => json!({
+            "text": render_zod(&contracts, request.zod_import).map_err(|e| schema_error(&e))?,
+        }),
+        SchemaTarget::Graphql => {
+            let sdl = render_graphql(&contracts).map_err(|e| schema_error(&e))?;
+            json!({ "sdl": sdl.sdl, "types": sdl.types, "contracts": contracts })
+        }
+    })
+}
+
+/// `__schema`: a bundle's schema contracts, or one rendering of them.
+pub fn schema(request: &str) -> Result<Response<Value>, serde_json::Error> {
+    let request: SchemaRequestJson = serde_json::from_str(request)?;
+    Ok(run_schema(request).into())
 }
 
 #[derive(Debug, Deserialize)]
