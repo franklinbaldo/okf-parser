@@ -13,6 +13,7 @@ use std::path::PathBuf;
 
 use okf_db::declared::{DeclaredSchema, parse_declared_schema};
 use okf_db::export::{ExportError, ExportOptions};
+use okf_db::import::{ConflictPolicy, ImportReport};
 use okf_db::query::{QueryError, QueryOptions, QueryResult, query_bundle};
 use okf_db::relational::{RelationalSchema, RelationalSchemaError, parse_relational_schema};
 use okf_db::source::SourceRows;
@@ -434,6 +435,48 @@ impl From<SearchOutput> for SearchAnswer {
 pub fn search(request: &str) -> Result<Response<SearchAnswer>, serde_json::Error> {
     let request: SearchRequestJson = serde_json::from_str(request)?;
     Ok(run_search(&request).map(SearchAnswer::from).into())
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ImportRequestJson {
+    source: String,
+    path: PathBuf,
+    concept_type: String,
+    #[serde(default)]
+    id_column: Option<String>,
+    #[serde(default)]
+    write: bool,
+    #[serde(default)]
+    overwrite: bool,
+    #[serde(default)]
+    on_conflict: ConflictPolicy,
+    #[serde(default)]
+    expected_preview_token: Option<String>,
+}
+
+/// `__import`: plan, and with `write` perform, one tabular import.
+pub fn import(request: &str) -> Result<Response<ImportReport>, serde_json::Error> {
+    let request: ImportRequestJson = serde_json::from_str(request)?;
+    let outcome = crate::commands::import(&okf_db::import::ImportRequest {
+        source: &request.source,
+        root: &request.path,
+        concept_type: &request.concept_type,
+        id_column: request.id_column.as_deref(),
+        write: request.write,
+        overwrite: request.overwrite,
+        on_conflict: request.on_conflict,
+        expected_preview_token: request.expected_preview_token.as_deref(),
+    });
+    Ok(outcome
+        .map_err(|error| {
+            if error.is_request() {
+                ProtocolError::request(&error)
+            } else {
+                ProtocolError::io(&error)
+            }
+        })
+        .into())
 }
 
 #[derive(Debug, Deserialize)]

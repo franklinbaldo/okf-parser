@@ -8,6 +8,7 @@ use std::{fmt, io};
 
 use okf_db::apply::{plan_apply, sugar_sql};
 use okf_db::export::{ExportError, ExportOptions, ExportReport, export_bundle};
+use okf_db::import::{ImportError, ImportReport, ImportRequest, import_source};
 use okf_db::infer::{InferError, scaffold_starter_schemas};
 use okf_db::query::{QueryError, QueryOptions, QueryResult, query_bundle};
 use okf_db::relational::{RelationalSchemaError, load_relational_schema, validate_relations};
@@ -490,6 +491,11 @@ pub fn format(
     write: bool,
 ) -> Result<FormatAnswer, FormatTreeError> {
     format_tree(path, exclude, write).map(FormatAnswer::from)
+}
+
+/// `okf-parser import`: plan, and with `write` perform, one import.
+pub fn import(request: &ImportRequest<'_>) -> Result<ImportReport, ImportError> {
+    import_source(request)
 }
 
 /// Why `search` found nothing to answer.

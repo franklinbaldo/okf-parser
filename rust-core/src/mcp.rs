@@ -22,6 +22,7 @@ use serde_json::{Value, json};
 use tokio::io::AsyncWriteExt;
 
 use okf_db::export::ExportOptions;
+use okf_db::import::{ConflictPolicy, ImportRequest};
 use okf_db::query::QueryOptions;
 use okf_engine::search::{Detail, Mode, SearchOutput, SearchRequest};
 
@@ -309,6 +310,24 @@ pub struct ImportPreviewArgs {
     overwrite: bool,
     #[serde(default)]
     on_conflict: ImportConflictPolicy,
+}
+
+impl ImportPreviewArgs {
+    fn request<'a>(&'a self, write: bool, token: Option<&'a str>) -> ImportRequest<'a> {
+        ImportRequest {
+            source: &self.source,
+            root: &self.path,
+            concept_type: &self.type_name,
+            id_column: self.id_column.as_deref(),
+            write,
+            overwrite: self.overwrite,
+            on_conflict: match self.on_conflict {
+                ImportConflictPolicy::Skip => ConflictPolicy::Skip,
+                ImportConflictPolicy::VerifyIdentical => ConflictPolicy::VerifyIdentical,
+            },
+            expected_preview_token: token,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, schemars::JsonSchema)]
@@ -692,7 +711,7 @@ impl OkfServer {
         &self,
         Parameters(args): Parameters<ImportPreviewArgs>,
     ) -> CallToolResult {
-        self.delegate("import_preview", args).await
+        native(move || commands::import(&args.request(false, None))).await
     }
 
     #[tool(
@@ -746,7 +765,18 @@ impl OkfServer {
         )
     )]
     async fn import_write(&self, Parameters(args): Parameters<ImportWriteArgs>) -> CallToolResult {
-        self.delegate("import_write", args).await
+        native(move || {
+            let preview = ImportPreviewArgs {
+                source: args.source,
+                path: args.path,
+                type_name: args.type_name,
+                id_column: args.id_column,
+                overwrite: args.overwrite,
+                on_conflict: args.on_conflict,
+            };
+            commands::import(&preview.request(true, args.expected_preview_token.as_deref()))
+        })
+        .await
     }
 
     #[tool(

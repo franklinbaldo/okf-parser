@@ -234,9 +234,9 @@ Python accepts `load_bundle(root, rust_core=Path(".../okf-parser"))`; TypeScript
 bounded parallel reads, YAML/frontmatter, Markdown facts, validation, link resolution,
 and content digests. The packaged `okf-parser` executable is the single Python command
 and declares the whole command line: `check`, `inventory`, `graph`, `search`, `sql`,
-`apply`, `format`, `duckdb`, `init`, `serve` and the private engine operations run natively, and only
-the commands still written in Python (`import`'s document building, `schema` and the type
-packs) are handed to the Python CLI. Omitting the option keeps the portable language-native fallback.
+`apply`, `format`, `import`, `duckdb`, `init`, `serve` and the private engine operations run natively, and only
+the commands still written in Python (`schema` and the type packs) are handed to the
+Python CLI. Omitting the option keeps the portable language-native fallback.
 
 The composite action installs a pinned uv version and executes the same
 `validate_path()` function used by the Python API, CLI, and MCP server.
@@ -265,8 +265,8 @@ uv run okf-parser serve --allow-write        # also register the commit tools
 
 The server is part of the native `okf-parser` binary, built on
 [`rmcp`](https://crates.io/crates/rmcp); no Python MCP framework is installed.
-Every tool but `schema` and `import_*` is answered natively; those two run the
-same Python service functions as the CLI (see
+Every tool but `schema` is answered natively; `schema` runs the same Python
+service function as the CLI (see
 [RFC 0024](rfcs/0024-rust-native-core.md)).
 
 Read-only tools: `check`, `inventory`, `graph`, `search`, `sql`, `format_check`,

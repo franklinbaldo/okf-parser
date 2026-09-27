@@ -10,6 +10,7 @@ pub mod apply;
 pub mod catalog;
 pub mod declared;
 pub mod export;
+pub mod import;
 pub mod infer;
 pub mod query;
 pub mod relational;

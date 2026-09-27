@@ -2,8 +2,7 @@
 
 The MCP protocol itself (transports, tool schemas, effect annotations) lives
 in the Rust binary (``rust-core/src/mcp.rs``, built on ``rmcp``), which also
-answers ``check``, ``inventory``, ``graph``, ``search``, ``sql``, ``format_*``,
-``apply_*``, ``init_*`` and ``duckdb_export`` natively. The tools whose logic is still Python are
+answers every tool but ``schema`` natively. ``schema`` is still Python and is
 answered here: the binary pipes
 ``{"tool": ..., "arguments": {...}}`` to ``python -m okf_parser.mcp_bridge``
 and relays the JSON this module prints.
@@ -20,13 +19,11 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, validate_call
 # `validate_call` resolves these annotations when a tool runs, so they are
 # runtime imports.
 from okf_parser.cli import (  # noqa: TC001
-    ImportConflictPolicy,
     RepeatableStrings,
     SchemaFormat,
     ZodImport,
 )
 from okf_parser.service import (
-    import_bundle,
     schema_bundle,
 )
 
@@ -56,60 +53,10 @@ def mcp_schema(
     )
 
 
-def mcp_import_preview(
-    source: str,
-    path: str,
-    type: str,
-    *,
-    id_column: str | None = None,
-    overwrite: bool = False,
-    on_conflict: ImportConflictPolicy = "skip",
-) -> dict[str, object]:
-    """Plan a tabular import without creating or replacing concept files."""
-    return import_bundle(
-        source,
-        path,
-        type,
-        id_column=id_column,
-        write=False,
-        overwrite=overwrite,
-        on_conflict=on_conflict,
-    )
-
-
-def mcp_import_write(
-    source: str,
-    path: str,
-    type: str,
-    *,
-    id_column: str | None = None,
-    overwrite: bool = False,
-    on_conflict: ImportConflictPolicy = "skip",
-    expected_preview_token: str | None = None,
-) -> dict[str, object]:
-    """Commit a tabular import using the existing import service."""
-    return import_bundle(
-        source,
-        path,
-        type,
-        id_column=id_column,
-        write=True,
-        overwrite=overwrite,
-        on_conflict=on_conflict,
-        expected_preview_token=expected_preview_token,
-    )
-
-
-type ToolName = Literal[
-    "schema",
-    "import_preview",
-    "import_write",
-]
+type ToolName = Literal["schema"]
 
 TOOLS: dict[ToolName, Callable[..., object]] = {
     "schema": mcp_schema,
-    "import_preview": mcp_import_preview,
-    "import_write": mcp_import_write,
 }
 """Every tool the native server may delegate, keyed by its MCP name."""
 

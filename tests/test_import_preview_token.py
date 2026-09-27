@@ -7,10 +7,11 @@ from typing import TYPE_CHECKING
 import pytest
 
 from okf_parser.bundle_import import BundleImportError, import_bundle
-from okf_parser.mcp_bridge import mcp_import_preview, mcp_import_write
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from pydantic import JsonValue
 
 
 def _write_csv(path: Path, *, second_name: str = "Beto") -> None:
@@ -20,7 +21,7 @@ def _write_csv(path: Path, *, second_name: str = "Beto") -> None:
     )
 
 
-def _preview(csv: Path, bundle: Path, *, overwrite: bool = False) -> dict[str, object]:
+def _preview(csv: Path, bundle: Path, *, overwrite: bool = False) -> dict[str, JsonValue]:
     return import_bundle(
         str(csv),
         str(bundle),
@@ -122,22 +123,3 @@ def test_overwrite_destination_change_after_preview_fails_atomically(tmp_path: P
 
     assert "Newer" in existing.read_text(encoding="utf-8")
     assert not (bundle / "pessoa" / "r2.md").exists()
-
-
-def test_mcp_surfaces_carry_preview_token_without_interpreting_it(tmp_path: Path) -> None:
-    csv = tmp_path / "source.csv"
-    bundle = tmp_path / "bundle"
-    _write_csv(csv)
-
-    preview = mcp_import_preview(str(csv), str(bundle), "Pessoa", id_column="id")
-    token = str(preview["preview_token"])
-    result = mcp_import_write(
-        str(csv),
-        str(bundle),
-        "Pessoa",
-        id_column="id",
-        expected_preview_token=token,
-    )
-
-    assert result["written"] is True
-    assert result["preview_token"] == token

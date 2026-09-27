@@ -16,7 +16,6 @@ from typing import Annotated, Literal
 from cyclopts import App, Parameter
 
 from okf_parser.service import (
-    import_bundle,
     schema_bundle,
 )
 from okf_parser.type_packs import install_type_pack, list_type_packs
@@ -25,7 +24,6 @@ type SchemaFormat = Literal["json", "zod", "pydantic", "graphql"]
 type ZodImport = Literal["zod", "astro"]
 type RefsMode = Literal["key", "embed"]
 type CliSchemaFormat = Annotated[SchemaFormat, Parameter(name="format")]
-type ImportConflictPolicy = Literal["skip", "verify-identical"]
 type RepeatableStrings = list[str] | None
 type JsonPayload = dict[str, object]
 
@@ -59,33 +57,6 @@ app = App(
     version=_package_version("okf-parser"),
     result_action=_render_cli_result,
 )
-
-
-@app.command(name="import")
-def import_command(  # each argument is an independent public CLI flag.
-    source: str,
-    path: str,
-    *,
-    type: str,  # the domain name for this flag is `type`.
-    id_column: str | None = None,
-    write: bool = False,
-    overwrite: bool = False,
-    on_conflict: ImportConflictPolicy = "skip",
-    expected_preview_token: str | None = None,
-) -> CliResult[JsonPayload]:
-    """Materialize every row of a DuckDB-readable source (CSV, Parquet, JSON) as a concept."""
-    payload = import_bundle(
-        source,
-        path,
-        type,
-        id_column=id_column,
-        write=write,
-        overwrite=overwrite,
-        on_conflict=on_conflict,
-        expected_preview_token=expected_preview_token,
-    )
-    failed = bool(payload["duplicate_ids"]) or bool(payload["conflicting_existing"])
-    return CliResult(payload, 1 if failed else 0)
 
 
 @app.command

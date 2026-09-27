@@ -295,6 +295,15 @@ The GraphQL adapter is ported or becomes a separate optional package; git
 commit messages as OKF and type packs move with their commands; cyclopts and
 `mcp_bridge.py` are deleted. The dependency target at the end is Pydantic.
 
+- **6a (0.48.0):** `import` runs in the binary (`okf_db::import`): the source
+  read, the plan, the canonical rendering, `verify-identical` by parsed
+  digest, the preview token (now bound to DuckDB's text of every value) and
+  the staged writes. The CLI command and MCP `import_*` tools are native and
+  `import_bundle()` is a wrapper; only `schema` is still delegated.
+- **6b:** the schema exporters (JSON Schema, Zod, Pydantic source, GraphQL SDL).
+- **6c:** type packs and git commit messages; cyclopts, `mcp_bridge.py`,
+  markdown-it-py and PyYAML leave.
+
 ## Relationship to other RFCs
 
 - **RFC 0003** (one wheel, one executable): unchanged; this RFC depends on it.
