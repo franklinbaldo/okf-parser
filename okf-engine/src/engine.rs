@@ -360,13 +360,16 @@ impl fmt::Display for ReadError {
 
 /// Why a document's frontmatter block could not be split or parsed.
 #[derive(Debug)]
-enum DocumentError {
+pub enum DocumentError {
     /// A concept must open with a frontmatter block.
     NoFrontmatter,
     /// A reserved document opens a frontmatter block it never closes.
     UnclosedFrontmatter,
     Frontmatter(FrontmatterError),
+    /// A YAML tag JSON cannot carry, such as `!!binary` or `!!set`.
+    Unsupported(String),
 }
+impl std::error::Error for DocumentError {}
 impl fmt::Display for DocumentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -375,6 +378,10 @@ impl fmt::Display for DocumentError {
             }
             Self::UnclosedFrontmatter => f.write_str("invalid YAML frontmatter delimiters"),
             Self::Frontmatter(error) => error.fmt(f),
+            Self::Unsupported(tag) => write!(
+                f,
+                "invalid YAML frontmatter: frontmatter contains an unsupported YAML value: {tag}"
+            ),
         }
     }
 }
@@ -570,6 +577,71 @@ fn digests(text: &str, mapping: &Map<String, Value>, body: &str) -> (String, Str
             "okf-parsed-v1-jcs-sha256:",
             &canonical_parsed(mapping, body),
         ),
+    )
+}
+
+/// One document parsed strictly: its frontmatter, body and digests.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ParsedText {
+    /// `None` only for an optional-frontmatter document without one.
+    pub frontmatter: Option<Map<String, Value>>,
+    pub body: String,
+    pub source_digest: String,
+    /// Absent exactly when `frontmatter` is.
+    pub parsed_digest: Option<String>,
+}
+
+fn strict(frontmatter: &str) -> Result<Map<String, Value>, DocumentError> {
+    let Frontmatter {
+        mapping,
+        lossy_tags,
+    } = parse_frontmatter(frontmatter)?;
+    match lossy_tags.into_iter().next() {
+        Some(tag) => Err(DocumentError::Unsupported(tag)),
+        None => Ok(mapping),
+    }
+}
+
+/// Parse one document's text. A concept must open with frontmatter; with
+/// `optional` (the reserved `index.md` and `log.md`), a document that does
+/// not start with `---` has none. Every YAML scalar keeps its authored
+/// spelling as a string, and a tag JSON cannot carry is an error.
+pub fn parse_text(text: &str, optional: bool) -> Result<ParsedText, DocumentError> {
+    let normalized = normalized_newlines(text);
+    let value = normalized.strip_prefix('\u{feff}').unwrap_or(&normalized);
+    if optional && !value.starts_with("---") {
+        return Ok(ParsedText {
+            frontmatter: None,
+            body: value.to_owned(),
+            source_digest: hash("sha256:", text),
+            parsed_digest: None,
+        });
+    }
+    let (frontmatter, body) = split_source(value).ok_or(if optional {
+        DocumentError::UnclosedFrontmatter
+    } else {
+        DocumentError::NoFrontmatter
+    })?;
+    let mapping = strict(frontmatter)?;
+    let (source_digest, parsed_digest) = digests(text, &mapping, body);
+    Ok(ParsedText {
+        frontmatter: Some(mapping),
+        body: body.to_owned(),
+        source_digest,
+        parsed_digest: Some(parsed_digest),
+    })
+}
+
+/// The source digest of exact text.
+pub fn source_digest(text: &str) -> String {
+    hash("sha256:", text)
+}
+
+/// The parsed digest of a frontmatter mapping and body.
+pub fn parsed_value_digest(frontmatter: &Map<String, Value>, body: &str) -> String {
+    hash(
+        "okf-parsed-v1-jcs-sha256:",
+        &canonical_parsed(frontmatter, body),
     )
 }
 
@@ -947,6 +1019,40 @@ pub fn load_bundle(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_text_is_strict_and_optional_frontmatter_may_be_absent() {
+        let parsed = parse_text(
+            "\u{feff}---\r\ntype: A\r\nn: 0012\r\n---\r\nBody\r\n",
+            false,
+        )
+        .unwrap();
+        let frontmatter = parsed.frontmatter.unwrap();
+        assert_eq!(frontmatter["n"], "0012");
+        assert_eq!(parsed.body, "Body\n");
+        assert!(parsed.parsed_digest.is_some());
+
+        let reserved = parse_text("# Index\n", true).unwrap();
+        assert!(reserved.frontmatter.is_none() && reserved.parsed_digest.is_none());
+
+        for (text, optional, expected) in [
+            ("# no frontmatter\n", false, "delimited by ---"),
+            ("---\nokf_version: x\n", true, "delimiters"),
+            (
+                "---\nblob: !!binary aGk=\n---\n",
+                false,
+                "unsupported YAML value: !!binary",
+            ),
+            (
+                "---\ntags: !!set {a: null}\n---\n",
+                false,
+                "unsupported YAML value: !!set",
+            ),
+        ] {
+            let error = parse_text(text, optional).unwrap_err().to_string();
+            assert!(error.contains(expected), "{text:?}: {error}");
+        }
+    }
 
     struct TempBundle(PathBuf);
     impl TempBundle {

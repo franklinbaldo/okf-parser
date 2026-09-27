@@ -1,49 +1,39 @@
-"""Filesystem-safe parsing primitives for OKF Markdown documents."""
+"""Parse OKF Markdown documents with the native engine.
+
+The binary owns YAML and CommonMark (``okf_engine::parse_text`` and
+``markdown_facts``); this module sends it documents in batches and wraps the
+answers. Frontmatter is strict: every scalar keeps its authored spelling as a
+string, and a YAML tag JSON cannot carry (``!!binary``, ``!!set``) is an
+error rather than a coerced value.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import TYPE_CHECKING
-from urllib.parse import SplitResult, urlsplit
 
-import yaml
-from markdown_it import MarkdownIt
-from pydantic import ValidationError
+from pydantic import BaseModel, ConfigDict, JsonValue
 
-from okf_parser.digests import normalize_newlines, parsed_digest, source_digest
-from okf_parser.discovery import is_markdown_filename
-from okf_parser.models import FRONTMATTER_ADAPTER, ParsedDocument, YamlValue
+from okf_parser.models import MarkdownFacts, ParsedDocument, YamlValue
+from okf_parser.rust_core import native_binary, native_result, rust_markdown_facts_batch
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from pathlib import Path
 
+__all__ = [
+    "RESERVED_FILENAMES",
+    "DocumentParseError",
+    "MarkdownFacts",
+    "ParsedText",
+    "is_reserved_document",
+    "markdown_facts",
+    "markdown_facts_batch",
+    "parse_document",
+    "parse_document_text",
+    "parse_texts",
+]
+
 RESERVED_FILENAMES = frozenset({"index.md", "log.md"})
-_MARKDOWN = MarkdownIt("commonmark")
-_SCALAR_TAGS = (
-    "tag:yaml.org,2002:bool",
-    "tag:yaml.org,2002:int",
-    "tag:yaml.org,2002:float",
-    "tag:yaml.org,2002:timestamp",
-)
-_BaseSafeLoader = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
-
-
-class _StringScalarLoader(_BaseSafeLoader):
-    """Preserve scalar spelling while retaining YAML mapping/list structure."""
-
-
-# Copy before filtering: mutating the inherited registry would change the base loader
-# process-wide. Remove only implicit scalar typing; null, merge keys and every
-# other structural resolver keep their SafeLoader behavior.
-_StringScalarLoader.yaml_implicit_resolvers = {
-    key: [resolver for resolver in resolvers if resolver[0] not in _SCALAR_TAGS]
-    for key, resolvers in _BaseSafeLoader.yaml_implicit_resolvers.items()
-}
-for _tag in _SCALAR_TAGS:
-    _StringScalarLoader.add_constructor(
-        _tag,
-        lambda loader, node: loader.construct_scalar(node),
-    )
 
 
 def is_reserved_document(path: Path) -> bool:
@@ -55,82 +45,61 @@ class DocumentParseError(ValueError):
     """Raised when one concept document cannot be structurally parsed."""
 
 
-@dataclass(frozen=True, slots=True)
-class MarkdownFacts:
-    """CommonMark facts collected from one parser pass."""
+class _Document(BaseModel):
+    model_config = ConfigDict(frozen=True)
 
-    links: tuple[str, ...]
-    headings: tuple[tuple[int, str], ...]
-
-
-def _is_frontmatter_delimiter(line: str) -> bool:
-    """Return whether one complete source line is an OKF `---` delimiter."""
-    content = line.removesuffix("\n").removesuffix("\r")
-    return content.startswith("---") and not content.removeprefix("---").strip(" \t")
+    text: str
+    optional: bool = False
 
 
-def _split_frontmatter_source(text: str) -> tuple[str, str] | None:
-    """Split frontmatter and body with one bounded linear scan."""
-    normalized = text.removeprefix("\ufeff")
-    opening_end = normalized.find("\n")
-    if opening_end < 0 or not _is_frontmatter_delimiter(normalized[: opening_end + 1]):
-        return None
+class _ParseRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
 
-    cursor = opening_end + 1
-    while cursor <= len(normalized):
-        newline = normalized.find("\n", cursor)
-        line_end = len(normalized) if newline < 0 else newline + 1
-        if _is_frontmatter_delimiter(normalized[cursor:line_end]):
-            block_end = cursor
-            if block_end > opening_end + 1 and normalized[block_end - 1] == "\n":
-                block_end -= 1
-                if block_end > opening_end + 1 and normalized[block_end - 1] == "\r":
-                    block_end -= 1
-            return normalized[opening_end + 1 : block_end], normalized[line_end:]
-        if newline < 0:
-            break
-        cursor = line_end
-    return None
+    documents: tuple[_Document, ...]
 
 
-def _describe_frontmatter_error(exc: ValidationError) -> str:
-    """Summarize a recursive-union ValidationError as one actionable sentence.
+class ParsedText(BaseModel):
+    """One document the binary parsed: frontmatter, body and digests."""
 
-    A single fault produces one error per union member, so report the most
-    specific one instead of echoing the whole list.
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    frontmatter: dict[str, YamlValue] | None
+    body: str
+    source_digest: str
+    parsed_digest: str | None
+
+
+class _Invalid(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    error: str
+
+
+class _ParseAnswer(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    documents: tuple[ParsedText | _Invalid, ...]
+
+
+def parse_texts(
+    texts: Sequence[str], *, optional: bool = False
+) -> tuple[ParsedText | DocumentParseError, ...]:
+    """Parse many documents in one native call; a failure is returned, not raised.
+
+    With ``optional`` (the reserved ``index.md`` and ``log.md``), a document
+    that does not start with ``---`` has no frontmatter instead of failing.
     """
-    errors = exc.errors(include_url=False, include_input=False, include_context=False)
-    deepest = max(errors, key=lambda item: len(item["loc"]))
-    if deepest["loc"][-1:] == ("[key]",):
-        return f"frontmatter keys must be strings: {deepest['loc'][-2]}"
-    if deepest["type"] == "recursion_loop":
-        return "frontmatter contains a cyclic YAML anchor"
-    field = deepest["loc"][0] if deepest["loc"] else "frontmatter"
-    return f"frontmatter contains an unsupported YAML value: {field}"
-
-
-def _load_frontmatter(block: str) -> dict[str, YamlValue] | None:
-    """Load one frontmatter block with every ordinary scalar preserved as text."""
-    loader = _StringScalarLoader(block)
-    try:
-        value = loader.get_single_data()
-    except yaml.YAMLError as exc:
-        msg = f"invalid YAML frontmatter: {exc}"
-        raise DocumentParseError(msg) from exc
-    finally:
-        loader.dispose()
-
-    if value is None:
-        return None
-    if not isinstance(value, dict):
-        msg = "frontmatter must be a YAML mapping"
-        raise DocumentParseError(msg)
-
-    try:
-        return FRONTMATTER_ADAPTER.validate_python(value, strict=True)
-    except ValidationError as exc:
-        msg = f"invalid YAML frontmatter: {_describe_frontmatter_error(exc)}"
-        raise DocumentParseError(msg) from exc
+    if not texts:
+        return ()
+    result: dict[str, JsonValue] = native_result(
+        "__parse",
+        _ParseRequest(documents=tuple(_Document(text=text, optional=optional) for text in texts)),
+    )
+    answer = _ParseAnswer.model_validate(result)
+    return tuple(
+        DocumentParseError(item.error) if isinstance(item, _Invalid) else item
+        for item in answer.documents
+    )
 
 
 def parse_document(path: Path) -> ParsedDocument:
@@ -150,100 +119,26 @@ def parse_document_text(path: Path, text: str) -> ParsedDocument:
     (hashing, a freshness check) should read once and call this directly,
     rather than `parse_document`, which reads the file itself.
     """
-    source_identity = source_digest(text)
-    split = _split_frontmatter_source(normalize_newlines(text))
-    if split is None:
-        msg = "concept must start with YAML frontmatter delimited by ---"
-        raise DocumentParseError(msg)
-    frontmatter_block, body = split
-    frontmatter = _load_frontmatter(frontmatter_block) or {}
-
+    [parsed] = parse_texts((text,))
+    if isinstance(parsed, DocumentParseError):
+        raise parsed
     return ParsedDocument(
         path=path,
-        frontmatter=frontmatter,
-        body=body,
-        source_digest=source_identity,
-        parsed_digest=parsed_digest(frontmatter, body),
+        frontmatter=parsed.frontmatter or {},
+        body=parsed.body,
+        source_digest=parsed.source_digest,
+        parsed_digest=parsed.parsed_digest or "",
     )
 
 
-def split_optional_frontmatter(text: str) -> tuple[dict[str, YamlValue] | None, str]:
-    """Split optional frontmatter for reserved documents."""
-    normalized = text.removeprefix("\ufeff")
-    if not normalized.startswith("---"):
-        return None, normalized
-    split = _split_frontmatter_source(normalized)
-    if split is None:
-        msg = "invalid YAML frontmatter delimiters"
-        raise DocumentParseError(msg)
-    frontmatter, body = split
-    return _load_frontmatter(frontmatter) or {}, body
-
-
-def concept_id(bundle_root: Path, path: Path) -> str:
-    """Derive the normative concept ID from a bundle-relative path."""
-    return path.relative_to(bundle_root).with_suffix("").as_posix()
+def markdown_facts_batch(bodies: Sequence[str]) -> tuple[MarkdownFacts, ...]:
+    """Collect links and headings from many bodies in one native call."""
+    if not bodies:
+        return ()
+    return rust_markdown_facts_batch(bodies, native_binary())
 
 
 def markdown_facts(body: str) -> MarkdownFacts:
-    """Collect links and headings from one CommonMark tokenization."""
-    links: list[str] = []
-    headings: list[tuple[int, str]] = []
-    tokens = _MARKDOWN.parse(body)
-
-    for index, token in enumerate(tokens):
-        if token.type == "heading_open":
-            inline = tokens[index + 1] if index + 1 < len(tokens) else None
-            content = inline.content if inline is not None and inline.type == "inline" else ""
-            headings.append((int(token.tag.removeprefix("h")), content))
-
-        pending = [token]
-        while pending:
-            current = pending.pop()
-            if current.children:
-                pending.extend(reversed(current.children))
-            if current.type != "link_open":
-                continue
-            destination = current.attrGet("href")
-            if isinstance(destination, str):
-                links.append(destination)
-
-    return MarkdownFacts(links=tuple(links), headings=tuple(headings))
-
-
-def iter_markdown_links(body: str) -> list[str]:
-    """Return non-image Markdown link targets in source order."""
-    return list(markdown_facts(body).links)
-
-
-def iter_headings(body: str) -> list[tuple[int, str]]:
-    """Return ``(level, text)`` for every heading, in source order."""
-    return list(markdown_facts(body).headings)
-
-
-def split_link_target(raw_target: str) -> SplitResult | None:
-    """Split a raw link target, returning ``None`` when it is not a valid URL.
-
-    ``urlsplit`` raises on inputs such as ``http://[oops/x.md``; an unparseable
-    target is simply not a resolvable local link.
-    """
-    try:
-        return urlsplit(raw_target)
-    except ValueError:
-        return None
-
-
-def has_markdown_suffix(raw_target: str) -> bool:
-    """Return whether a link target's path names a Markdown file."""
-    split = split_link_target(raw_target)
-    return split is not None and is_markdown_filename(split.path)
-
-
-def looks_like_frontmatter_link(value: str) -> bool:
-    """Return whether a frontmatter string is a link rather than prose.
-
-    Body links are declared by the author; frontmatter links are inferred, so
-    require a whitespace-free target to keep sentences ending in ``.md`` out of
-    the link table.
-    """
-    return not any(character.isspace() for character in value) and has_markdown_suffix(value)
+    """Collect links and headings from one CommonMark body."""
+    [facts] = markdown_facts_batch((body,))
+    return facts

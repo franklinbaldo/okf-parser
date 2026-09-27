@@ -8,16 +8,17 @@ import pytest
 
 from okf_parser.parser import (
     DocumentParseError,
-    has_markdown_suffix,
-    iter_headings,
-    iter_markdown_links,
-    looks_like_frontmatter_link,
     markdown_facts,
     parse_document,
+    parse_texts,
 )
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+def _headings(body: str) -> list[tuple[int, str]]:
+    return list(markdown_facts(body).headings)
 
 
 def test_frontmatter_value_may_contain_triple_dash(tmp_path: Path) -> None:
@@ -84,9 +85,9 @@ def test_link_extraction_uses_commonmark_tokens() -> None:
 [balanced](guide_(v2).md)
 """
 
-    assert iter_markdown_links(body) == [
+    assert list(markdown_facts(body).links) == [
         "ordinary.md",
-        "path%20with%20spaces.md",
+        "path with spaces.md",
         "guide_(v2).md",
     ]
 
@@ -194,19 +195,6 @@ def test_frontmatter_json_preserves_scalar_strings(tmp_path: Path) -> None:
     assert parsed.frontmatter_json == '{"created":"2026-01-01","number":"0012","type":"Reference"}'
 
 
-def test_malformed_url_target_does_not_raise() -> None:
-    assert has_markdown_suffix("http://[oops/x.md") is False
-
-
-def test_frontmatter_link_inference_ignores_prose() -> None:
-    assert looks_like_frontmatter_link("/b.md") is True
-    assert looks_like_frontmatter_link("Supersedes the old draft in notes.md") is False
-
-
-def test_markdown_suffix_is_case_insensitive() -> None:
-    assert has_markdown_suffix("b.MD") is True
-
-
 def test_binary_frontmatter_value_is_rejected_not_coerced(tmp_path: Path) -> None:
     path = tmp_path / "concept.md"
     path.write_text("---\ntype: Reference\nblob: !!binary aGk=\n---\n", encoding="utf-8")
@@ -223,12 +211,32 @@ def test_set_frontmatter_value_is_rejected_not_coerced(tmp_path: Path) -> None:
         parse_document(path)
 
 
-def test_iter_headings_reports_empty_heading_text() -> None:
-    assert iter_headings("#\n") == [(1, "")]
-    assert iter_headings("# \n") == [(1, "")]
+def test_headings_reports_empty_heading_text() -> None:
+    assert _headings("#\n") == [(1, "")]
+    assert _headings("# \n") == [(1, "")]
 
 
-def test_iter_headings_ignores_fenced_code_blocks() -> None:
+def test_headings_ignores_fenced_code_blocks() -> None:
     body = "# Title\n\n## 2026-01-01\n\n```markdown\n# fake title\n## fake date\n```\n"
 
-    assert iter_headings(body) == [(1, "Title"), (2, "2026-01-01")]
+    assert _headings(body) == [(1, "Title"), (2, "2026-01-01")]
+
+
+def test_optional_frontmatter_is_absent_when_the_document_does_not_open_with_it() -> None:
+    reserved, unclosed = parse_texts(["# Index\n", "---\nokf_version: x\n"], optional=True)
+
+    assert not isinstance(reserved, DocumentParseError)
+    assert reserved.frontmatter is None
+    assert reserved.parsed_digest is None
+    assert reserved.body == "# Index\n"
+    assert isinstance(unclosed, DocumentParseError)
+    assert "delimiters" in str(unclosed)
+
+
+def test_a_batch_reports_each_failure_without_failing_the_others() -> None:
+    good, bad = parse_texts(["---\ntype: A\n---\n", "no frontmatter\n"])
+
+    assert not isinstance(good, DocumentParseError)
+    assert good.frontmatter == {"type": "A"}
+    assert isinstance(bad, DocumentParseError)
+    assert parse_texts([]) == ()

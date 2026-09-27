@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 
@@ -14,6 +15,14 @@ type YamlValue = str | None | list[YamlValue] | dict[str, YamlValue]
 
 FRONTMATTER_ADAPTER: TypeAdapter[dict[str, YamlValue]] = TypeAdapter(dict[str, YamlValue])
 """Validates a loaded YAML mapping before any other code touches it."""
+
+
+@dataclass(frozen=True, slots=True)
+class MarkdownFacts:
+    """CommonMark facts collected from one parser pass."""
+
+    links: tuple[str, ...]
+    headings: tuple[tuple[int, str], ...]
 
 
 class Severity(StrEnum):

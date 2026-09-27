@@ -141,6 +141,7 @@ def test_top_level_help_lists_every_command() -> None:
         "import",
         "packs",
         "add-pack",
+        "commit-msg",
         "serve",
     }
     assert native <= listed
@@ -249,3 +250,49 @@ def test_a_schema_error_exits_nonzero_with_its_message(tmp_path: Path) -> None:
 
     assert completed.returncode != 0
     assert "cannot cast 'count' to integer" in completed.stderr
+
+
+def _commit_msg(path: Path, *flags: str) -> subprocess.CompletedProcess[str]:
+    assert _BINARY is not None
+    return subprocess.run(  # noqa: S603 - fixed argv to the binary under test
+        [str(_BINARY), "commit-msg", str(path), *flags],
+        capture_output=True,
+        check=False,
+        encoding="utf-8",
+    )
+
+
+def test_commit_msg_accepts_a_plain_message_by_default(tmp_path: Path) -> None:
+    message = tmp_path / "COMMIT_EDITMSG"
+    message.write_text("Plain subject\n\nBody", encoding="utf-8")
+
+    completed = _commit_msg(message)
+
+    assert completed.returncode == 0
+    assert completed.stdout == completed.stderr == ""
+
+
+def test_commit_msg_can_require_an_envelope(tmp_path: Path) -> None:
+    message = tmp_path / "COMMIT_EDITMSG"
+    message.write_text("Plain subject\n\nBody", encoding="utf-8")
+
+    completed = _commit_msg(message, "--require-envelope")
+
+    assert completed.returncode == 1
+    assert completed.stderr == (
+        f"{message}:3: GIT_MESSAGE_ENVELOPE_REQUIRED: "
+        "repository policy requires an OKF commit envelope\n"
+    )
+
+
+def test_commit_msg_reports_a_structural_error_and_an_unreadable_file(tmp_path: Path) -> None:
+    message = tmp_path / "COMMIT_EDITMSG"
+    message.write_text("Subject\n\n--- okf\ntype: Change\n", encoding="utf-8")
+
+    unterminated = _commit_msg(message)
+    missing = _commit_msg(tmp_path / "missing")
+
+    assert unterminated.returncode == 1
+    assert "GIT_MESSAGE_UNTERMINATED_ENVELOPE" in unterminated.stderr
+    assert missing.returncode == 1
+    assert "cannot read" in missing.stderr

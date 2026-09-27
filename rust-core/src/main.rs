@@ -107,6 +107,12 @@ enum Command {
     /// Render new OKF documents canonically (JSON request on stdin).
     #[command(name = "__render", hide = true)]
     Render,
+    /// Parse documents strictly for the Python API (JSON request on stdin).
+    #[command(name = "__parse", hide = true)]
+    ParseRequest,
+    /// Parse or format a commit message for the Python API (JSON request on stdin).
+    #[command(name = "__git-commit", hide = true)]
+    GitCommitRequest,
     #[command(name = "__engine-load", hide = true)]
     Load {
         root: PathBuf,
@@ -364,6 +370,19 @@ enum Command {
         #[arg(long, value_name = "TEMPLATE")]
         spec_template: Option<String>,
     },
+    /// Validate one commit message file, as a `commit-msg` hook does.
+    ///
+    /// Prints nothing and exits 0 for a valid message; otherwise prints
+    /// `PATH[:LINE]: CODE: message` to stderr and exits 1. The message is
+    /// never rewritten.
+    #[command(name = "commit-msg")]
+    CommitMsg {
+        /// The message file Git passes to the hook.
+        path: PathBuf,
+        /// Reject a plain message that has no `--- okf` envelope.
+        #[arg(long)]
+        require_envelope: bool,
+    },
     /// List the opt-in OKF type packs embedded in okf-parser.
     Packs,
     /// Preview or install a type pack's specification files into a bundle.
@@ -467,6 +486,13 @@ fn run() -> Outcome {
         Command::Render => {
             serde_json::to_writer(io::stdout().lock(), &protocol::render(&stdin_text()?)?)?;
         }
+        Command::ParseRequest => {
+            serde_json::to_writer(io::stdout().lock(), &protocol::parse(&stdin_text()?)?)?;
+        }
+        Command::GitCommitRequest => {
+            let response = protocol::git_commit(&stdin_text()?)?;
+            serde_json::to_writer(io::stdout().lock(), &response)?;
+        }
         Command::Load {
             root,
             exclude,
@@ -540,6 +566,34 @@ fn run() -> Outcome {
         }
         Command::SchemaRequest => {
             serde_json::to_writer(io::stdout().lock(), &protocol::schema(&stdin_text()?)?)?;
+        }
+        Command::CommitMsg {
+            path,
+            require_envelope,
+        } => {
+            let source = match std::fs::read_to_string(&path) {
+                Ok(source) => source,
+                Err(error) => {
+                    eprintln!(
+                        "okf-parser commit-msg: cannot read {}: {error}",
+                        path.display()
+                    );
+                    return Ok(1);
+                }
+            };
+            return Ok(
+                match okf_engine::git_commit::validate(&source, require_envelope) {
+                    Ok(_) => 0,
+                    Err(error) => {
+                        let location = match error.line {
+                            Some(line) => format!("{}:{line}", path.display()),
+                            None => path.display().to_string(),
+                        };
+                        eprintln!("{location}: {}: {error}", error.code);
+                        1
+                    }
+                },
+            );
         }
         Command::Packs => {
             let packs = okf_engine::packs::builtin()?;

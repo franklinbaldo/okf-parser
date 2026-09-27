@@ -417,6 +417,13 @@ pub fn sorted_json(mapping: &Map<String, Value>) -> String {
     into_string(output)
 }
 
+/// `value` as canonical JSON: compact, every object's keys in UTF-16 order.
+pub fn canonical_json(value: &Value) -> String {
+    let mut output = Vec::new();
+    write_value(value, &mut output);
+    into_string(output)
+}
+
 /// The canonical `[frontmatter, body]` pair the parsed digest is taken over.
 pub fn canonical_parsed(mapping: &Map<String, Value>, body: &str) -> String {
     let mut output = Vec::with_capacity(body.len() + 64);

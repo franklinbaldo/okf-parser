@@ -26,11 +26,7 @@ from typing import TYPE_CHECKING
 from okf_parser.bundle import load_bundle
 from okf_parser.discovery import discover_markdown
 from okf_parser.exclusion import ExclusionRules
-from okf_parser.parser import (
-    iter_headings,
-    iter_markdown_links,
-    parse_document_text,
-)
+from okf_parser.parser import markdown_facts_batch, parse_texts
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -108,15 +104,9 @@ def _measure(
         lambda: [_split_frontmatter_source(source) for source in documents],
         rounds,
     )
-    parse_ns = _median_ns(
-        lambda: [
-            parse_document_text(Path(f"concept-{index}.md"), source)
-            for index, source in enumerate(documents)
-        ],
-        rounds,
-    )
-    links_ns = _median_ns(lambda: [iter_markdown_links(body) for body in bodies], rounds)
-    headings_ns = _median_ns(lambda: [iter_headings(body) for body in bodies], rounds)
+    # One native call per batch, as ingestion makes them.
+    parse_ns = _median_ns(lambda: parse_texts(documents), rounds)
+    facts_ns = _median_ns(lambda: markdown_facts_batch(bodies), rounds)
 
     with tempfile.TemporaryDirectory(prefix="okf-parser-benchmark-") as directory:
         root = Path(directory)
@@ -159,8 +149,7 @@ def _measure(
         "source_bytes": sum(len(source.encode()) for source in documents),
         "frontmatter_split_ns_per_document": split_ns // size,
         "document_parse_ns_per_document": parse_ns // size,
-        "markdown_links_ns_per_document": links_ns // size,
-        "markdown_headings_ns_per_document": headings_ns // size,
+        "markdown_facts_ns_per_document": facts_ns // size,
         "filesystem_discovery_ns_per_file": discovery_ns // markdown_files,
         "filesystem_sequential_read_ns_per_file": sequential_read_ns // markdown_files,
         "filesystem_read_ns_per_file_by_concurrency": concurrent_read_ns,
