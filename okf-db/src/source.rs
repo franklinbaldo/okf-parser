@@ -26,21 +26,33 @@ enum SourceErrorKind {
     Json(serde_json::Error),
 }
 
+impl fmt::Display for SourceErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuckDb(error) => error.fmt(f),
+            Self::Json(error) => write!(f, "DuckDB returned invalid JSON: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for SourceErrorKind {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::DuckDb(error) => Some(error),
+            Self::Json(error) => Some(error),
+        }
+    }
+}
+
 impl fmt::Display for SourceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "could not read {:?}: {}", self.source, match &self.error {
-            SourceErrorKind::DuckDb(error) => error.to_string(),
-            SourceErrorKind::Json(error) => format!("DuckDB returned invalid JSON: {error}"),
-        })
+        write!(f, "could not read {:?}: {}", self.source, self.error)
     }
 }
 
 impl std::error::Error for SourceError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(match &self.error {
-            SourceErrorKind::DuckDb(error) => error,
-            SourceErrorKind::Json(error) => error,
-        })
+        Some(&self.error)
     }
 }
 
@@ -117,7 +129,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_csv_reads_as_typed_columns_and_text_values() {
+    fn a_csv_reads_as_typed_columns_and_json_values() {
         let path = std::env::temp_dir().join(format!("okf-source-{}.csv", std::process::id()));
         std::fs::write(
             &path,
