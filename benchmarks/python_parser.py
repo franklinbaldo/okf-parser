@@ -24,8 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from okf_parser.bundle import load_bundle
-from okf_parser.discovery import discover_markdown
-from okf_parser.exclusion import ExclusionRules
+from okf_parser.ingestion import discover
 from okf_parser.parser import markdown_facts_batch, parse_texts
 
 if TYPE_CHECKING:
@@ -111,11 +110,8 @@ def _measure(
     with tempfile.TemporaryDirectory(prefix="okf-parser-benchmark-") as directory:
         root = Path(directory)
         _write_bundle(root, documents)
-        paths = discover_markdown(root, ExclusionRules.read(root))
-        discovery_ns = _median_ns(
-            lambda: discover_markdown(root, ExclusionRules.read(root)),
-            rounds,
-        )
+        paths = discover(root)
+        discovery_ns = _median_ns(lambda: discover(root), rounds)
         sequential_read_ns = _median_ns(
             lambda: [path.read_bytes() for path in paths],
             rounds,

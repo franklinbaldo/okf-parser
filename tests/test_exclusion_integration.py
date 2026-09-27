@@ -5,15 +5,17 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import duckdb
+import pytest
 
 from okf_parser.bundle import validate_path
-from okf_parser.discovery import discover_markdown
-from okf_parser.exclusion import EXCLUSION_FILENAME, ExclusionRules
 from okf_parser.formatting import format_path
+from okf_parser.ingestion import discover, ingest_documents
 from okf_parser.service import check_bundle, export_duckdb
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+EXCLUSION_FILENAME = ".okfignore"
 
 
 def _write(path: Path, text: str) -> None:
@@ -36,20 +38,65 @@ def _mixed_repository(root: Path) -> None:
     )
 
 
-def test_discovery_prunes_an_excluded_directory(tmp_path: Path) -> None:
+def _relatives(root: Path, exclude: tuple[str, ...] = ()) -> list[str]:
+    return [path.relative_to(root).as_posix() for path in discover(root, exclude)]
+
+
+def test_discovery_excludes_a_directory_and_keeps_path_order(tmp_path: Path) -> None:
     _mixed_repository(tmp_path)
-    rules = ExclusionRules(patterns=("vendor",))
 
-    found = discover_markdown(tmp_path, rules)
-
-    relatives = {path.relative_to(tmp_path).as_posix() for path in found}
-    assert relatives == {"README.md", "CLAUDE.md", "equipe/fulano.md", "items/tarefa.md"}
+    assert _relatives(tmp_path, ("vendor",)) == [
+        "CLAUDE.md",
+        "README.md",
+        "equipe/fulano.md",
+        "items/tarefa.md",
+    ]
 
 
 def test_discovery_without_rules_is_unchanged(tmp_path: Path) -> None:
     _mixed_repository(tmp_path)
 
-    assert len(discover_markdown(tmp_path)) == 5
+    assert len(discover(tmp_path)) == 5
+
+
+def test_discovery_skips_tool_directories_as_a_load_does(tmp_path: Path) -> None:
+    _write(tmp_path / "a.md", "# A\n")
+    _write(tmp_path / "node_modules" / "pkg" / "README.md", "# Dependency\n")
+    _write(tmp_path / ".venv" / "lib" / "notes.md", "# Environment\n")
+
+    assert _relatives(tmp_path) == ["a.md"]
+    assert [item.path for item in ingest_documents(tmp_path)] == ["a.md"]
+
+
+def test_the_file_keeps_comments_blank_lines_and_trailing_slashes_gitignore_style(
+    tmp_path: Path,
+) -> None:
+    _mixed_repository(tmp_path)
+    _write(tmp_path / EXCLUSION_FILENAME, "# vendored dependencies\nvendor/\n\n  \n/*.md   \n")
+
+    assert _relatives(tmp_path) == ["equipe/fulano.md", "items/tarefa.md"]
+
+
+def test_command_line_patterns_extend_the_file(tmp_path: Path) -> None:
+    _mixed_repository(tmp_path)
+    _write(tmp_path / EXCLUSION_FILENAME, "vendor\n")
+
+    assert _relatives(tmp_path, ("/*.md",)) == ["equipe/fulano.md", "items/tarefa.md"]
+
+
+def test_an_unreadable_exclusion_file_names_the_path(tmp_path: Path) -> None:
+    """Silently ignoring a corrupt ignore file would validate the wrong tree."""
+    _write(tmp_path / "a.md", "# A\n")
+    (tmp_path / EXCLUSION_FILENAME).write_bytes(b"vendor\n\xff\xfe\n")
+
+    with pytest.raises(ValueError, match=r"\.okfignore"):
+        list(ingest_documents(tmp_path))
+
+
+def test_a_single_string_is_rejected_rather_than_split_into_letters(tmp_path: Path) -> None:
+    """`exclude="vendor"` type-checks as a sequence and would exclude nothing."""
+    with pytest.raises(TypeError):
+        list(ingest_documents(tmp_path, exclude="vendor"))
 
 
 def test_the_mixed_repository_validates_from_its_real_root(tmp_path: Path) -> None:
@@ -152,3 +199,4 @@ def test_a_negation_re_includes_knowledge_inside_an_excluded_directory(tmp_path:
     assert report.is_conformant
     assert report.markdown_count == 1
     assert report.concept_count == 1
+    assert _relatives(tmp_path) == ["vendor/knowledge/tarefa.md"]

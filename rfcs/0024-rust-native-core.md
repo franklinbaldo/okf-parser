@@ -321,6 +321,10 @@ commit messages as OKF and type packs move with their commands; cyclopts and
   `__parse`, and `okf_engine::git_commit` answers the Python API and the new
   `okf-parser commit-msg` hook, which replaces `okf_parser.git_commit_cli`.
   markdown-it-py and PyYAML leave; Pydantic is the only runtime dependency.
+- **Follow-up (0.48.0):** discovery and `.okfignore` matching are the
+  engine's alone (`__discover`); `okf_parser.discovery` and
+  `okf_parser.exclusion` are deleted, and `conformance/exclusion.json` is
+  pinned against the engine.
 
 ## Relationship to other RFCs
 

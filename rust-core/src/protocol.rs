@@ -1077,3 +1077,46 @@ pub fn git_commit(request: &str) -> Result<Response<GitCommitAnswer>, serde_json
     };
     Ok(Ok(answer).into())
 }
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DiscoverRequest {
+    path: PathBuf,
+    #[serde(default)]
+    exclude: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DiscoverAnswer {
+    /// Every Markdown file a bundle load would read, bundle-relative with
+    /// `/` separators, in path order.
+    paths: Vec<String>,
+}
+
+/// `__discover`: the Markdown files of a bundle, after `.okfignore` and
+/// `exclude`, exactly as a load walks them.
+pub fn discover(request: &str) -> Result<Response<DiscoverAnswer>, serde_json::Error> {
+    let request: DiscoverRequest = serde_json::from_str(request)?;
+    let outcome = (|| {
+        let root = std::fs::canonicalize(&request.path).map_err(|source| LoadError::Root {
+            path: request.path.clone(),
+            source,
+        })?;
+        if !root.is_dir() {
+            return Err(LoadError::NotADirectory(root));
+        }
+        let paths = okf_engine::discover(&root, &request.exclude)?
+            .iter()
+            .filter_map(|path| path.strip_prefix(&root).ok())
+            .map(|path| {
+                path.components()
+                    .map(|part| part.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/")
+            })
+            .collect();
+        Ok(DiscoverAnswer { paths })
+    })()
+    .map_err(|error| ProtocolError::from_load(&error));
+    Ok(outcome.into())
+}

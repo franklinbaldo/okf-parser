@@ -6,8 +6,8 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from okf_parser.discovery import discover_markdown
-from okf_parser.exclusion import ExclusionRules
+from pydantic import BaseModel, ConfigDict
+
 from okf_parser.parser import (
     DocumentParseError,
     MarkdownFacts,
@@ -16,6 +16,7 @@ from okf_parser.parser import (
     markdown_facts_batch,
     parse_texts,
 )
+from okf_parser.rust_core import native_result
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Sequence
@@ -69,14 +70,46 @@ def ingest_documents(
         msg = f"bundle root is not a directory: {root}"
         raise NotADirectoryError(msg)
 
+    if isinstance(exclude, str):
+        # A bare string is iterable, so it would otherwise become one
+        # single-character pattern per letter and quietly exclude nothing.
+        msg = f"exclude takes a sequence of patterns, not the single string {exclude!r}"
+        raise TypeError(msg)
+
     requested = frozenset(capabilities) | {IngestionCapability.IDENTITY}
     needs_text = requested != {IngestionCapability.IDENTITY}
-    paths = discover_markdown(root, ExclusionRules.read(root, exclude))
+    paths = discover(root, exclude)
 
     for start in range(0, len(paths), _BATCH):
         yield from _ingest_batch(
             root, paths[start : start + _BATCH], start, requested, needs_text=needs_text
         )
+
+
+class _DiscoverRequest(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    exclude: tuple[str, ...]
+
+
+class _Discovered(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    paths: tuple[str, ...]
+
+
+def discover(root: Path, exclude: Sequence[str] = ()) -> tuple[Path, ...]:
+    """Every Markdown file a bundle load reads, in path order.
+
+    The binary walks it: symlinks and tool directories (``.git``,
+    ``.venv``, ``node_modules``...) are skipped, and ``.okfignore`` plus
+    ``exclude`` apply with ``.gitignore`` syntax, where the rule nearest a
+    path decides, so ``!vendor/knowledge`` re-includes below ``vendor``. An
+    unreadable ``.okfignore`` is a ``ValueError`` naming it.
+    """
+    result = native_result("__discover", _DiscoverRequest(path=str(root), exclude=tuple(exclude)))
+    return tuple(root / relative for relative in _Discovered.model_validate(result).paths)
 
 
 def _ingest_batch(
