@@ -179,7 +179,8 @@ enum Command {
     #[command(
         after_help = "Tables: concepts, links, reserved and diagnostics (schema okf) and, \
         with --spec-template, one per declared type (schema okf_types), all on the search path. \
-        The query cannot read files, reach the network or change settings.\n\n\
+        The query itself cannot read files, reach the network or change settings. With --relations, \
+        trusted okf.relations.sql runs before that lockdown and may use DuckDB's ordinary I/O.\n\n\
         Example: okf-parser sql notes \"SELECT concept_type, count(*) FROM concepts GROUP BY 1\""
     )]
     Sql {
