@@ -239,6 +239,7 @@ def query_bundle(
             "query": SqlError,
             "spec_template": SpecTemplateError,
             "declared_schema": DeclaredSchemaError,
+            "request": SqlError,
         },
     )
     answer = _Result.model_validate(result)
