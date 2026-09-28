@@ -116,6 +116,7 @@ impl From<duckdb::Error> for TypedTableError {
 pub struct Declared {
     pub logical_type: LogicalType,
     pub raw_name: String,
+    pub default_sql: Option<String>,
 }
 
 /// One public column of a typed table.
@@ -252,6 +253,7 @@ pub fn compile_plan(
             declared: Some(Declared {
                 logical_type: column.logical_type.clone(),
                 raw_name: format!("__okf_raw_{}", column.name),
+                default_sql: column.default_sql.clone(),
             }),
             comment: column.comment.clone(),
         })
@@ -294,10 +296,15 @@ fn ddl(plan: &TypedTablePlan, schema: &Schema) -> String {
                     quote_ident(&declared.raw_name),
                     declared.logical_type.raw_sql_type()
                 ));
+                let default = declared
+                    .default_sql
+                    .as_ref()
+                    .map_or(String::new(), |sql| format!(" DEFAULT {sql}"));
                 columns.push(format!(
-                    "{} {}",
+                    "{} {}{}",
                     quote_ident(&field.name),
-                    declared.logical_type.sql
+                    declared.logical_type.sql,
+                    default
                 ));
             }
         }
@@ -434,12 +441,13 @@ fn populate_typed_columns(
         .iter()
         .filter_map(|field| {
             let declared = field.declared.as_ref()?;
-            Some(format!(
-                "{} = TRY_CAST({} AS {})",
-                quote_ident(&field.name),
-                quote_ident(&declared.raw_name),
-                declared.logical_type.sql
-            ))
+            let typed = quote_ident(&field.name);
+            let raw = quote_ident(&declared.raw_name);
+            let cast = format!("TRY_CAST({raw} AS {})", declared.logical_type.sql);
+            Some(match declared.default_sql {
+                Some(_) => format!("{typed} = CASE WHEN {raw} IS NULL THEN {typed} ELSE {cast} END"),
+                None => format!("{typed} = {cast}"),
+            })
         })
         .collect();
     if assignments.is_empty() {
