@@ -192,6 +192,9 @@ enum Command {
         /// Also materialize each declared type (see `duckdb --spec-template`).
         #[arg(long, value_name = "TEMPLATE")]
         spec_template: Option<String>,
+        /// Execute trusted bundle-root `okf.relations.sql` after typed materialization.
+        #[arg(long, requires = "spec_template")]
+        relations: bool,
         /// Return at most this many rows.
         #[arg(long)]
         limit: Option<usize>,
@@ -727,11 +730,13 @@ fn run() -> Outcome {
             query,
             exclude,
             spec_template,
+            relations,
             limit,
         } => {
             let options = QueryOptions {
                 spec_template: spec_template.as_deref(),
                 limit,
+                relations,
             };
             return print(&commands::sql(&path, &exclude, &query, options)?, 0);
         }
