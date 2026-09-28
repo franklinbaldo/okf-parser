@@ -83,6 +83,8 @@ pub struct DeclaredColumn {
     pub logical_type: LogicalType,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_sql: Option<String>,
 }
 
 /// One type's declared table, read back from DuckDB's catalog.
@@ -156,7 +158,7 @@ pub fn parse_declared_schema(
     };
     let columns = connection
         .prepare(
-            "SELECT column_name, data_type, comment, numeric_precision, numeric_scale \
+            "SELECT column_name, data_type, comment, column_default, numeric_precision, numeric_scale \
              FROM duckdb_columns() \
              WHERE database_oid = ? AND schema_oid = ? AND table_oid = ? \
              ORDER BY column_index",
@@ -164,8 +166,8 @@ pub fn parse_declared_schema(
         .and_then(|mut statement| {
             statement
                 .query_map([database, schema, table], |row| {
-                    let precision: Option<i64> = row.get(3)?;
-                    let scale: Option<i64> = row.get(4)?;
+                    let precision: Option<i64> = row.get(4)?;
+                    let scale: Option<i64> = row.get(5)?;
                     Ok(DeclaredColumn {
                         name: row.get(0)?,
                         logical_type: LogicalType::from_catalog(
@@ -174,6 +176,7 @@ pub fn parse_declared_schema(
                             scale.and_then(|value| u32::try_from(value).ok()),
                         ),
                         comment: row.get(2)?,
+                        default_sql: row.get(3)?,
                     })
                 })?
                 .collect::<Result<Vec<_>, _>>()
@@ -254,7 +257,7 @@ mod tests {
     fn columns_comments_and_types_come_from_the_catalog() {
         let schema = parse_declared_schema(
             "CREATE TABLE staging (x INTEGER);\n\
-             CREATE TABLE \"Note\" (status VARCHAR, due DATE, amount DECIMAL(9,2), tags VARCHAR[]);\n\
+             CREATE TABLE \"Note\" (status VARCHAR DEFAULT 'draft', due DATE, amount DECIMAL(9,2), tags VARCHAR[]);\n\
              COMMENT ON TABLE \"Note\" IS 'notes';\n\
              COMMENT ON COLUMN \"Note\".due IS 'when';",
             "note",
@@ -264,6 +267,7 @@ mod tests {
         assert_eq!(schema.table_comment.as_deref(), Some("notes"));
         let names: Vec<&str> = schema.columns.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["status", "due", "amount", "tags"]);
+        assert_eq!(schema.columns[0].default_sql.as_deref(), Some("'draft'"));
         assert_eq!(schema.columns[1].comment.as_deref(), Some("when"));
         assert_eq!(schema.columns[2].logical_type.precision, Some(9));
         assert_eq!(schema.columns[3].logical_type.raw_sql_type(), "VARCHAR[]");
