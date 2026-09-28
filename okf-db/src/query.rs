@@ -431,6 +431,18 @@ mod tests {
     }
 
     #[test]
+    fn relation_execution_requires_typed_materialization() {
+        let options = QueryOptions {
+            relations: true,
+            ..QueryOptions::default()
+        };
+        assert!(matches!(
+            query_bundle(&bundle(), "SELECT 1", options),
+            Err(QueryError::RelationsRequireSpec)
+        ));
+    }
+
+    #[test]
     fn the_query_sees_the_bundle_and_nothing_else() {
         for sql in [
             "SELECT * FROM read_csv('/etc/hosts')",
