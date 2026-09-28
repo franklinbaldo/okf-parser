@@ -444,9 +444,10 @@ fn populate_typed_columns(
             let typed = quote_ident(&field.name);
             let raw = quote_ident(&declared.raw_name);
             let cast = format!("TRY_CAST({raw} AS {})", declared.logical_type.sql);
-            Some(match declared.default_sql {
-                Some(_) => format!("{typed} = CASE WHEN {raw} IS NULL THEN {typed} ELSE {cast} END"),
-                None => format!("{typed} = {cast}"),
+            Some(if declared.default_sql.is_some() {
+                format!("{typed} = CASE WHEN {raw} IS NULL THEN {typed} ELSE {cast} END")
+            } else {
+                format!("{typed} = {cast}")
             })
         })
         .collect();
