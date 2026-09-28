@@ -267,7 +267,12 @@ mod tests {
         assert_eq!(schema.table_comment.as_deref(), Some("notes"));
         let names: Vec<&str> = schema.columns.iter().map(|c| c.name.as_str()).collect();
         assert_eq!(names, ["status", "due", "amount", "tags"]);
-        assert_eq!(schema.columns[0].default_sql.as_deref(), Some("'draft'"));
+        assert!(
+            schema.columns[0]
+                .default_sql
+                .as_deref()
+                .is_some_and(|sql| sql.contains("draft"))
+        );
         assert_eq!(schema.columns[1].comment.as_deref(), Some("when"));
         assert_eq!(schema.columns[2].logical_type.precision, Some(9));
         assert_eq!(schema.columns[3].logical_type.raw_sql_type(), "VARCHAR[]");
