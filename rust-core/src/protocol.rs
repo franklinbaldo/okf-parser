@@ -335,6 +335,8 @@ struct SqlRequest {
     spec_template: Option<String>,
     #[serde(default)]
     limit: Option<usize>,
+    #[serde(default)]
+    relations: bool,
 }
 
 /// `__sql`: one read-only query over a loaded bundle, for `Bundle.sql()`.
@@ -343,6 +345,7 @@ pub fn sql(request: &str) -> Result<Response<QueryResult>, serde_json::Error> {
     let options = QueryOptions {
         spec_template: request.spec_template.as_deref(),
         limit: request.limit,
+        relations: request.relations,
     };
     let outcome =
         query_bundle(&request.bundle, &request.query, options).map_err(|error| match &error {
@@ -352,7 +355,9 @@ pub fn sql(request: &str) -> Result<Response<QueryResult>, serde_json::Error> {
                 kind: "query",
                 message: error.to_string(),
             },
-            QueryError::Typed(_) => ProtocolError::request(&error),
+            QueryError::Typed(_)
+            | QueryError::Relations(_)
+            | QueryError::RelationsRequireSpec => ProtocolError::request(&error),
             QueryError::Db(_) => ProtocolError::io(&error),
         });
     Ok(outcome.into())
