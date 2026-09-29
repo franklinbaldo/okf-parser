@@ -34,6 +34,7 @@ from okf_parser.sql import query_bundle
 from okf_parser.type_specs import SpecTemplateError
 
 if TYPE_CHECKING:
+    import os
     from collections.abc import Iterable, Sequence
 
     import networkx as nx
@@ -163,7 +164,7 @@ class Bundle:
 
 
 def load_bundle(
-    root: Path,
+    root: str | os.PathLike[str],
     exclude: Sequence[str] = (),
     *,
     rust_core: Path | None = None,
@@ -174,7 +175,7 @@ def load_bundle(
     which a caller supplies for a one-off run. ``rust_core`` pins a specific
     binary; by default the one installed with this package is used.
     """
-    root = root.resolve()
+    root = Path(root).resolve()
     if not root.is_dir():
         msg = f"bundle root is not a directory: {root}"
         raise NotADirectoryError(msg)
@@ -232,7 +233,7 @@ class _CheckRequest(BaseModel):
 
 
 def check_report(  # noqa: PLR0913 -- the independent public check options.
-    path: Path,
+    path: str | os.PathLike[str],
     exclude: Sequence[str] = (),
     require_spec: str | None = None,
     *,
@@ -245,7 +246,7 @@ def check_report(  # noqa: PLR0913 -- the independent public check options.
     Diagnostics, spec rules and classification and, with
     ``relational_schema`` (relative to the bundle root), declared keys.
     """
-    root = path.resolve()
+    root = Path(path).resolve()
     if not root.is_dir():
         msg = f"bundle root is not a directory: {root}"
         raise NotADirectoryError(msg)
@@ -265,7 +266,7 @@ def check_report(  # noqa: PLR0913 -- the independent public check options.
 
 
 def validate_path(
-    path: Path,
+    path: str | os.PathLike[str],
     exclude: Sequence[str] = (),
     require_spec: str | None = None,
     *,
