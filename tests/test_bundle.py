@@ -297,3 +297,10 @@ def test_graph_node_without_a_title_uses_none_not_nan(tmp_path: Path) -> None:
     graph = load_bundle(tmp_path).graph().to_networkx()
 
     assert graph.nodes["a"]["title"] is None
+
+
+def test_path_functions_accept_text_paths(tmp_path: Path) -> None:
+    _write(tmp_path / "people" / "bob.md", "---\ntype: Person\n---\n# Bob\n")
+
+    assert load_bundle(str(tmp_path)).concepts == load_bundle(tmp_path).concepts
+    assert validate_path(str(tmp_path)).concept_count == 1
