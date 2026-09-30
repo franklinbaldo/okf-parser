@@ -69,6 +69,22 @@ def test_dry_run_keeps_wheel_and_sdist_paths_distinct() -> None:
     assert 'uv pip install --python "$environment/bin/python" "$artifact"' in dry_run
 
 
+def test_public_index_smoke_installs_duckdb_before_readback() -> None:
+    publish = _workflow_text(WORKFLOWS[0])
+    smoke = publish.split("  smoke-test-public-index:", 1)[1].split("  finalize:", 1)[0]
+    install = 'uv pip install --python "$python" --quiet "duckdb>=1.4,<2"'
+    assert install in smoke
+    assert smoke.index(install) < smoke.index("import duckdb")
+
+
+def test_release_registry_requests_have_bounded_network_tolerance() -> None:
+    publish = _workflow_text(WORKFLOWS[0])
+    environment = publish.split("\nenv:\n", 1)[1].split("\njobs:\n", 1)[0]
+    assert 'UV_HTTP_CONNECT_TIMEOUT: "30"' in environment
+    assert 'UV_HTTP_TIMEOUT: "120"' in environment
+    assert 'UV_HTTP_RETRIES: "3"' in environment
+
+
 def test_no_inline_python_beyond_the_provenance_probe() -> None:
     """Standalone Python belongs in a PEP 723 helper, not in a workflow heredoc.
 
