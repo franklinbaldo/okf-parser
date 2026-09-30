@@ -13,6 +13,12 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+env:
+  # Allow transient registry latency without unbounded retries.
+  UV_HTTP_CONNECT_TIMEOUT: "30"
+  UV_HTTP_TIMEOUT: "120"
+  UV_HTTP_RETRIES: "3"
+
 jobs:
   conformance:
     name: OKF conformance corpus (cross-language)
@@ -541,6 +547,8 @@ jobs:
           printf '%s\n' '---' 'type: Note' '---' '# Note' > "$RUNNER_TEMP/public-fixture/note.md"
           "$bin/okf-parser" check "$RUNNER_TEMP/public-fixture" >/dev/null
           "$bin/okf-parser" duckdb "$RUNNER_TEMP/public-fixture" "$RUNNER_TEMP/public.duckdb" >/dev/null
+          # The CLI bundles libduckdb, not the Python module used for readback.
+          uv pip install --python "$python" --quiet "duckdb>=1.4,<2"
           BUNDLE="$RUNNER_TEMP/public.duckdb" "$python" - <<'PY'
           import os
           import duckdb
