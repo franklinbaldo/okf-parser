@@ -50,8 +50,9 @@ The uploaded GitHub Actions artifact is evidence for review, not a public releas
 
 Before building, `scripts/release_contract.py verify-source` requires all of the following to agree:
 
-- `project.version` in `pyproject.toml`;
-- the Rust crate version;
+- `workspace.package.version` in the root `Cargo.toml`, the only authored version;
+- Rust crate versions inherited with `version.workspace = true`;
+- Python metadata declared with `dynamic = ["version"]`, supplied by Maturin;
 - versions in the npm manifests;
 - `PROTOCOL_VERSION` in `typescript/src/version.ts`;
 - the `@franklinbaldo/okf-parser` peer range in the DuckDB adapter;
@@ -59,6 +60,43 @@ Before building, `scripts/release_contract.py verify-source` requires all of the
 - an optional stable tag, exactly `vX.Y.Z`.
 
 Prereleases are deliberately rejected until npm dist-tag policy is implemented.
+
+## One authored release version
+
+Edit only `workspace.package.version` in the root `Cargo.toml`, then run:
+
+```bash
+uv run --script scripts/sync_versions.py
+uv run --script scripts/sync_versions.py --check
+uv run --script scripts/release_contract.py verify-source
+```
+
+The synchronizer updates the required static npm metadata, local dependency
+version constraints, lockfile workspace snapshots, the TypeScript release
+constant and the README Action example. It regenerates `README.pypi.md` from
+`README.md`. These derived files remain committed, so ordinary Cargo, Python and
+npm commands work on a checkout without a special build wrapper. Synchronization
+is idempotent and needs neither a compiler nor registry access; it preserves
+external dependency versions, resolutions and integrity hashes. `--check` reports
+drift without editing files and runs in CI and both release workflows.
+
+Rust crates inherit the workspace version directly. Maturin derives the Python
+distribution version from the `okf-core` crate. uv cache keys include Cargo
+metadata so changing the canonical version invalidates dynamic build metadata;
+its editable-project lock entry has no static version. Cargo and npm still need
+version copies in their lockfiles. After synchronization, `uv lock --check`,
+Cargo's `--locked` commands and `npm ci` validate the package-manager contracts.
+
+`typescript/src/version.ts` is generated and preserves the public
+`PROTOCOL_VERSION` export used by capabilities and MCP server metadata. The
+separate integer shell/binary protocol in Rust and Python is **not** a release
+number and is left unchanged. The unpublished DuckDB extension also retains its
+independent package version; only its lockfile's `okf-engine` entry follows the
+release. Historical release notes and tags are immutable history, not mirrors.
+
+Create a note fragment in `changelog/<version>/` for the change. Do not change a
+published tag or publish anything as part of synchronization. The tag is checked
+against the canonical version when an authorized release is initiated.
 
 ## Version numbers and release notes
 

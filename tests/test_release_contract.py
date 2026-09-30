@@ -5,6 +5,8 @@ from __future__ import annotations
 import io
 import json
 import re
+import subprocess
+import sys
 import tarfile
 import tomllib
 import zipfile
@@ -13,6 +15,7 @@ from typing import cast
 
 import pytest
 
+from scripts.project_version import project_version
 from scripts.release_contract import (
     KINDS,
     WHEEL_KINDS,
@@ -39,8 +42,13 @@ def _write_source(root: Path, *, protocol_version: str = VERSION) -> None:
     (root / "typescript-duckdb").mkdir()
     (root / "native-npm-linux-x64").mkdir()
     (root / "changelog").mkdir()
+    (root / "Cargo.toml").write_text(
+        '[workspace]\nmembers = ["okf-engine", "okf-db", "rust-core"]\n'
+        f'\n[workspace.package]\nversion = "{VERSION}"\n',
+        encoding="utf-8",
+    )
     (root / "pyproject.toml").write_text(
-        '[project]\nname = "okf-parser"\nversion = "1.2.3"\n', encoding="utf-8"
+        '[project]\nname = "okf-parser"\ndynamic = ["version"]\n', encoding="utf-8"
     )
     (root / "typescript" / "package.json").write_text(
         json.dumps(
@@ -83,19 +91,19 @@ def _write_source(root: Path, *, protocol_version: str = VERSION) -> None:
     (root / "rust-core" / "Cargo.toml").write_text(
         "[package]\n"
         'name = "okf-core"\n'
-        f'version = "{VERSION}"\n'
+        "version.workspace = true\n"
         "\n[dependencies]\n"
         f'okf-db = {{ path = "../okf-db", version = "{VERSION}" }}\n'
         f'okf-engine = {{ path = "../okf-engine", version = "{VERSION}" }}\n',
         encoding="utf-8",
     )
     (root / "okf-db" / "Cargo.toml").write_text(
-        f'[package]\nname = "okf-db"\nversion = "{VERSION}"\n\n[dependencies]\n'
+        '[package]\nname = "okf-db"\nversion.workspace = true\n\n[dependencies]\n'
         f'okf-engine = {{ path = "../okf-engine", version = "{VERSION}" }}\n',
         encoding="utf-8",
     )
     (root / "okf-engine" / "Cargo.toml").write_text(
-        f'[package]\nname = "okf-engine"\nversion = "{VERSION}"\n', encoding="utf-8"
+        '[package]\nname = "okf-engine"\nversion.workspace = true\n', encoding="utf-8"
     )
 
 
@@ -202,6 +210,87 @@ def test_verify_source_accepts_synchronized_metadata(tmp_path: Path) -> None:
     assert contract.version == VERSION
 
 
+def test_verify_source_accepts_other_dynamic_python_metadata(tmp_path: Path) -> None:
+    _write_source(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "okf-parser"\ndynamic = ["version", "description"]\n',
+        encoding="utf-8",
+    )
+    assert verify_source(tmp_path).version == VERSION
+
+
+@pytest.mark.parametrize("version", [VERSION, "1.2.2"])
+def test_verify_source_rejects_literal_python_version(tmp_path: Path, version: str) -> None:
+    _write_source(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        f'[project]\nname = "okf-parser"\nversion = "{version}"\ndynamic = ["version"]\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(ContractError, match=r"Python project\.version must be absent"):
+        verify_source(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "dynamic",
+    ["", "dynamic = []", 'dynamic = ["description"]', 'dynamic = "version"', "dynamic = [1]"],
+)
+def test_verify_source_rejects_missing_dynamic_python_version(tmp_path: Path, dynamic: str) -> None:
+    _write_source(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        f'[project]\nname = "okf-parser"\n{dynamic}\n', encoding="utf-8"
+    )
+    with pytest.raises(ContractError, match=r"Python project\.dynamic"):
+        verify_source(tmp_path)
+
+
+def test_verify_source_rejects_wrong_python_package_name(tmp_path: Path) -> None:
+    _write_source(tmp_path)
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "other-package"\ndynamic = ["version"]\n', encoding="utf-8"
+    )
+    with pytest.raises(ContractError, match="Python package name"):
+        verify_source(tmp_path)
+
+
+@pytest.mark.parametrize("body", ["[workspace]\n", "[workspace.package]\nversion = 123\n"])
+def test_verify_source_reports_invalid_workspace_version(tmp_path: Path, body: str) -> None:
+    _write_source(tmp_path)
+    (tmp_path / "Cargo.toml").write_text(body, encoding="utf-8")
+    with pytest.raises(ContractError, match=r"Cargo\.toml"):
+        verify_source(tmp_path)
+
+
+def test_verify_source_rejects_unstable_workspace_version(tmp_path: Path) -> None:
+    _write_source(tmp_path)
+    (tmp_path / "Cargo.toml").write_text(
+        '[workspace.package]\nversion = "1.2.3-rc.1"\n', encoding="utf-8"
+    )
+    with pytest.raises(ContractError, match="stable SemVer"):
+        verify_source(tmp_path)
+
+
+@pytest.mark.parametrize("mode", ["script", "module"])
+def test_release_contract_cli_supports_script_and_module_execution(
+    tmp_path: Path, mode: str
+) -> None:
+    _write_source(tmp_path)
+    root = Path(__file__).resolve().parents[1]
+    entrypoint = (
+        [str(root / "scripts" / "release_contract.py")]
+        if mode == "script"
+        else ["-m", "scripts.release_contract"]
+    )
+    result = subprocess.run(  # noqa: S603
+        [sys.executable, *entrypoint, "verify-source", "--root", str(tmp_path)],
+        cwd=tmp_path if mode == "script" else root,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["version"] == VERSION
+
+
 def test_verify_source_rejects_stale_documented_action_version(tmp_path: Path) -> None:
     _write_source(tmp_path)
     (tmp_path / "README.md").write_text(
@@ -223,8 +312,11 @@ def test_verify_source_rejects_stale_native_optional_dependency(tmp_path: Path) 
 
 def test_verify_source_rejects_protocol_drift(tmp_path: Path) -> None:
     _write_source(tmp_path, protocol_version="1.2.2")
+    protocol_path = tmp_path / "typescript" / "src" / "version.ts"
+    original = protocol_path.read_bytes()
     with pytest.raises(ContractError, match="protocol version"):
         verify_source(tmp_path)
+    assert protocol_path.read_bytes() == original
 
 
 def test_verify_source_rejects_wrong_tag(tmp_path: Path) -> None:
@@ -366,11 +458,29 @@ def test_verify_source_rejects_drifted_core_crate(tmp_path: Path) -> None:
         verify_source(tmp_path)
 
 
+@pytest.mark.parametrize("crate", ["okf-engine", "okf-db", "rust-core"])
+@pytest.mark.parametrize(
+    "declaration", [f'version = "{VERSION}"', "version.workspace = false", "version.workspace = 1"]
+)
+def test_verify_source_requires_crate_version_inheritance(
+    tmp_path: Path, crate: str, declaration: str
+) -> None:
+    """Even matching literal versions would reintroduce multiple sources of truth."""
+    _write_source(tmp_path)
+    manifest_path = tmp_path / crate / "Cargo.toml"
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="utf-8").replace("version.workspace = true", declaration),
+        encoding="utf-8",
+    )
+    with pytest.raises(ContractError, match=r"crate version must inherit version\.workspace"):
+        verify_source(tmp_path)
+
+
 def test_verify_source_rejects_stale_internal_crate_dependency(tmp_path: Path) -> None:
     """#172: rust-core pins okf-engine; the pin must move with the workspace."""
     _write_source(tmp_path)
     (tmp_path / "rust-core" / "Cargo.toml").write_text(
-        f'[package]\nname = "okf-core"\nversion = "{VERSION}"\n\n[dependencies]\n'
+        '[package]\nname = "okf-core"\nversion.workspace = true\n\n[dependencies]\n'
         f'okf-db = {{ path = "../okf-db", version = "{VERSION}" }}\n'
         'okf-engine = { path = "../okf-engine", version = "0.39.1" }\n',
         encoding="utf-8",
@@ -382,7 +492,7 @@ def test_verify_source_rejects_stale_internal_crate_dependency(tmp_path: Path) -
 def test_verify_source_rejects_a_stale_database_crate_pin(tmp_path: Path) -> None:
     _write_source(tmp_path)
     (tmp_path / "okf-db" / "Cargo.toml").write_text(
-        f'[package]\nname = "okf-db"\nversion = "{VERSION}"\n\n[dependencies]\n'
+        '[package]\nname = "okf-db"\nversion.workspace = true\n\n[dependencies]\n'
         'okf-engine = { path = "../okf-engine", version = "0.39.1" }\n',
         encoding="utf-8",
     )
@@ -391,17 +501,25 @@ def test_verify_source_rejects_a_stale_database_crate_pin(tmp_path: Path) -> Non
 
 
 def test_repository_rust_crates_track_workspace_version() -> None:
-    """Regression guard for #172 against the real tree.
-
-    okf-engine slept at 0.39.1 for six releases while the workspace published
-    0.45.0 because no check ever read a Cargo.toml. This test fails on that
-    un-bumped state — the real drift is the fixture.
-    """
+    """Every public crate must inherit the single root version (regression for #172)."""
     root = Path(__file__).resolve().parents[1]
+    version = project_version(root / "Cargo.toml")
     pyproject = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    version = cast("dict[str, object]", pyproject["project"])["version"]
-    for crate in ("rust-core", "okf-engine"):
+    project = cast("dict[str, object]", pyproject["project"])
+    assert "version" not in project
+    assert "version" in cast("list[str]", project["dynamic"])
+    for crate in ("rust-core", "okf-engine", "okf-db"):
         manifest = tomllib.loads((root / crate / "Cargo.toml").read_text(encoding="utf-8"))
-        assert cast("dict[str, object]", manifest["package"])["version"] == version, (
-            f"{crate}/Cargo.toml drifted from workspace version {version}"
+        assert cast("dict[str, object]", manifest["package"])["version"] == {"workspace": True}, (
+            f"{crate}/Cargo.toml must inherit workspace version {version}"
         )
+    assert verify_source(root).version == version
+
+
+@pytest.mark.parametrize("suffix", ["-rc.1", ".2", "+build"])
+def test_action_reference_cannot_hide_a_suffix(tmp_path: Path, suffix: str) -> None:
+    _write_source(tmp_path)
+    readme = tmp_path / "README.md"
+    readme.write_text(readme.read_text().replace(f"@v{VERSION}", f"@v{VERSION}{suffix}"))
+    with pytest.raises(ContractError, match="exact current-version ref"):
+        verify_source(tmp_path)

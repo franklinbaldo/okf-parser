@@ -122,7 +122,8 @@ The design prioritizes, in order:
 One semantic version continues to identify one cross-runtime protocol. A release
 is valid only when these values are identical:
 
-- `project.version` in `pyproject.toml`;
+- `workspace.package.version` in the root `Cargo.toml`, inherited by the Rust crates
+  and supplied dynamically to Python by Maturin;
 - `version` in `typescript/package.json`;
 - `PROTOCOL_VERSION` in `typescript/src/version.ts`;
 - `version` in `typescript-duckdb/package.json`;

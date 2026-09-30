@@ -96,5 +96,5 @@ def test_cli_fails_loudly_on_a_missing_version(
 
 def test_this_repository_renders_its_own_release_notes() -> None:
     """The release this branch belongs to must be publishable as it stands."""
-    version = project_version(REPO_ROOT / "pyproject.toml")
+    version = project_version(REPO_ROOT / "Cargo.toml")
     assert render(REPO_ROOT, version).startswith(f"# okf-parser {version}")

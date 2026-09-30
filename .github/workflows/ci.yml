@@ -72,6 +72,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Check generated versions
+        run: uv run --script scripts/sync_versions.py --check
+
       - name: Require an unpublished version and a note fragment
         shell: bash
         # A version number identifies a RELEASE, not a pull request. Several
@@ -90,44 +99,25 @@ jobs:
           BASE: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          read_version() {
-            sed -n 's/^version = "\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)"$/\1/p'
-          }
           outranks() {
             [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" == "$1" && "$1" != "$2" ]]
           }
 
           git fetch --quiet origin "$BASE"
-          head_version=$(read_version < pyproject.toml)
-          if [[ -z "$head_version" ]]; then
-            echo "::error file=pyproject.toml::A versão SemVer não foi encontrada."
-            exit 1
-          fi
+          head_version=$(uv run --script scripts/project_version.py)
 
           published=$(git tag --list 'v*.*.*' | sed 's/^v//' | sort -V | tail -1)
           if [[ -n "$published" ]] && ! outranks "$head_version" "$published"; then
-            echo "::error file=pyproject.toml::A versão $head_version não supera a última publicada ($published)."
+            echo "::error file=Cargo.toml::A versão $head_version não supera a última publicada ($published)."
             exit 1
           fi
 
-          if git cat-file -e "origin/$BASE:pyproject.toml" 2>/dev/null; then
-            base_version=$(git show "origin/$BASE:pyproject.toml" | read_version)
-            if [[ -n "$base_version" && "$base_version" != "$head_version" ]] \
-              && ! outranks "$head_version" "$base_version"; then
-              echo "::error file=pyproject.toml::A versão $head_version regride em relação a $base_version na base."
-              exit 1
-            fi
+          base_version=$(uv run --script scripts/project_version.py --ref "origin/$BASE")
+          if [[ "$base_version" != "$head_version" ]] \
+            && ! outranks "$head_version" "$base_version"; then
+            echo "::error file=Cargo.toml::A versão $head_version regride em relação a $base_version na base."
+            exit 1
           fi
-
-          for manifest in typescript/package.json typescript-duckdb/package.json; do
-            if [[ -f "$manifest" ]]; then
-              package_version=$(sed -n 's/^[[:space:]]*"version": "\([^"]*\)",$/\1/p' "$manifest")
-              if [[ "$package_version" != "$head_version" ]]; then
-                echo "::error file=$manifest::A versão npm $package_version difere da versão Python $head_version."
-                exit 1
-              fi
-            fi
-          done
 
           fragments="changelog/$head_version"
           shopt -s nullglob

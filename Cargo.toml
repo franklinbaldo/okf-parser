@@ -3,6 +3,11 @@ members = ["okf-engine", "okf-db", "rust-core"]
 exclude = ["duckdb-extension"]
 resolver = "3"
 
+# The only manually maintained release version. Run scripts/sync_versions.py
+# after changing it to refresh derived package metadata.
+[workspace.package]
+version = "0.48.1"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
