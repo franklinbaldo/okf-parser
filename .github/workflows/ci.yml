@@ -175,7 +175,9 @@ jobs:
         run: uv run vulture src --min-confidence 90
 
       - name: Run tests with coverage
-        run: uv run pytest --cov --cov-report=term-missing --cov-fail-under=85
+        # Subprocess tests run from temporary repositories. Pin both the config
+        # and source root so coverage never falls back to those fixture manifests.
+        run: uv run pytest --cov="$PWD/src/okf_parser" --cov-config=pyproject.toml --cov-report=term-missing --cov-fail-under=85
 
       - name: Verify the derived PyPI description is current
         run: uv run --script scripts/pypi_readme.py --check

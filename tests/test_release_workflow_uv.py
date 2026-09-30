@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import textwrap
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -281,3 +282,16 @@ def test_version_gate_policy_runs_against_git_history(  # noqa: PLR0913
     )
     assert expected in result.stdout, result.stdout + result.stderr
     assert result.returncode == (0 if expected.startswith("OK:") else 1)
+
+
+def test_coverage_scope_survives_subprocess_working_directory_changes() -> None:
+    """Keep the configured product coverage scope when a child runs in a fixture repo."""
+    ci = _workflow_text(ROOT / ".github/workflows/ci.yml")
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    sources = pyproject["tool"]["coverage"]["run"]["source"]
+    # The CLI override must match the configured scope exactly; only its path
+    # resolution changes. Passing the config alone leaves source paths relative
+    # to each subprocess's cwd and can silently miss actual product execution.
+    assert sources == ["src/okf_parser"]
+    assert f'--cov="$PWD/{sources[0]}" --cov-config=pyproject.toml' in ci
+    assert "--cov-report=term-missing --cov-fail-under=85" in ci
