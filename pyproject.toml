@@ -96,6 +96,9 @@ runtime-evaluated-base-classes = ["pydantic.BaseModel"]
 "src/okf_parser/schema_export.py" = ["PLR0913"]
 "src/okf_parser/service.py" = ["PLR0913"]
 "tests/*" = ["D103", "PLR2004", "S101"]
+"scripts/cargo_timings.py" = ["D103", "EXE001", "S603", "S607", "T201"]
+"scripts/check_feature_graph.py" = ["D103", "EXE001", "I001", "S603", "T201"]
+"scripts/benchmark_native_profiles.py" = ["D103", "EXE001", "S603"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

@@ -1,0 +1,129 @@
+name: Rust build observability
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-observability-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    name: Cold and incremental build paths
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target-observe
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Measure cold engine build
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$CARGO_TARGET_DIR"
+          python scripts/cargo_timings.py --label engine-cold --output build-metrics/engine-cold.json -- \
+            cargo build --locked -p okf-engine --manifest-path Cargo.toml --timings
+
+      - name: Measure no-op engine rebuild
+        run: >-
+          python scripts/cargo_timings.py
+          --label engine-noop
+          --output build-metrics/engine-noop.json
+          --
+          cargo build --locked -p okf-engine --manifest-path Cargo.toml --timings
+
+      - name: Measure engine edit rebuild
+        shell: bash
+        run: |
+          set -euo pipefail
+          touch okf-engine/src/lib.rs
+          python scripts/cargo_timings.py --label engine-edit --output build-metrics/engine-edit.json -- \
+            cargo build --locked -p okf-engine --manifest-path Cargo.toml --timings
+
+      - name: Fetch pinned prebuilt libduckdb
+        run: uv run --script scripts/fetch_libduckdb.py --github-env --runtime
+
+      - name: Measure cold full development build
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf "$CARGO_TARGET_DIR"
+          python scripts/cargo_timings.py --label full-cold --output build-metrics/full-cold.json -- \
+            cargo build --locked --no-default-features -p okf-core --manifest-path Cargo.toml --timings
+
+      - name: Measure no-op full rebuild
+        run: >-
+          python scripts/cargo_timings.py
+          --label full-noop
+          --output build-metrics/full-noop.json
+          --
+          cargo build --locked --no-default-features -p okf-core --manifest-path Cargo.toml --timings
+
+      - name: Measure SQL-layer edit rebuild
+        shell: bash
+        run: |
+          set -euo pipefail
+          touch okf-db/src/lib.rs
+          python scripts/cargo_timings.py --label full-db-edit --output build-metrics/full-db-edit.json -- \
+            cargo build --locked --no-default-features -p okf-core --manifest-path Cargo.toml --timings
+
+      - name: Measure CLI/MCP edit rebuild
+        shell: bash
+        run: |
+          set -euo pipefail
+          touch rust-core/src/main.rs
+          python scripts/cargo_timings.py --label full-cli-edit --output build-metrics/full-cli-edit.json -- \
+            cargo build --locked --no-default-features -p okf-core --manifest-path Cargo.toml --timings
+
+      - name: Measure engine edit through full facade
+        shell: bash
+        run: |
+          set -euo pipefail
+          touch okf-engine/src/lib.rs
+          python scripts/cargo_timings.py --label full-engine-edit --output build-metrics/full-engine-edit.json -- \
+            cargo build --locked --no-default-features -p okf-core --manifest-path Cargo.toml --timings
+
+      - name: Publish build summary
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          print("## Rust build timings")
+          print()
+          print("| scenario | wall seconds | Cargo seconds | top crate |")
+          print("|---|---:|---:|---|")
+          for path in sorted(Path("build-metrics").glob("*.json")):
+              data = json.loads(path.read_text())
+              summary = data.get("cargo_summary") or {}
+              crates = summary.get("top_crates") or []
+              top = crates[0] if crates else {}
+              print(
+                  f"| {data['label']} | {data['elapsed_seconds']:.3f} | "
+                  f"{summary.get('cargo_duration_seconds', '')} | "
+                  f"{top.get('crate', '')} {top.get('compile_seconds', '')} |"
+              )
+          PY
+
+      - name: Upload build timing evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rust-build-observability
+          path: |
+            build-metrics/*.json
+            target-observe/cargo-timings/*
+          if-no-files-found: error

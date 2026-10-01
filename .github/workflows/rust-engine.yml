@@ -37,8 +37,32 @@ jobs:
       - name: Reject Rust warnings and Clippy findings
         run: cargo clippy --workspace --all-targets --locked --no-default-features -- -D warnings
       - name: Test semantic engine
-        run: cargo test --locked --manifest-path Cargo.toml -p okf-engine
+        run: >-
+          python scripts/cargo_timings.py
+          --label full-engine-tests
+          --output build-metrics/full-engine-tests.json
+          --
+          cargo test --locked --manifest-path Cargo.toml -p okf-engine --timings
       - name: Test DuckDB layer
-        run: cargo test --locked --no-default-features --manifest-path Cargo.toml -p okf-db
+        run: >-
+          python scripts/cargo_timings.py
+          --label full-db-tests
+          --output build-metrics/full-db-tests.json
+          --
+          cargo test --locked --no-default-features --manifest-path Cargo.toml -p okf-db --timings
       - name: Test CLI facade
-        run: cargo test --locked --no-default-features --manifest-path Cargo.toml -p okf-core
+        run: >-
+          python scripts/cargo_timings.py
+          --label full-core-tests
+          --output build-metrics/full-core-tests.json
+          --
+          cargo test --locked --no-default-features --manifest-path Cargo.toml -p okf-core --timings
+      - name: Upload full Rust timing evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rust-full-timings
+          path: |
+            build-metrics/*.json
+            target/cargo-timings/*
+          if-no-files-found: error

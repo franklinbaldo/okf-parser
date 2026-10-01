@@ -183,7 +183,12 @@ jobs:
         run: uv lock --check
 
       - name: Check Python formatting
-        run: uv run ruff format --check .
+        shell: bash
+        run: |
+          if ! uv run ruff format --check .; then
+            uv run ruff format .
+            git diff --exit-code
+          fi
 
       - name: Lint Python
         run: uv run ruff check .
@@ -245,7 +250,7 @@ jobs:
         run: node benchmarks/typescript-parser.mjs --sizes=10 --rounds=1 > "$RUNNER_TEMP/typescript-benchmark.json"
 
       - name: Dogfood the TypeScript CLI
-        run: node typescript/dist/cli.js check . > "$RUNNER_TEMP/okf-check.json"
+        run: node typescript/dist/cli.js check . | tee "$RUNNER_TEMP/okf-check.json"
 
       - name: Exercise the TypeScript formatter
         shell: bash
