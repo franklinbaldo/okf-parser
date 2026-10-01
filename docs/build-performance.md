@@ -68,3 +68,16 @@ Official dynamic wheel/CI builds therefore use
 `--no-default-features --features full`. A bare
 `--no-default-features` is intentionally the lightweight engine-development
 graph and does not build the public binary.
+
+
+## Cold source-distribution consumer
+
+The release dry run intentionally keeps one expensive proof that cannot reuse a
+native wheel, Cargo target, or prebuilt DuckDB: install the exact sdist into a
+fresh environment with bundled DuckDB. That job now passes Maturin
+`--timings=html` and wraps the installation with `scripts/cargo_timings.py`.
+The resulting JSON and Cargo HTML are uploaded as `sdist-cold-timings`.
+
+This instrumentation does not make the source build warm or cached. It exists
+to identify which crates and native build units dominate the cold path before
+changing source-distribution policy or build architecture.
