@@ -1,0 +1,153 @@
+name: Cold sdist DuckDB A/B
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/sdist-duckdb-ab.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "okf-engine/**"
+      - "okf-db/**"
+      - "rust-core/**"
+      - "pyproject.toml"
+      - "scripts/cargo_timings.py"
+      - "scripts/fetch_libduckdb.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sdist-duckdb-ab-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compare:
+    name: Paired cold source builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_HOME: ${{ runner.temp }}/sdist-ab-cargo
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+          enable-cache: false
+
+      - name: Build exact source distribution
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          maturin-version: v1.14.1
+          command: sdist
+          args: --out dist
+
+      - name: Prefetch Cargo registry only
+        run: cargo fetch --locked --manifest-path Cargo.toml
+
+      - name: Prepare isolated Python consumers
+        shell: bash
+        run: |
+          set -euo pipefail
+          for variant in bundled external; do
+            environment="$RUNNER_TEMP/sdist-ab-$variant"
+            uv venv --python 3.12 "$environment"
+            uv pip install --python "$environment/bin/python" "pydantic>=2.12,<3"
+          done
+
+      - name: Measure bundled DuckDB source build
+        shell: bash
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/sdist-ab-bundled-target
+          UV_CACHE_DIR: ${{ runner.temp }}/sdist-ab-bundled-uv
+          MATURIN_PEP517_ARGS: --locked --timings
+        run: |
+          set -euo pipefail
+          artifact=$(find dist -maxdepth 1 -type f -name '*.tar.gz' -print -quit)
+          test -n "$artifact"
+          python scripts/cargo_timings.py \
+            --label sdist-bundled \
+            --output build-metrics/sdist-bundled.json \
+            -- uv pip install --no-cache --no-deps \
+              --python "$RUNNER_TEMP/sdist-ab-bundled/bin/python" "$artifact"
+          "$RUNNER_TEMP/sdist-ab-bundled/bin/okf-parser" --version
+
+      - name: Fetch pinned external libduckdb
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/sdist-ab-libduckdb
+        run: uv run --script scripts/fetch_libduckdb.py --github-env --runtime
+
+      - name: Measure external DuckDB source build
+        shell: bash
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/sdist-ab-external-target
+          UV_CACHE_DIR: ${{ runner.temp }}/sdist-ab-external-uv
+          MATURIN_PEP517_ARGS: --locked --no-default-features --features full --timings
+        run: |
+          set -euo pipefail
+          artifact=$(find dist -maxdepth 1 -type f -name '*.tar.gz' -print -quit)
+          test -n "$artifact"
+          python scripts/cargo_timings.py \
+            --label sdist-external-libduckdb \
+            --output build-metrics/sdist-external-libduckdb.json \
+            -- uv pip install --no-cache --no-deps \
+              --python "$RUNNER_TEMP/sdist-ab-external/bin/python" "$artifact"
+          "$RUNNER_TEMP/sdist-ab-external/bin/okf-parser" --version
+
+      - name: Exercise both native binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture="$RUNNER_TEMP/sdist-ab-fixture"
+          mkdir "$fixture"
+          printf '%s\n' '---' 'type: Node' '---' '# Node' > "$fixture/node.md"
+          for variant in bundled external; do
+            binary="$RUNNER_TEMP/sdist-ab-$variant/bin/okf-parser"
+            "$binary" check "$fixture" >/dev/null
+            "$binary" search "$fixture" node >/dev/null
+            "$binary" sql "$fixture" "SELECT count(*) FROM concepts" >/dev/null
+          done
+
+      - name: Publish paired comparison
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          bundled_path = Path("build-metrics/sdist-bundled.json")
+          external_path = Path("build-metrics/sdist-external-libduckdb.json")
+          print("## Cold sdist DuckDB A/B")
+          print()
+          if not bundled_path.exists() or not external_path.exists():
+              print("One arm did not produce timing JSON.")
+              raise SystemExit(0)
+          bundled = json.loads(bundled_path.read_text())
+          external = json.loads(external_path.read_text())
+          b = bundled["elapsed_seconds"]
+          e = external["elapsed_seconds"]
+          savings = b - e
+          percent = (savings / b * 100) if b else 0
+          print("| variant | wall seconds |")
+          print("|---|---:|")
+          print(f"| bundled DuckDB | {b:.3f} |")
+          print(f"| external libduckdb | {e:.3f} |")
+          print()
+          print(f"External libduckdb saves **{savings:.3f}s ({percent:.1f}%)** on this paired runner.")
+          PY
+
+      - name: Upload paired timing evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sdist-duckdb-ab
+          path: |
+            build-metrics/*.json
+            ${{ runner.temp }}/sdist-ab-bundled-target/cargo-timings/*
+            ${{ runner.temp }}/sdist-ab-external-target/cargo-timings/*
+          if-no-files-found: error
