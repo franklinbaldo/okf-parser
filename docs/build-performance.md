@@ -81,3 +81,22 @@ The resulting JSON and Cargo HTML are uploaded as `sdist-cold-timings`.
 This instrumentation does not make the source build warm or cached. It exists
 to identify which crates and native build units dominate the cold path before
 changing source-distribution policy or build architecture.
+
+
+## Paired DuckDB source-build experiment
+
+The optional `Cold sdist DuckDB A/B` workflow compares two source builds on
+the same hosted runner after a shared `cargo fetch`:
+
+- the canonical sdist build with bundled DuckDB;
+- the same sdist with `--no-default-features --features full` linked against
+  the repository's pinned prebuilt libduckdb.
+
+Each arm uses an independent empty Cargo target and Python environment. Python
+dependencies are installed before timing and the package is installed with
+`--no-deps`, so the measured delta is primarily native build cost rather than
+registry or Python dependency download time.
+
+This is an experiment only. The external-libduckdb arm depends on the fetched
+library remaining available through the job environment and is not a proposed
+replacement for the self-contained source-distribution contract.
