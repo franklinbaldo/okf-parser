@@ -82,17 +82,27 @@ class Bundle:
         *,
         spec_template: str | None = None,
         limit: int | None = None,
+        relations: bool = False,
     ) -> SqlResult:
         """Run one read-only SQL query over this bundle.
 
         The tables are the ones ``okf-parser duckdb`` exports, built from this
         snapshot: ``concepts``, ``links``, ``reserved`` and ``diagnostics``
         and, with ``spec_template``, one table per declared type (RFC 0006) in
-        ``okf_types``; all are on the search path. The query cannot read
-        files, reach the network or change settings. Values come back as
-        Python values by their DuckDB type (``Decimal``, ``date``, ...).
+        ``okf_types``; all are on the search path. With ``relations=True``,
+        trusted bundle-root ``okf.relations.sql`` runs after typed
+        materialization and publishes ``okf_relations`` before the connection
+        is locked down. Ordinary queries cannot read files, reach the network
+        or change settings. Values come back as Python values by their DuckDB
+        type (``Decimal``, ``date``, ...).
         """
-        return query_bundle(self, query, spec_template=spec_template, limit=limit)
+        return query_bundle(
+            self,
+            query,
+            spec_template=spec_template,
+            limit=limit,
+            relations=relations,
+        )
 
     def search(  # noqa: PLR0913 - the RFC 0016 request is intentionally flat.
         self,

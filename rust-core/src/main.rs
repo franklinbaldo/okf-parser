@@ -179,7 +179,8 @@ enum Command {
     #[command(
         after_help = "Tables: concepts, links, reserved and diagnostics (schema okf) and, \
         with --spec-template, one per declared type (schema okf_types), all on the search path. \
-        The query cannot read files, reach the network or change settings.\n\n\
+        The query itself cannot read files, reach the network or change settings. With --relations, \
+        trusted okf.relations.sql runs before that lockdown and may use DuckDB's ordinary I/O.\n\n\
         Example: okf-parser sql notes \"SELECT concept_type, count(*) FROM concepts GROUP BY 1\""
     )]
     Sql {
@@ -192,6 +193,9 @@ enum Command {
         /// Also materialize each declared type (see `duckdb --spec-template`).
         #[arg(long, value_name = "TEMPLATE")]
         spec_template: Option<String>,
+        /// Execute trusted bundle-root `okf.relations.sql` after typed materialization.
+        #[arg(long, requires = "spec_template")]
+        relations: bool,
         /// Return at most this many rows.
         #[arg(long)]
         limit: Option<usize>,
@@ -727,11 +731,13 @@ fn run() -> Outcome {
             query,
             exclude,
             spec_template,
+            relations,
             limit,
         } => {
             let options = QueryOptions {
                 spec_template: spec_template.as_deref(),
                 limit,
+                relations,
             };
             return print(&commands::sql(&path, &exclude, &query, options)?, 0);
         }
