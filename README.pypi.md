@@ -237,16 +237,22 @@ The composite action installs a pinned uv version and executes the same
 
 Pin an exact version. There is no moving `@v1` ref: this repository's tags are
 package versions, because `publish.yml` refuses to publish a release whose tag
-does not equal the version in `pyproject.toml`. A `v1` tag would either break
+does not equal `workspace.package.version` in the root `Cargo.toml`. A `v1` tag would either break
 that check or drift away from the version it claims to be. A major-version ref
 becomes worth introducing when the package itself reaches `1.0.0`.
 
 Releases are published to PyPI from GitHub Releases through OIDC Trusted
 Publishing. No long-lived PyPI token is stored in the repository.
 
-Every pull request must increase the SemVer version in `pyproject.toml` and add
-exactly one matching `changelog/<version>.md` entry. CI compares both against
-the target branch before allowing merge.
+The release version is maintained only in the root `Cargo.toml`, under
+`[workspace.package]`. After changing it, run
+`uv run --script scripts/sync_versions.py` to update derived package metadata.
+Rust crates inherit it and Maturin supplies the Python version dynamically.
+
+Several pull requests can share the same unpublished release version. Each adds
+a fragment under `changelog/<version>/`; CI requires a version newer than all
+published tags, no regression against the base branch, and synchronized metadata.
+See [releasing](https://github.com/franklinbaldo/okf-parser/blob/main/docs/releasing.md) for the complete process.
 
 ## MCP
 

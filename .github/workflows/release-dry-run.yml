@@ -10,7 +10,11 @@ on:
       - "native-npm-linux-x64/**"
       - "pyproject.toml"
       - "rfcs/0003-resumable-multi-registry-release.md"
-      - "rust-core/Cargo.lock"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "okf-engine/Cargo.toml"
+      - "okf-db/Cargo.toml"
+      - "duckdb-extension/Cargo.lock"
       - "rust-core/Cargo.toml"
       - "scripts/**"
       - "tests/test_release_contract.py"
@@ -347,6 +351,7 @@ jobs:
           if [[ "$DRY_RUN_REF" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             args+=(--tag "$DRY_RUN_REF")
           fi
+          uv run --script scripts/sync_versions.py --check
           uv run --script scripts/release_contract.py verify-source "${args[@]}"
 
       - name: Install locked build dependencies
