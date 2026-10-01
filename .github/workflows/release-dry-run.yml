@@ -73,7 +73,7 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: 2_28
           docker-options: --env DUCKDB_LIB_DIR --env DUCKDB_INCLUDE_DIR
-          args: --release --locked --no-default-features --out dist --compatibility pypi
+          args: --release --locked --no-default-features --features full --out dist --compatibility pypi
 
       - name: Ship libduckdb beside the executable
         shell: bash
@@ -161,7 +161,7 @@ jobs:
         with:
           maturin-version: v1.14.1
           target: x64
-          args: --release --locked --no-default-features --out dist --compatibility pypi
+          args: --release --locked --no-default-features --features full --out dist --compatibility pypi
 
       - name: Ship libduckdb beside the executable
         shell: bash
@@ -256,7 +256,7 @@ jobs:
         with:
           maturin-version: v1.14.1
           target: ${{ matrix.target }}
-          args: --release --locked --no-default-features --out dist --compatibility pypi
+          args: --release --locked --no-default-features --features full --out dist --compatibility pypi
 
       - name: Ship libduckdb beside the executable
         shell: bash
