@@ -46,6 +46,74 @@ Pull requests that change release-sensitive files run this workflow automaticall
 
 The uploaded GitHub Actions artifact is evidence for review, not a public release. Its retention period is 14 days.
 
+### Parallel validation and Cargo caches
+
+The cold source consumer depends only on `sdist`, so its bundled DuckDB build runs
+alongside the five native wheel builds. `build-release-set` requires both that
+consumer and every wheel job before assembling and uploading the tested set.
+The source consumer downloads the same immutable `sdist` artifact as the aggregate
+job. It has fresh Cargo/uv directories, no restored cache or prebuilt DuckDB, and
+uses `--locked` with default features. This proves the actual source fallback on
+every run, including warm-cache runs.
+
+Native macOS and Windows wheels cache Cargo dependencies using the runner's
+existing Rust compiler, separately by runner/target, no-default-features mode,
+Python build configuration and pinned DuckDB fetcher. The cache action also hashes
+Rust/compiler environment and Cargo manifests/lockfiles. It does not cache the
+workspace crates; compilation, packaging, library verification and consumer tests
+always run. Cache restoration precedes the verified DuckDB download because cache
+cleanup can remove non-Cargo files from `target/`. The manylinux containers keep
+separate uncached builds rather than mixing their compiler/sysroot with host data.
+The release profile (`thin` LTO, one codegen unit) is unchanged.
+
+Ubuntu CI jobs cache their native dependencies separately by job, avoiding
+first-writer races between immutable debug-only and release caches. An absolute
+`CARGO_TARGET_DIR` also lets `uv sync`, direct Cargo commands and `uv build` reuse
+compatible dependencies when PEP 517 extracts the source into a temporary folder.
+Cargo still checks fingerprints and rebuilds changed workspace sources.
+
+GitHub cache visibility remains branch-scoped: a warm PR rerun can use its own
+cache, but a PR cache does not warm `main` or another PR. A cold first run still
+compiles everything. Compare the first and second runs of the same commit and
+check the cache action's hit/miss logs as well as wall time; the uncached source
+consumer may remain the longest job. Cache hits are an optimization, never a
+substitute for any release check.
+
+#### Measured cold baseline (2026-09-30)
+
+The [pre-optimization dry run](https://github.com/franklinbaldo/okf-parser/actions/runs/36770932057)
+and the [first optimized cold run](https://github.com/franklinbaldo/okf-parser/actions/runs/36776438581)
+both passed every applicable check. Times below come from GitHub job/step
+`started_at` and `completed_at`, not estimates. Workflow duration is the first
+job's start through the final job's completion, excluding initial scheduling.
+
+| Measurement | Before | Optimized, cold Cargo cache |
+| --- | ---: | ---: |
+| Release dry run critical path | 29m 33s | 17m 22s |
+| Release-set aggregate job | 16m 00s | 1m 04s |
+| Cold source consumer | 15m 05s (with host wheel, serial) | 16m 00s (own parallel job) |
+| macOS Intel wheel job | 13m 30s | 12m 51s |
+| CI quality job | 8m 16s | 6m 12s |
+| CI `uv build` step | 3m 25s | 1m 24s |
+
+CI measurements use [the previous CI run](https://github.com/franklinbaldo/okf-parser/actions/runs/36770931804)
+and [the optimized CI run](https://github.com/franklinbaldo/okf-parser/actions/runs/36776438488).
+The first optimized native wheel and quality jobs reported Cargo cache misses.
+The 41% shorter dry-run path comes from parallel validation; it does not require a
+warm cache. The remaining cold source build is deliberately retained. Individual
+runner/compiler timings vary, so the small cold Intel difference is not evidence
+of a cache benefit. The `uv build` improvement already reuses compatible
+in-job dependencies despite the initially cold external cache.
+
+To measure warm caching, make a documentation-only commit on the same PR after
+the cold run finishes, keep all Cargo/Rust, dependency, feature, compiler and
+workflow inputs unchanged, and verify exact Cargo cache hits in the next run.
+Repeat the full workflow, including the deliberately cold source consumer, and
+compare each native build job as well as the overall critical path. This uses a
+fresh set of immutable release artifacts and avoids mixing partial rerun uploads.
+The final warm observations for this change are recorded in
+[PR #308](https://github.com/franklinbaldo/okf-parser/pull/308).
+
 ## Source contract
 
 Before building, `scripts/release_contract.py verify-source` requires all of the following to agree:

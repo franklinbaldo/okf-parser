@@ -143,6 +143,15 @@ jobs:
           version: "0.11.21"
           python-version: "3.12"
 
+      # maturin uses the runner's existing Rust toolchain; restore against that
+      # exact compiler before building, with native targets kept separate.
+      - name: Restore compatible Cargo dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: wheel-windows-${{ runner.arch }}-v1-no-default-features-${{ hashFiles('Cargo.toml', 'scripts/fetch_libduckdb.py', 'pyproject.toml') }}
+          env-vars: CARGO CC CFLAGS CXX CMAKE RUST DUCKDB MATURIN SDKROOT MACOSX_DEPLOYMENT_TARGET DEVELOPER_DIR
+          cache-bin: false
+
       - name: Fetch the pinned prebuilt libduckdb
         shell: bash
         run: uv run --script scripts/fetch_libduckdb.py --target x86_64-pc-windows-msvc --github-env
@@ -230,6 +239,15 @@ jobs:
           version: "0.11.21"
           python-version: "3.12"
 
+      # maturin uses the runner's existing Rust toolchain; restore against that
+      # exact compiler before building, with native targets kept separate.
+      - name: Restore compatible Cargo dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: wheel-${{ matrix.runner }}-${{ matrix.target }}-v1-no-default-features-${{ hashFiles('Cargo.toml', 'scripts/fetch_libduckdb.py', 'pyproject.toml') }}
+          env-vars: CARGO CC CFLAGS CXX CMAKE RUST DUCKDB MATURIN SDKROOT MACOSX_DEPLOYMENT_TARGET DEVELOPER_DIR
+          cache-bin: false
+
       - name: Fetch the pinned prebuilt libduckdb
         run: uv run --script scripts/fetch_libduckdb.py --target "${{ matrix.target }}-apple-darwin" --github-env
 
@@ -315,9 +333,71 @@ jobs:
           path: dist/*.tar.gz
           if-no-files-found: error
 
+  verify-sdist:
+    name: Verify source distribution (cold consumer)
+    # Start as soon as the sdist is ready, alongside the platform wheels.
+    needs: [sdist]
+    runs-on: ubuntu-latest
+    env:
+      # Never restore a native wheel, Cargo target or prebuilt DuckDB here.
+      # This remains a true, locked from-source build with bundled DuckDB.
+      MATURIN_PEP517_ARGS: --locked
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+          enable-cache: false
+
+      - name: Download the exact sdist
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sdist
+          path: release/python
+
+      - name: Install and exercise the source distribution
+        shell: bash
+        env:
+          # Runner context is available only after the job has been assigned.
+          CARGO_HOME: ${{ runner.temp }}/sdist-cargo
+          CARGO_TARGET_DIR: ${{ runner.temp }}/sdist-target
+          UV_CACHE_DIR: ${{ runner.temp }}/sdist-uv
+        run: |
+          set -euo pipefail
+          expected_version=$(uv run --script scripts/project_version.py)
+          artifact=$(find release/python -maxdepth 1 -type f -name '*.tar.gz' -print -quit)
+          test -n "$artifact"
+          environment="$RUNNER_TEMP/python-sdist-consumer"
+          uv venv --python 3.12 "$environment"
+          uv pip install --no-cache --python "$environment/bin/python" "$artifact"
+          EXPECTED_VERSION="$expected_version" "$environment/bin/python" -c 'import importlib.metadata, os; assert importlib.metadata.version("okf-parser") == os.environ["EXPECTED_VERSION"]'
+          "$environment/bin/okf-parser" --help >/dev/null
+          test -x "$environment/bin/okf-parser"
+          mkdir "$environment/fixture"
+          printf '%s\n' '---' 'type: Node' '---' '# Node' > "$environment/fixture/node.md"
+          FIXTURE="$environment/fixture" "$environment/bin/python" - <<'PY'
+          import os
+          from pathlib import Path
+          from okf_parser import load_bundle
+          from okf_parser.rust_core import resolve_rust_core
+
+          executable = resolve_rust_core()
+          if executable is None or executable.name not in {"okf-parser", "okf-parser.exe"}:
+              raise SystemExit(f"bundled native engine was not selected: {executable}")
+          bundle = load_bundle(Path(os.environ["FIXTURE"]))
+          if bundle.markdown_count != 1:
+              raise SystemExit(f"unexpected native bundle count: {bundle.markdown_count}")
+          PY
+          "$environment/bin/okf-parser" check "$environment/fixture" >/dev/null
+
   build-release-set:
     name: Build and verify release set
-    needs: [wheels-linux, wheels-windows, wheels-macos, sdist]
+    needs: [wheels-linux, wheels-windows, wheels-macos, sdist, verify-sdist]
     runs-on: ubuntu-latest
     env:
       DRY_RUN_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref_name }}
@@ -422,35 +502,24 @@ jobs:
             --npm-version "$(npm --version)" \
             --uv-version "$(uv --version | awk '{print $2}')"
 
-      - name: Verify wheel and source distribution as consumers
+      - name: Verify host wheel as a consumer
+        # Every platform already has its native smoke test. Keep the aggregate
+        # host check; the independent cold sdist job is also required by needs.
         shell: bash
-        # Every platform wheel is already installed and exercised in its native
-        # build job above. This aggregate job rechecks the host x86_64 wheel and
-        # the sdist as consumers; the sdist install below is the one
-        # deliberately Rust-dependent path: it proves the from-source fallback
-        # still works for platforms with no prebuilt wheel.
         run: |
           set -euo pipefail
           expected_version=$(uv run --script scripts/project_version.py)
-          wheel=$(find release/python -maxdepth 1 -type f -name "okf_parser-${expected_version}-py3-none-manylinux*_x86_64.whl" -print -quit)
-          sdist=$(find release/python -maxdepth 1 -type f -name '*.tar.gz' -print -quit)
-          test -n "$wheel"
-          test -n "$sdist"
-          for artifact in "$wheel" "$sdist"; do
-            label=$(basename "$artifact" | tr '.-' '__')
-            environment="$RUNNER_TEMP/python-$label"
-            uv venv --python 3.12 "$environment"
-            if [[ "$artifact" == *.whl ]]; then
-              uv pip install --python "$environment/bin/python" --only-binary :all: "$artifact"
-            else
-              uv pip install --python "$environment/bin/python" "$artifact"
-            fi
-            EXPECTED_VERSION="$expected_version" "$environment/bin/python" -c 'import importlib.metadata, os; assert importlib.metadata.version("okf-parser") == os.environ["EXPECTED_VERSION"]'
-            "$environment/bin/okf-parser" --help >/dev/null
-            test -x "$environment/bin/okf-parser"
-            mkdir "$environment/fixture"
-            printf '%s\n' '---' 'type: Node' '---' '# Node' > "$environment/fixture/node.md"
-            FIXTURE="$environment/fixture" "$environment/bin/python" - <<'PY'
+          artifact=$(find release/python -maxdepth 1 -type f -name "okf_parser-${expected_version}-py3-none-manylinux*_x86_64.whl" -print -quit)
+          test -n "$artifact"
+          environment="$RUNNER_TEMP/python-wheel-consumer"
+          uv venv --python 3.12 "$environment"
+          uv pip install --python "$environment/bin/python" --only-binary :all: "$artifact"
+          EXPECTED_VERSION="$expected_version" "$environment/bin/python" -c 'import importlib.metadata, os; assert importlib.metadata.version("okf-parser") == os.environ["EXPECTED_VERSION"]'
+          "$environment/bin/okf-parser" --help >/dev/null
+          test -x "$environment/bin/okf-parser"
+          mkdir "$environment/fixture"
+          printf '%s\n' '---' 'type: Node' '---' '# Node' > "$environment/fixture/node.md"
+          FIXTURE="$environment/fixture" "$environment/bin/python" - <<'PY'
           import os
           from pathlib import Path
           from okf_parser import load_bundle
@@ -463,8 +532,7 @@ jobs:
           if bundle.markdown_count != 1:
               raise SystemExit(f"unexpected native bundle count: {bundle.markdown_count}")
           PY
-            "$environment/bin/okf-parser" check "$environment/fixture" >/dev/null
-          done
+          "$environment/bin/okf-parser" check "$environment/fixture" >/dev/null
 
       - name: Verify main npm tarball with native companion
         shell: bash

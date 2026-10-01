@@ -1,4 +1,4 @@
-﻿name: CI
+name: CI
 
 on:
   pull_request:
@@ -20,6 +20,9 @@ jobs:
       # Link DuckDB's prebuilt library instead of compiling it (see
       # scripts/fetch_libduckdb.py); `bundled` stays the source-build default.
       MATURIN_PEP517_ARGS: --no-default-features
+      # uv build extracts the sdist elsewhere; an absolute target lets Cargo
+      # reuse compatible dependencies from uv sync and the direct Rust build.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -29,6 +32,13 @@ jobs:
         with:
           version: "0.11.21"
           python-version: "3.12"
+
+      - name: Restore compatible Cargo dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: native-ubuntu-${{ runner.arch }}-${{ github.job }}-v1-no-default-features-${{ hashFiles('Cargo.toml', 'scripts/fetch_libduckdb.py', 'pyproject.toml') }}
+          env-vars: CARGO CC CFLAGS CXX CMAKE RUST DUCKDB MATURIN SDKROOT MACOSX_DEPLOYMENT_TARGET DEVELOPER_DIR
+          cache-bin: false
 
       - name: Fetch the pinned prebuilt libduckdb
         run: uv run --script scripts/fetch_libduckdb.py --github-env --runtime
@@ -143,6 +153,9 @@ jobs:
     runs-on: ubuntu-latest
     env:
       MATURIN_PEP517_ARGS: --no-default-features
+      # uv build extracts the sdist elsewhere; an absolute target lets Cargo
+      # reuse compatible dependencies from uv sync and the direct Rust build.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -152,6 +165,13 @@ jobs:
         with:
           version: "0.11.21"
           python-version: "3.12"
+
+      - name: Restore compatible Cargo dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: native-ubuntu-${{ runner.arch }}-${{ github.job }}-v1-no-default-features-${{ hashFiles('Cargo.toml', 'scripts/fetch_libduckdb.py', 'pyproject.toml') }}
+          env-vars: CARGO CC CFLAGS CXX CMAKE RUST DUCKDB MATURIN SDKROOT MACOSX_DEPLOYMENT_TARGET DEVELOPER_DIR
+          cache-bin: false
 
       - name: Fetch the pinned prebuilt libduckdb
         run: uv run --script scripts/fetch_libduckdb.py --github-env --runtime
