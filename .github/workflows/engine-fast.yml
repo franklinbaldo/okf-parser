@@ -1,0 +1,53 @@
+name: Rust engine fast path
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: engine-fast-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  engine-fast:
+    name: Engine only
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target-engine
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Restore engine-only Cargo cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: engine-only-${{ runner.os }}-${{ runner.arch }}-v1-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'okf-engine/Cargo.toml') }}
+          cache-bin: false
+
+      - name: Check workspace formatting
+        run: cargo fmt --all --manifest-path Cargo.toml --check
+
+      - name: Reject engine warnings and Clippy findings
+        run: cargo clippy --locked -p okf-engine --all-targets --manifest-path Cargo.toml -- -D warnings
+
+      - name: Test engine with Cargo timings
+        run: >-
+          python scripts/cargo_timings.py
+          --label engine-tests
+          --output build-metrics/engine-tests.json
+          --
+          cargo test --locked -p okf-engine --manifest-path Cargo.toml --timings
+
+      - name: Upload engine timing evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: engine-fast-timings
+          path: |
+            build-metrics/*.json
+            target-engine/cargo-timings/*
+          if-no-files-found: error
