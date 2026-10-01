@@ -12,3 +12,16 @@ version = "0.48.1"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Experimental profiles for development measurements only. Neither changes the
+# default dev profile nor the release artifact profile above.
+[profile.dev-fast]
+inherits = "dev"
+opt-level = 1
+debug = 0
+strip = "debuginfo"
+
+[profile.release-fast]
+inherits = "release"
+lto = false
+codegen-units = 16
