@@ -341,7 +341,7 @@ jobs:
     env:
       # Never restore a native wheel, Cargo target or prebuilt DuckDB here.
       # This remains a true, locked from-source build with bundled DuckDB.
-      MATURIN_PEP517_ARGS: --locked
+      MATURIN_PEP517_ARGS: --locked --timings=html
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -374,7 +374,10 @@ jobs:
           test -n "$artifact"
           environment="$RUNNER_TEMP/python-sdist-consumer"
           uv venv --python 3.12 "$environment"
-          uv pip install --no-cache --python "$environment/bin/python" "$artifact"
+          python scripts/cargo_timings.py \
+            --label sdist-cold-install \
+            --output build-metrics/sdist-cold-install.json \
+            -- uv pip install --no-cache --python "$environment/bin/python" "$artifact"
           EXPECTED_VERSION="$expected_version" "$environment/bin/python" -c 'import importlib.metadata, os; assert importlib.metadata.version("okf-parser") == os.environ["EXPECTED_VERSION"]'
           "$environment/bin/okf-parser" --help >/dev/null
           test -x "$environment/bin/okf-parser"
@@ -394,6 +397,16 @@ jobs:
               raise SystemExit(f"unexpected native bundle count: {bundle.markdown_count}")
           PY
           "$environment/bin/okf-parser" check "$environment/fixture" >/dev/null
+
+      - name: Upload cold sdist timing evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sdist-cold-timings
+          path: |
+            build-metrics/sdist-cold-install.json
+            ${{ runner.temp }}/sdist-target/cargo-timings/*
+          if-no-files-found: error
 
   build-release-set:
     name: Build and verify release set
