@@ -39,3 +39,32 @@ runner, command, tool version, and the timing files that existed at completion.
 The timing data is observational, not a performance gate. Do not weaken the
 clean source-distribution install test or change release optimization settings
 based on a single run.
+
+
+## Capability feature graph
+
+The public `okf-parser` binary requires the complete `full` capability set.
+That keeps release behavior unchanged while allowing narrower development
+dependency graphs:
+
+```bash
+# Engine facade only: no DuckDB and no MCP/HTTP stack.
+cargo check -p okf-core --no-default-features --lib
+
+# SQL dependencies without the MCP/HTTP surface.
+cargo check -p okf-core --no-default-features --features sql --lib
+
+# MCP/HTTP dependencies without DuckDB.
+cargo check -p okf-core --no-default-features --features mcp --lib
+
+# Complete public binary, linking an external/prebuilt DuckDB.
+cargo build -p okf-core --no-default-features --features full
+
+# Complete public binary with bundled DuckDB (the normal default).
+cargo build -p okf-core
+```
+
+Official dynamic wheel/CI builds therefore use
+`--no-default-features --features full`. A bare
+`--no-default-features` is intentionally the lightweight engine-development
+graph and does not build the public binary.

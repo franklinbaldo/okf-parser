@@ -28,6 +28,12 @@ jobs:
           shared-key: engine-only-${{ runner.os }}-${{ runner.arch }}-v1-${{ hashFiles('Cargo.toml', 'Cargo.lock', 'okf-engine/Cargo.toml') }}
           cache-bin: false
 
+      - name: Verify optional dependency graph
+        run: python scripts/check_feature_graph.py
+
+      - name: Check engine-only facade
+        run: cargo check --locked -p okf-core --no-default-features --lib
+
       - name: Check workspace formatting
         run: cargo fmt --all --manifest-path Cargo.toml --check
 

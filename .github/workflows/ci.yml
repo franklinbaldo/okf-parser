@@ -19,7 +19,7 @@ jobs:
     env:
       # Link DuckDB's prebuilt library instead of compiling it (see
       # scripts/fetch_libduckdb.py); `bundled` stays the source-build default.
-      MATURIN_PEP517_ARGS: --no-default-features
+      MATURIN_PEP517_ARGS: --no-default-features --features full
       # uv build extracts the sdist elsewhere; an absolute target lets Cargo
       # reuse compatible dependencies from uv sync and the direct Rust build.
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
@@ -47,10 +47,10 @@ jobs:
         run: cargo fmt --manifest-path rust-core/Cargo.toml --check
 
       - name: Run tests
-        run: cargo test --locked --no-default-features --manifest-path rust-core/Cargo.toml
+        run: cargo test --locked --no-default-features --features full --manifest-path rust-core/Cargo.toml
 
       - name: Build release MVP
-        run: cargo build --release --locked --no-default-features --manifest-path rust-core/Cargo.toml
+        run: cargo build --release --locked --no-default-features --features full --manifest-path rust-core/Cargo.toml
 
       - name: Install Python dependencies
         run: uv sync --frozen
@@ -152,7 +152,7 @@ jobs:
   quality:
     runs-on: ubuntu-latest
     env:
-      MATURIN_PEP517_ARGS: --no-default-features
+      MATURIN_PEP517_ARGS: --no-default-features --features full
       # uv build extracts the sdist elsewhere; an absolute target lets Cargo
       # reuse compatible dependencies from uv sync and the direct Rust build.
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
@@ -183,12 +183,7 @@ jobs:
         run: uv lock --check
 
       - name: Check Python formatting
-        shell: bash
-        run: |
-          if ! uv run ruff format --check .; then
-            uv run ruff format .
-            git diff --exit-code
-          fi
+        run: uv run ruff format --check .
 
       - name: Lint Python
         run: uv run ruff check .

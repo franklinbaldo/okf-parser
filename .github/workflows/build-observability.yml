@@ -60,7 +60,7 @@ jobs:
           set -euo pipefail
           rm -rf "$CARGO_TARGET_DIR"
           python scripts/cargo_timings.py --label full-cold --output build-metrics/full-cold.json -- \
-            cargo build --locked --no-default-features -p okf-core --manifest-path Cargo.toml --timings
+            cargo build --locked --no-default-features --features full -p okf-core --manifest-path Cargo.toml --timings
 
       - name: Measure no-op full rebuild
         run: >-
@@ -68,7 +68,7 @@ jobs:
           --label full-noop
           --output build-metrics/full-noop.json
           --
-          cargo build --locked --no-default-features -p okf-core --manifest-path Cargo.toml --timings
+          cargo build --locked --no-default-features --features full -p okf-core --manifest-path Cargo.toml --timings
 
       - name: Measure SQL-layer edit rebuild
         shell: bash
@@ -76,7 +76,7 @@ jobs:
           set -euo pipefail
           touch okf-db/src/lib.rs
           python scripts/cargo_timings.py --label full-db-edit --output build-metrics/full-db-edit.json -- \
-            cargo build --locked --no-default-features -p okf-core --manifest-path Cargo.toml --timings
+            cargo build --locked --no-default-features --features full -p okf-core --manifest-path Cargo.toml --timings
 
       - name: Measure CLI/MCP edit rebuild
         shell: bash
@@ -84,7 +84,7 @@ jobs:
           set -euo pipefail
           touch rust-core/src/main.rs
           python scripts/cargo_timings.py --label full-cli-edit --output build-metrics/full-cli-edit.json -- \
-            cargo build --locked --no-default-features -p okf-core --manifest-path Cargo.toml --timings
+            cargo build --locked --no-default-features --features full -p okf-core --manifest-path Cargo.toml --timings
 
       - name: Measure engine edit through full facade
         shell: bash
@@ -92,7 +92,7 @@ jobs:
           set -euo pipefail
           touch okf-engine/src/lib.rs
           python scripts/cargo_timings.py --label full-engine-edit --output build-metrics/full-engine-edit.json -- \
-            cargo build --locked --no-default-features -p okf-core --manifest-path Cargo.toml --timings
+            cargo build --locked --no-default-features --features full -p okf-core --manifest-path Cargo.toml --timings
 
       - name: Publish build summary
         if: always()

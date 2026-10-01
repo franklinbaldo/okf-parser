@@ -29,8 +29,8 @@ from pathlib import Path
 
 def _git_head() -> str | None:
     try:
-        return subprocess.check_output(  # noqa: S603 - fixed Git probe, no shell
-            ["git", "rev-parse", "HEAD"],  # noqa: S607 - standard Git executable
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
             text=True,
             stderr=subprocess.DEVNULL,
         ).strip()
@@ -40,7 +40,7 @@ def _git_head() -> str | None:
 
 def _command_version(command: str) -> str | None:
     try:
-        return subprocess.check_output(  # noqa: S603 - wrapper intentionally executes its CLI command
+        return subprocess.check_output(
             [command, "--version"],
             text=True,
             stderr=subprocess.DEVNULL,
@@ -75,7 +75,6 @@ def _cargo_summary(timings_dir: Path) -> dict[str, object] | None:
 
 
 def main() -> int:
-    """Measure one command and persist reproducible build metadata."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--label", required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -91,10 +90,10 @@ def main() -> int:
     started = time.time()
     monotonic_started = time.monotonic()
     try:
-        completed = subprocess.run(command, check=False)  # noqa: S603 - explicit wrapped CLI command
+        completed = subprocess.run(command, check=False)
         returncode = completed.returncode
     except OSError as exc:
-        sys.stderr.write(f"failed to start {command[0]!r}: {exc}\n")
+        print(f"failed to start {command[0]!r}: {exc}", file=sys.stderr)
         returncode = 127
     elapsed = time.monotonic() - monotonic_started
 
@@ -130,16 +129,10 @@ def main() -> int:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 
-    sys.stdout.write(
-        f"[build-timing] {args.label}: {elapsed:.3f}s "
-        f"(exit {returncode}); report={args.output}\n"
-    )
+    print(f"[build-timing] {args.label}: {elapsed:.3f}s (exit {returncode}); report={args.output}")
     if report["cargo_summary"]:
         for item in report["cargo_summary"]["top_crates"][:5]:
-            sys.stdout.write(
-                f"[build-timing] crate {item['crate']}: "
-                f"{item['compile_seconds']:.3f}s aggregate\n"
-            )
+            print(f"[build-timing] crate {item['crate']}: {item['compile_seconds']:.3f}s aggregate")
     return returncode
 
 
