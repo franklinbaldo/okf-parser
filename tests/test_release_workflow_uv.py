@@ -68,14 +68,94 @@ def test_public_index_smoke_retries_real_binary_install() -> None:
     assert "run: sleep 30" not in publish
 
 
+def _job(text: str, name: str) -> str:
+    return re.split(r"\n  [a-z][a-z-]*:\n", text.split(f"\n  {name}:\n", 1)[1], maxsplit=1)[0]
+
+
 def test_dry_run_keeps_wheel_and_sdist_paths_distinct() -> None:
     dry_run = _workflow_text(WORKFLOWS[1])
-    assert 'if [[ "$artifact" == *.whl ]]; then' in dry_run
+    source = _job(dry_run, "verify-sdist")
+    aggregate = _job(dry_run, "build-release-set")
+    assert "needs: [sdist]" in source
+    assert "needs: [wheels-linux, wheels-windows, wheels-macos, sdist, verify-sdist]" in aggregate
+    assert 'uv pip install --no-cache --python "$environment/bin/python" "$artifact"' in source
     assert (
         'uv pip install --python "$environment/bin/python" --only-binary :all: "$artifact"'
-        in dry_run
+        in aggregate
     )
-    assert 'uv pip install --python "$environment/bin/python" "$artifact"' in dry_run
+    assert "for artifact" not in aggregate
+    for consumer in (source, aggregate):
+        assert 'importlib.metadata.version("okf-parser")' in consumer
+        assert "resolve_rust_core()" in consumer
+        assert "bundle.markdown_count != 1" in consumer
+        assert '"$environment/bin/okf-parser" check' in consumer
+
+
+def test_sdist_consumer_is_always_a_cold_bundled_build() -> None:
+    source = _job(_workflow_text(WORKFLOWS[1]), "verify-sdist")
+    assert "runner.temp" not in source.split("    steps:", 1)[0]
+    assert "CARGO_HOME: ${{ runner.temp }}/sdist-cargo" in source
+    assert "CARGO_TARGET_DIR: ${{ runner.temp }}/sdist-target" in source
+    assert "UV_CACHE_DIR: ${{ runner.temp }}/sdist-uv" in source
+    assert "MATURIN_PEP517_ARGS: --locked" in source
+    assert "enable-cache: false" in source
+    for forbidden in (
+        "uses: Swatinem/rust-cache",
+        "uses: actions/cache",
+        "fetch_libduckdb.py",
+        "--no-default-features",
+        "--only-binary",
+    ):
+        assert forbidden not in source
+    # Both consumers download the same immutable artifact from the same run.
+    assert "name: sdist\n          path: release/python" in source
+
+
+def test_native_cargo_caches_are_segregated_and_never_skip_validation() -> None:
+    for path in WORKFLOWS:
+        workflow = _workflow_text(path)
+        for name, key in (
+            ("wheels-windows", "wheel-windows-${{ runner.arch }}-v1"),
+            ("wheels-macos", "wheel-${{ matrix.runner }}-${{ matrix.target }}-v1"),
+        ):
+            job = _job(workflow, name)
+            assert "uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6" in job
+            assert f"shared-key: {key}-no-default-features-" in job
+            assert (
+                "${{ hashFiles('Cargo.toml', 'scripts/fetch_libduckdb.py', 'pyproject.toml') }}"
+                in job
+            )
+            assert "cache-bin: false" in job
+            assert job.index("uses: Swatinem/rust-cache") < job.index("fetch_libduckdb.py --target")
+            assert "cache-hit" not in job  # A hit never substitutes for build/test.
+            assert "--release --locked --no-default-features" in job
+            assert "scripts/ship_libduckdb.py" in job
+            assert "scripts/check_duckdb_shipped.py" in job
+            assert "Install and exercise the wheel" in job
+        linux = _job(workflow, "wheels-linux")
+        assert "uses: Swatinem/rust-cache" not in linux  # Different container toolchain.
+        assert "runner: macos-15-intel" in workflow
+        assert "runner: macos-15" in workflow
+        assert "runner: ubuntu-24.04-arm" in workflow
+
+
+def test_ci_reuses_an_absolute_target_for_pep517_and_cargo() -> None:
+    ci = _workflow_text(ROOT / ".github/workflows/ci.yml")
+    engine = _workflow_text(ROOT / ".github/workflows/rust-engine.yml")
+    for job in (_job(ci, "quality"), _job(ci, "rust-core"), _job(engine, "engine")):
+        assert "CARGO_TARGET_DIR: ${{ github.workspace }}/target" in job
+        assert "MATURIN_PEP517_ARGS: --no-default-features" in job
+        assert (
+            "shared-key: native-ubuntu-${{ runner.arch }}-${{ github.job }}-v1-no-default-features-"
+            in job
+        )
+        assert job.index("uses: Swatinem/rust-cache") < job.index("fetch_libduckdb.py --github-env")
+    quality = _job(ci, "quality")
+    assert "uv sync --frozen --all-groups" in quality
+    assert "run: uv build" in quality
+    assert "--cov-fail-under=85" in quality
+    profile = tomllib.loads((ROOT / "Cargo.toml").read_text())["profile"]["release"]
+    assert profile == {"lto": "thin", "codegen-units": 1, "strip": True}
 
 
 def test_public_index_smoke_installs_duckdb_before_readback() -> None:

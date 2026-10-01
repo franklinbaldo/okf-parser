@@ -167,6 +167,15 @@ jobs:
           version: "0.11.21"
           python-version: "3.12"
 
+      # maturin uses the runner's existing Rust toolchain; restore against that
+      # exact compiler before building, with native targets kept separate.
+      - name: Restore compatible Cargo dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: wheel-windows-${{ runner.arch }}-v1-no-default-features-${{ hashFiles('Cargo.toml', 'scripts/fetch_libduckdb.py', 'pyproject.toml') }}
+          env-vars: CARGO CC CFLAGS CXX CMAKE RUST DUCKDB MATURIN SDKROOT MACOSX_DEPLOYMENT_TARGET DEVELOPER_DIR
+          cache-bin: false
+
       - name: Fetch the pinned prebuilt libduckdb
         shell: bash
         run: uv run --script scripts/fetch_libduckdb.py --target x86_64-pc-windows-msvc --github-env
@@ -251,6 +260,15 @@ jobs:
         with:
           version: "0.11.21"
           python-version: "3.12"
+
+      # maturin uses the runner's existing Rust toolchain; restore against that
+      # exact compiler before building, with native targets kept separate.
+      - name: Restore compatible Cargo dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: wheel-${{ matrix.runner }}-${{ matrix.target }}-v1-no-default-features-${{ hashFiles('Cargo.toml', 'scripts/fetch_libduckdb.py', 'pyproject.toml') }}
+          env-vars: CARGO CC CFLAGS CXX CMAKE RUST DUCKDB MATURIN SDKROOT MACOSX_DEPLOYMENT_TARGET DEVELOPER_DIR
+          cache-bin: false
 
       - name: Fetch the pinned prebuilt libduckdb
         run: uv run --script scripts/fetch_libduckdb.py --target "${{ matrix.target }}-apple-darwin" --github-env
