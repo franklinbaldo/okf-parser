@@ -315,10 +315,7 @@ pub struct Scaffold {
 }
 
 fn stub(concept_type: &str) -> String {
-    format!(
-        "---\ntype: Spec\n---\n\n# {concept_type}\n\n\
-         TODO: describe this type's frontmatter fields and semantics.\n"
-    )
+    format!("---\ntype: Spec\n---\n\n# {concept_type}\n")
 }
 
 /// What a scaffold call would do: the documents to create, or the

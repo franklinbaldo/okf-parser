@@ -45,6 +45,7 @@ class DeclaredSchema:
     columns: dict[str, DuckDBLogicalType]
     table_comment: str | None
     column_comments: dict[str, str]
+    column_defaults: dict[str, str]
 
 
 def declared_schema_relative_path(spec_template: str, concept_type: str) -> str | None:
@@ -78,6 +79,7 @@ class _Column(BaseModel):
     name: str
     logical_type: _CatalogType
     comment: str | None = None
+    default_sql: str | None = None
 
 
 class _Declared(BaseModel):
@@ -115,5 +117,10 @@ def parse_declared_schema(sql_text: str, concept_type: str) -> DeclaredSchema:
         table_comment=declared.table_comment,
         column_comments={
             column.name: column.comment for column in declared.columns if column.comment is not None
+        },
+        column_defaults={
+            column.name: column.default_sql
+            for column in declared.columns
+            if column.default_sql is not None
         },
     )

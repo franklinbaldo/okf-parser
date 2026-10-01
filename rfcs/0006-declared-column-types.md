@@ -310,7 +310,8 @@ sandboxing:**
   column types depend on the machine running the command.
 
 Only the catalog readout — the post-condition table's column names, types
-in DuckDB's normalized spelling, and comments — crosses back out. The real
+in DuckDB's normalized spelling, comments, and declared `DEFAULT`
+expressions — crosses back out. The real
 compilation (`apply`'s ephemeral database, `duckdb`'s output) then issues
 DDL built from that readout, never from the declaration file's text, which
 is never re-executed anywhere past the one connection it ran on.
@@ -350,9 +351,11 @@ without being asked to preserve author spelling. `apply` protects every generate
 field and its `__okf_raw_` source under the existing compiler-owned `__okf_`
 boundary; user SQL does not write the generated column directly.
 
-Constraints remain out of v1. `NOT NULL`, `CHECK`, `UNIQUE`, `PRIMARY KEY`, and
-`DEFAULT` may exist in the declaration script but are not part of the contract read
-out of the catalog. v1 reads column names, normalized logical types, and comments.
+Constraints remain out of v1. `NOT NULL`, `CHECK`, `UNIQUE`, and `PRIMARY KEY`
+may exist in the declaration script but are not part of the contract read out of
+the catalog. Declared `DEFAULT` expressions are the exception: RFC 0025 makes
+them the effective typed value only when the authored raw value is absent or null.
+A present malformed value still `TRY_CAST`s to NULL rather than falling back.
 
 ### 5a. The v1 type IR preserves DuckDB identity before target-specific export
 
@@ -651,8 +654,6 @@ type: Spec
 ---
 
 # Rotina
-
-TODO: describe this type's frontmatter fields and semantics.
 ```
 
 Three properties keep `init` inside this RFC's existing guarantees rather
@@ -896,8 +897,9 @@ doesn't target.
   insufficient.
 - Constraints (decision 5, excluded from v1): whether a later RFC reads
   `duckdb_constraints()` for `NOT NULL`/`CHECK`/`UNIQUE`/`PRIMARY KEY`, and
-  what evaluating each against documents means. `DEFAULT` likely never
-  belongs, being a write-time concept with no read-time claim.
+  what evaluating each against documents means. `DEFAULT` is handled
+  separately by RFC 0025 as an effective typed projection, without altering
+  authored Markdown.
 - Extending decision 5a's target mappings — DuckDB can preserve additional
   physical types in the IR, but each exporter still needs an explicit truthful
   representation policy (decision 10).

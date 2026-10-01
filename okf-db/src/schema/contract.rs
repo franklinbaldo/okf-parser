@@ -347,7 +347,7 @@ impl Compiler<'_> {
             .flat_map(|document| document.keys().cloned())
             .collect();
         if let Some(concept_type) = concept_type {
-            keys.extend(["type", "title", "description"].map(str::to_owned));
+            keys.insert("type".to_owned());
             if parent.is_empty()
                 && let Some(declared) = self.options.declared.get(concept_type)
             {

@@ -398,6 +398,42 @@ mod tests {
     }
 
     #[test]
+    fn declared_defaults_fill_only_missing_values() {
+        let root = std::env::temp_dir().join(format!("okf-defaults-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("specs")).unwrap();
+        std::fs::write(
+            root.join("specs/note.schema.sql"),
+            "CREATE TABLE Note (status VARCHAR DEFAULT 'draft', n INTEGER DEFAULT 7);",
+        )
+        .unwrap();
+
+        let mut data = bundle();
+        data.root = root.display().to_string();
+        data.concepts[0].frontmatter_json =
+            r#"{"type":"Note","status":"final","n":"bad"}"#.to_owned();
+        data.concepts[1].frontmatter_json = r#"{"type":"Note"}"#.to_owned();
+
+        let result = query_bundle(
+            &data,
+            "SELECT __okf_concept_id, status, n FROM okf_types.Note ORDER BY 1",
+            QueryOptions {
+                spec_template: Some("specs/{slug}.md"),
+                ..QueryOptions::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            result.rows,
+            [
+                [Value::from("a"), Value::from("final"), Value::Null],
+                [Value::from("b"), Value::from("draft"), Value::from(7)],
+            ]
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn a_limit_truncates_and_says_so() {
         let options = QueryOptions {
             limit: Some(1),
