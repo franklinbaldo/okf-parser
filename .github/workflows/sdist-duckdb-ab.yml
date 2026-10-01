@@ -26,8 +26,6 @@ jobs:
     name: Paired cold source builds
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    env:
-      CARGO_HOME: ${{ runner.temp }}/sdist-ab-cargo
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -38,6 +36,10 @@ jobs:
           version: "0.11.21"
           python-version: "3.12"
           enable-cache: false
+
+      - name: Configure paired runner paths
+        shell: bash
+        run: echo "CARGO_HOME=$RUNNER_TEMP/sdist-ab-cargo" >> "$GITHUB_ENV"
 
       - name: Build exact source distribution
         uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
