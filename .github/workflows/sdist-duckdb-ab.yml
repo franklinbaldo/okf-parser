@@ -1,6 +1,19 @@
 name: Cold sdist DuckDB A/B
 
 on:
+  push:
+    branches:
+      - "perf/sdist-duckdb-ab"
+    paths:
+      - ".github/workflows/sdist-duckdb-ab.yml"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "okf-engine/**"
+      - "okf-db/**"
+      - "rust-core/**"
+      - "pyproject.toml"
+      - "scripts/cargo_timings.py"
+      - "scripts/fetch_libduckdb.py"
   pull_request:
     paths:
       - ".github/workflows/sdist-duckdb-ab.yml"
