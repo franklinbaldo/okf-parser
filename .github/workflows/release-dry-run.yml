@@ -341,7 +341,7 @@ jobs:
     env:
       # Never restore a native wheel, Cargo target or prebuilt DuckDB here.
       # This remains a true, locked from-source build with bundled DuckDB.
-      MATURIN_PEP517_ARGS: --locked --timings=html
+      MATURIN_PEP517_ARGS: --locked --timings
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
