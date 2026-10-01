@@ -1,0 +1,117 @@
+name: Rust profile experiment
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-profile-experiment-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  profiles:
+    name: Compare build profiles
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Fetch pinned prebuilt libduckdb
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target-libduckdb
+        run: uv run --script scripts/fetch_libduckdb.py --github-env --runtime
+
+      - name: Prepare benchmark corpus
+        run: python scripts/benchmark_native_profiles.py --fixture "$RUNNER_TEMP/okf-bench" --prepare --count 1000
+
+      - name: Build release baseline
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target-profile-release
+        run: >-
+          python scripts/cargo_timings.py
+          --label profile-release
+          --output build-metrics/profile-release.json
+          --
+          cargo build --locked -p okf-core --profile release
+          --no-default-features --features full --timings
+
+      - name: Build release-fast experiment
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target-profile-release-fast
+        run: >-
+          python scripts/cargo_timings.py
+          --label profile-release-fast
+          --output build-metrics/profile-release-fast.json
+          --
+          cargo build --locked -p okf-core --profile release-fast
+          --no-default-features --features full --timings
+
+      - name: Build dev-fast experiment
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/target-profile-dev-fast
+        run: >-
+          python scripts/cargo_timings.py
+          --label profile-dev-fast
+          --output build-metrics/profile-dev-fast.json
+          --
+          cargo build --locked -p okf-core --profile dev-fast
+          --no-default-features --features full --timings
+
+      - name: Benchmark equivalent binaries
+        run: |
+          python scripts/benchmark_native_profiles.py \
+            --fixture "$RUNNER_TEMP/okf-bench" \
+            --binary "release=$GITHUB_WORKSPACE/target-profile-release/release/okf-parser" \
+            --binary "release-fast=$GITHUB_WORKSPACE/target-profile-release-fast/release-fast/okf-parser" \
+            --binary "dev-fast=$GITHUB_WORKSPACE/target-profile-dev-fast/dev-fast/okf-parser" \
+            --repeats 5 \
+            --output build-metrics/profile-runtime.json
+
+      - name: Publish comparison
+        if: always()
+        shell: bash
+        run: |
+          python - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          from pathlib import Path
+
+          print("## Build profiles")
+          print()
+          print("| profile | build wall s | size MiB | parse ms | search ms | SQL ms |")
+          print("|---|---:|---:|---:|---:|---:|")
+          runtime_path = Path("build-metrics/profile-runtime.json")
+          runtime = json.loads(runtime_path.read_text()) if runtime_path.exists() else {}
+          for label in ("release", "release-fast", "dev-fast"):
+              timing_path = Path(f"build-metrics/profile-{label}.json")
+              if not timing_path.exists() or label not in runtime:
+                  continue
+              timing = json.loads(timing_path.read_text())
+              result = runtime[label]
+              bench = result["benchmarks"]
+              print(
+                  f"| {label} | {timing['elapsed_seconds']:.3f} | "
+                  f"{result['size_bytes'] / 1024 / 1024:.2f} | "
+                  f"{bench['parse_inventory']['median_seconds'] * 1000:.2f} | "
+                  f"{bench['search']['median_seconds'] * 1000:.2f} | "
+                  f"{bench['sql']['median_seconds'] * 1000:.2f} |"
+              )
+          PY
+
+      - name: Upload profile evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rust-profile-experiment
+          path: |
+            build-metrics/*.json
+            target-profile-*/cargo-timings/*
+          if-no-files-found: error
