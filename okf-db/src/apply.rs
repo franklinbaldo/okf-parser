@@ -401,7 +401,7 @@ fn materialize_typed(
                 Some(declared) if declared.logical_type.raw_sql_type() == "VARCHAR[]" => {
                     raw_list(concept.frontmatter.get(&field.name))
                 }
-                Some(declared) => declared_value(&concept.frontmatter, &field.name, false),
+                Some(_) => declared_value(&concept.frontmatter, &field.name, false),
             }));
             row
         }),
@@ -758,7 +758,7 @@ fn compile(
             }
         }
         if !fields.is_empty() {
-            fields.sort();
+            fields.sort_by(|left, right| left.0.cmp(&right.0));
             changes.push(ConceptChanges {
                 path: concept.path.clone(),
                 fields,
