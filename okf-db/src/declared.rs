@@ -82,6 +82,7 @@ impl std::error::Error for DeclaredSchemaError {
 pub struct DeclaredColumn {
     pub name: String,
     pub logical_type: LogicalType,
+    #[serde(skip)]
     pub nullable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
@@ -98,7 +99,7 @@ pub struct DeclaredCheck {
 pub struct DeclaredSchema {
     pub table_name: String,
     pub columns: Vec<DeclaredColumn>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip)]
     pub checks: Vec<DeclaredCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub table_comment: Option<String>,
