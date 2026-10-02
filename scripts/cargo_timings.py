@@ -29,8 +29,8 @@ from pathlib import Path
 
 def _git_head() -> str | None:
     try:
-        return subprocess.check_output(  # noqa: S603 - fixed Git probe, no shell
-            ["git", "rev-parse", "HEAD"],  # noqa: S607 - standard Git executable
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
             text=True,
             stderr=subprocess.DEVNULL,
         ).strip()
@@ -40,7 +40,7 @@ def _git_head() -> str | None:
 
 def _command_version(command: str) -> str | None:
     try:
-        return subprocess.check_output(  # noqa: S603 - wrapper intentionally executes its CLI command
+        return subprocess.check_output(
             [command, "--version"],
             text=True,
             stderr=subprocess.DEVNULL,
@@ -91,7 +91,7 @@ def main() -> int:
     started = time.time()
     monotonic_started = time.monotonic()
     try:
-        completed = subprocess.run(command, check=False)  # noqa: S603 - explicit wrapped CLI command
+        completed = subprocess.run(command, check=False)
         returncode = completed.returncode
     except OSError as exc:
         sys.stderr.write(f"failed to start {command[0]!r}: {exc}\n")
