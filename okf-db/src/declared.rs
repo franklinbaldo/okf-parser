@@ -13,6 +13,7 @@ use std::fmt;
 use std::path::Path;
 
 use duckdb::Connection;
+use duckdb::types::Value as DbValue;
 use okf_engine::specs::SpecTemplate;
 use serde::Serialize;
 
@@ -81,8 +82,15 @@ impl std::error::Error for DeclaredSchemaError {
 pub struct DeclaredColumn {
     pub name: String,
     pub logical_type: LogicalType,
+    pub nullable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DeclaredCheck {
+    pub expression: String,
+    pub columns: Vec<String>,
 }
 
 /// One type's declared table, read back from DuckDB's catalog.
@@ -90,6 +98,8 @@ pub struct DeclaredColumn {
 pub struct DeclaredSchema {
     pub table_name: String,
     pub columns: Vec<DeclaredColumn>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub checks: Vec<DeclaredCheck>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub table_comment: Option<String>,
 }
@@ -107,6 +117,19 @@ pub fn declared_schema_relative_path(
         None => relative.as_str(),
     };
     Some(format!("{stem}.schema.sql"))
+}
+
+fn strings(value: DbValue) -> Vec<String> {
+    match value {
+        DbValue::List(items) | DbValue::Array(items) => items
+            .into_iter()
+            .filter_map(|item| match item {
+                DbValue::Text(text) => Some(text),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// Run `sql_text` whole on a dedicated connection and read back the one
@@ -156,7 +179,7 @@ pub fn parse_declared_schema(
     };
     let columns = connection
         .prepare(
-            "SELECT column_name, data_type, comment, numeric_precision, numeric_scale \
+            "SELECT column_name, data_type, comment, numeric_precision, numeric_scale, is_nullable \
              FROM duckdb_columns() \
              WHERE database_oid = ? AND schema_oid = ? AND table_oid = ? \
              ORDER BY column_index",
@@ -174,14 +197,37 @@ pub fn parse_declared_schema(
                             scale.and_then(|value| u32::try_from(value).ok()),
                         ),
                         comment: row.get(2)?,
+                        nullable: row.get(5)?,
                     })
                 })?
                 .collect::<Result<Vec<_>, _>>()
         })
         .map_err(DeclaredSchemaError::Catalog)?;
+    let check_rows: Vec<(Option<String>, DbValue)> = connection
+        .prepare(
+            "SELECT expression, constraint_column_names FROM duckdb_constraints() \
+             WHERE database_oid = ? AND schema_oid = ? AND table_oid = ? \
+             AND constraint_type = 'CHECK' ORDER BY constraint_index",
+        )
+        .and_then(|mut statement| {
+            statement
+                .query_map([database, schema, table], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<Result<_, _>>()
+        })
+        .map_err(DeclaredSchemaError::Catalog)?;
+    let checks = check_rows
+        .into_iter()
+        .filter_map(|(expression, columns)| {
+            expression.map(|expression| DeclaredCheck {
+                expression,
+                columns: strings(columns),
+            })
+        })
+        .collect();
     Ok(DeclaredSchema {
         table_name,
         columns,
+        checks,
         table_comment,
     })
 }
@@ -254,7 +300,7 @@ mod tests {
     fn columns_comments_and_types_come_from_the_catalog() {
         let schema = parse_declared_schema(
             "CREATE TABLE staging (x INTEGER);\n\
-             CREATE TABLE \"Note\" (status VARCHAR, due DATE, amount DECIMAL(9,2), tags VARCHAR[]);\n\
+             CREATE TABLE \"Note\" (status VARCHAR, due DATE, amount DECIMAL(9,2), tags VARCHAR[] NOT NULL CHECK (len(tags) > 0));\n\
              COMMENT ON TABLE \"Note\" IS 'notes';\n\
              COMMENT ON COLUMN \"Note\".due IS 'when';",
             "note",
@@ -267,6 +313,9 @@ mod tests {
         assert_eq!(schema.columns[1].comment.as_deref(), Some("when"));
         assert_eq!(schema.columns[2].logical_type.precision, Some(9));
         assert_eq!(schema.columns[3].logical_type.raw_sql_type(), "VARCHAR[]");
+        assert!(!schema.columns[3].nullable);
+        assert_eq!(schema.checks.len(), 1);
+        assert_eq!(schema.checks[0].columns, ["tags"]);
     }
 
     #[test]
