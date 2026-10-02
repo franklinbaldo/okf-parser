@@ -131,14 +131,12 @@ def main() -> int:
     args.output.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
 
     sys.stdout.write(
-        f"[build-timing] {args.label}: {elapsed:.3f}s "
-        f"(exit {returncode}); report={args.output}\n"
+        f"[build-timing] {args.label}: {elapsed:.3f}s (exit {returncode}); report={args.output}\n"
     )
     if report["cargo_summary"]:
         for item in report["cargo_summary"]["top_crates"][:5]:
             sys.stdout.write(
-                f"[build-timing] crate {item['crate']}: "
-                f"{item['compile_seconds']:.3f}s aggregate\n"
+                f"[build-timing] crate {item['crate']}: {item['compile_seconds']:.3f}s aggregate\n"
             )
     return returncode
 
