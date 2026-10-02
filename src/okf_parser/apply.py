@@ -1,12 +1,13 @@
 """Frontmatter edits written as SQL (RFC 0005), run by the native binary.
 
-Each concept type is a table named for its ``type``, each scalar field a
-``VARCHAR`` column. The script runs whole in a sandboxed in-memory DuckDB, and
-the final tables are the answer: a changed value sets the field, ``NULL``
-removes it, a dropped (or renamed) column removes it where it was authored.
-Rows and the ``__okf_*`` columns cannot change, list and mapping fields are
-never columns, and fields a ``.schema.sql`` declares are typed and read-only.
-See ``okf-db/src/apply.rs``.
+Each concept type is a table named for its ``type``. Scalar fields are
+``VARCHAR`` columns and flat scalar lists are list columns. The script runs in
+a sandboxed in-memory DuckDB, and the final tables are the answer: a changed
+value sets the field, ``NULL`` removes it, and a dropped (or renamed) column
+removes it where it was authored. Rows and the ``__okf_*`` columns cannot
+change; mappings, nested lists, and scalar/list mixtures are not writable.
+Declared scalar fields stay typed/read-only, while declared list fields are
+typed and writable. See ``okf-db/src/apply.rs``.
 """
 
 from __future__ import annotations
