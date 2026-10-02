@@ -152,16 +152,26 @@ def test_protected_column_write_is_rejected(tmp_path: Path) -> None:
     assert _read(tmp_path / "r1.md") == original
 
 
-def test_non_scalar_field_is_not_a_writable_column(tmp_path: Path) -> None:
+def test_flat_list_field_is_writable_and_supports_list_functions(tmp_path: Path) -> None:
     _write(tmp_path / "r1.md", "---\ntype: Rotina\ntags:\n  - a\n  - b\n---\n# R1\n")
 
-    result = apply_bundle(
+    appended = apply_bundle(
         str(tmp_path),
-        sql="UPDATE \"Rotina\" SET tags = 'x'",
+        sql="UPDATE \"Rotina\" SET tags = list_append(tags, 'c')",
+        write=True,
     )
+    assert appended["succeeded"] is True, appended
+    assert "- c" in _read(tmp_path / "r1.md")
 
-    assert result["succeeded"] is False
-    assert "script failed" in _error(result)
+    replaced = apply_bundle(
+        str(tmp_path),
+        sql="UPDATE \"Rotina\" SET tags = ['x']",
+        write=True,
+    )
+    assert replaced["succeeded"] is True, replaced
+    text = _read(tmp_path / "r1.md")
+    assert "- x" in text
+    assert "- a" not in text
 
 
 def test_type_rewrite_migrates_the_document(tmp_path: Path) -> None:
@@ -383,7 +393,7 @@ def test_add_column_cannot_reintroduce_a_structured_field_name(tmp_path: Path) -
     # "tags" column that the compiler would then use to overwrite or delete
     # the original structured value.
     _write(tmp_path / "r1.md", "---\ntype: Rotina\n---\n# R1\n")
-    _write(tmp_path / "r2.md", "---\ntype: Rotina\ntags:\n  - a\n  - b\n---\n# R2\n")
+    _write(tmp_path / "r2.md", "---\ntype: Rotina\ntags:\n  - [a, b]\n---\n# R2\n")
 
     result = apply_bundle(
         str(tmp_path),
@@ -393,7 +403,7 @@ def test_add_column_cannot_reintroduce_a_structured_field_name(tmp_path: Path) -
 
     assert result["succeeded"] is False
     assert "structured" in _error(result)
-    assert "- a" in _read(tmp_path / "r2.md")
+    assert "- [a, b]" in _read(tmp_path / "r2.md")
 
 
 def test_update_on_one_row_does_not_touch_an_unrelated_rows_null_field(tmp_path: Path) -> None:
@@ -668,7 +678,7 @@ def test_structured_field_collision_check_is_case_insensitive(tmp_path: Path) ->
     # ASCII-case-insensitive, so `ADD COLUMN tags` collides with it exactly
     # as much as `ADD COLUMN Tags` would.
     _write(tmp_path / "r1.md", "---\ntype: Rotina\n---\n# R1\n")
-    _write(tmp_path / "r2.md", "---\ntype: Rotina\nTags:\n  - a\n  - b\n---\n# R2\n")
+    _write(tmp_path / "r2.md", "---\ntype: Rotina\nTags:\n  - [a, b]\n---\n# R2\n")
 
     result = apply_bundle(
         str(tmp_path),
@@ -678,7 +688,7 @@ def test_structured_field_collision_check_is_case_insensitive(tmp_path: Path) ->
 
     assert result["succeeded"] is False
     assert "structured" in _error(result)
-    assert "- a" in _read(tmp_path / "r2.md")
+    assert "- [a, b]" in _read(tmp_path / "r2.md")
 
 
 def _typed_spec(tmp_path: Path, ddl: str) -> str:
@@ -828,6 +838,45 @@ def test_typed_apply_queries_declared_list_without_serializing_it(tmp_path: Path
     assert "status: hit" in text
     assert "- 1" in text
     assert "- 2" in text
+
+
+def test_typed_apply_declared_list_is_writable_and_enforces_constraints(tmp_path: Path) -> None:
+    _write(
+        tmp_path / "r1.md",
+        "---\ntype: Rotina\ntags: [a]\n---\n# R1\n",
+    )
+    template = _typed_spec(
+        tmp_path,
+        'CREATE TABLE "Rotina" (tags VARCHAR[] NOT NULL CHECK (len(tags) > 0));\n',
+    )
+
+    updated = apply_bundle(
+        str(tmp_path),
+        sql="UPDATE \"Rotina\" SET tags = list_append(tags, 'b')",
+        write=True,
+        spec_template=template,
+    )
+    assert updated["succeeded"] is True, updated
+    assert "tags: [a, b]" in _read(tmp_path / "r1.md")
+
+    null_result = apply_bundle(
+        str(tmp_path),
+        sql='UPDATE "Rotina" SET tags = NULL',
+        write=True,
+        spec_template=template,
+    )
+    assert null_result["succeeded"] is False
+    assert "constraint" in _error(null_result).lower()
+
+    empty_result = apply_bundle(
+        str(tmp_path),
+        sql='UPDATE "Rotina" SET tags = []',
+        write=True,
+        spec_template=template,
+    )
+    assert empty_result["succeeded"] is False
+    assert "constraint" in _error(empty_result).lower()
+    assert "tags: [a, b]" in _read(tmp_path / "r1.md")
 
 
 def test_typed_apply_declared_unobserved_field_exists_as_null(tmp_path: Path) -> None:
