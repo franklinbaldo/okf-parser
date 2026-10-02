@@ -212,7 +212,9 @@ pub fn parse_declared_schema(
         )
         .and_then(|mut statement| {
             statement
-                .query_map([database, schema, table], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .query_map([database, schema, table], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })?
                 .collect::<Result<_, _>>()
         })
         .map_err(DeclaredSchemaError::Catalog)?;
