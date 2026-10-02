@@ -249,14 +249,14 @@ mod tests {
     fn list_edits_are_structured_and_preserve_observed_style() {
         let flow = edit_frontmatter(
             "type: Note\ntags: [a, b]\n",
-            &[(
-                "tags".into(),
-                Some(json!(["a", "c", "123", null])),
-            )],
+            &[("tags".into(), Some(json!(["a", "c", "123", null])))],
         )
         .unwrap();
         assert!(flow.contains("tags: [a, c, '123', null]"), "{flow}");
-        assert_eq!(parse_frontmatter(&flow).unwrap().mapping["tags"], json!(["a", "c", "123", null]));
+        assert_eq!(
+            parse_frontmatter(&flow).unwrap().mapping["tags"],
+            json!(["a", "c", "123", null])
+        );
 
         let block = edit_frontmatter(
             "type: Note\ntags:\n- a\n- b\n",
@@ -264,7 +264,10 @@ mod tests {
         )
         .unwrap();
         assert!(block.contains("tags:\n- a\n- c"), "{block}");
-        assert_eq!(parse_frontmatter(&block).unwrap().mapping["tags"], json!(["a", "c"]));
+        assert_eq!(
+            parse_frontmatter(&block).unwrap().mapping["tags"],
+            json!(["a", "c"])
+        );
     }
 
     #[test]
