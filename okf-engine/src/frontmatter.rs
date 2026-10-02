@@ -263,7 +263,7 @@ mod tests {
             &[("tags".into(), Some(json!(["a", "c"])))],
         )
         .unwrap();
-        assert!(block.contains("tags:\n- a\n- c"), "{block}");
+        assert!(block.contains("tags:\n  - a\n  - c"), "{block}");
         assert_eq!(
             parse_frontmatter(&block).unwrap().mapping["tags"],
             json!(["a", "c"])
