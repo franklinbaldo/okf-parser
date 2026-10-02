@@ -1,24 +1,25 @@
 //! `okf-parser apply`: frontmatter edits written as SQL (RFC 0005).
 //!
 //! Each concept type becomes a table (named for the exact `type`), each
-//! scalar frontmatter field a `VARCHAR` column, in a fresh in-memory database
-//! locked like `okf-parser sql`'s: no files, no network, no settings. The
+//! scalar frontmatter field a `VARCHAR` column and each flat scalar list a
+//! list column, in a fresh in-memory database locked like `okf-parser sql`'s:
+//! no files, no network, no settings. The
 //! script then runs whole, any statements in any order (`ALTER TABLE`,
 //! `UPDATE`, `UPDATE ... FROM` across types, helper tables), and **the final
 //! tables are the answer**, row by row, column by column:
 //!
-//! - a column with a value different from the authored one sets the field
-//!   (whatever its SQL type, as text);
+//! - a column with a value different from the authored one sets the field;
+//!   scalar values stay strings and flat lists stay structured lists;
 //! - a column that became NULL where the field had a value removes it;
 //! - a column that no longer exists (dropped, or renamed, which moves its
 //!   values to the new name) removes the field from every document that had it.
 //!
 //! How the script got there is never inspected. What it may not do: add or
-//! remove rows, change the compiler-owned `__okf_*` columns, give a column the
-//! name of a list or mapping field (those are never columns, so they cannot be
-//! silently overwritten), or touch a field its `.schema.sql` declares: with a
-//! spec template those are typed, read-only columns for filtering; without
-//! one they are ordinary text fields.
+//! remove rows, change the compiler-owned `__okf_*` columns, or overwrite a
+//! mapping, nested list, or field that mixes scalar and list values. Declared
+//! scalar fields remain typed and read-only with a spec template; declared
+//! list fields are typed and writable so DuckDB can enforce their list type,
+//! `NOT NULL`, and applicable `CHECK` constraints.
 //!
 //! One consequence of reading the final state: `SET x = NULL` on a document
 //! whose `x` is an explicit YAML `null` keeps it (NULL did not change);
