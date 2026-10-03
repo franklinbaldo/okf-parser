@@ -940,7 +940,5 @@ def test_frontmatter_the_old_round_trip_check_refused_is_now_edited_losslessly(
     )
 
     assert result["succeeded"] is True, result
-    assert _read(tmp_path / "r1.md") == source.replace(
-        "setor: GAB",
-        'setor: "FSB"',
-    )
+    # A plain scalar stays plain, like every other scalar write in this suite.
+    assert _read(tmp_path / "r1.md") == source.replace("setor: GAB", "setor: FSB")
