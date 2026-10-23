@@ -123,7 +123,7 @@ def test_sql_diagnostics_carry_the_failure_319(tmp_path: Path) -> None:
         spec_template=TEMPLATE,
     )
 
-    assert [list(row) for row in result.rows] == [["OKF023", "error", "bad.md"]]
+    assert [list(row) for row in result.rows] == [["OKF023", "warning", "bad.md"]]
 
 
 def test_duckdb_export_reports_the_failure(tmp_path: Path) -> None:
@@ -132,7 +132,8 @@ def test_duckdb_export_reports_the_failure(tmp_path: Path) -> None:
 
     result = dict(export_duckdb(str(tmp_path), str(database), "okf", spec_template=TEMPLATE))
 
-    assert result["conformant"] is False
+    # A warning, as in ``check`` without ``--normative-spec``: reported, not fatal.
+    assert result["conformant"] is True
     with duckdb.connect(database, read_only=True) as connection:
         rows = connection.execute(
             "SELECT path FROM okf.diagnostics WHERE code = 'OKF023'"

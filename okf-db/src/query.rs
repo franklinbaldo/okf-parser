@@ -22,7 +22,7 @@ use serde_json::{Map, Value};
 use crate::catalog::Schema;
 use crate::declared::{DeclaredSchema, DeclaredSchemaError, discover_declared_schemas};
 use crate::export::fill_tables;
-use crate::typed::{TypedTableError, materialize_typed_tables, typed_value_diagnostics};
+use crate::typed::{TypedTableError, materialize_typed_tables, typed_value_diagnostics_in};
 
 /// Why a query produced no rows.
 #[derive(Debug)]
@@ -132,13 +132,18 @@ fn materialize(data: &BundleData, spec_template: Option<&str>) -> Result<Connect
         base.sql(),
         typed.sql()
     ))?;
-    let typed_diagnostics =
-        typed_value_diagnostics(data, &declared, Severity::Error).map_err(QueryError::Typed)?;
-    fill_tables(&connection, &base, data, &typed_diagnostics)?;
+    // Typed tables first, so OKF023 is read from them rather than from a
+    // second, scratch materialization; then the base tables carry it.
+    let mut typed_diagnostics = Vec::new();
     if !declared.is_empty() {
         materialize_typed_tables(&connection, data, &typed, &declared, false)
             .map_err(QueryError::Typed)?;
+        // Queries have no normative switch: like `check`, a warning by default.
+        typed_diagnostics =
+            typed_value_diagnostics_in(&connection, &typed, data, &declared, Severity::Warning)
+                .map_err(QueryError::Typed)?;
     }
+    fill_tables(&connection, &base, data, &typed_diagnostics)?;
     connection.execute_batch(
         "SET search_path = 'okf,okf_types';
          SET enable_external_access = false;
