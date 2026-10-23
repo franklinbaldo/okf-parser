@@ -32,6 +32,7 @@ def _git_head() -> str | None:
         return subprocess.check_output(
             ["git", "rev-parse", "HEAD"],
             text=True,
+            encoding="utf-8",
             stderr=subprocess.DEVNULL,
         ).strip()
     except (OSError, subprocess.CalledProcessError):
@@ -43,6 +44,7 @@ def _command_version(command: str) -> str | None:
         return subprocess.check_output(
             [command, "--version"],
             text=True,
+            encoding="utf-8",
             stderr=subprocess.DEVNULL,
         ).strip()
     except (OSError, subprocess.CalledProcessError):

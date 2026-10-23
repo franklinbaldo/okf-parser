@@ -542,7 +542,13 @@ def _run(argv: list[str], env: dict[str, str] | None = None) -> tuple[int, str]:
     merged = {**os.environ, **(env or {})}
     try:
         completed = subprocess.run(  # noqa: S603
-            argv, capture_output=True, text=True, check=False, timeout=300, env=merged
+            argv,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=False,
+            timeout=300,
+            env=merged,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return 127, str(exc)
