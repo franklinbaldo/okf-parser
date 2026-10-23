@@ -1,0 +1,14 @@
+# Local hooks (pre-commit or prek). Install once per clone:
+#   pre-commit install --hook-type pre-push
+# Run manually:  pre-commit run --hook-stage manual file-token-limit
+default_install_hook_types: [pre-push]
+repos:
+  - repo: local
+    hooks:
+      - id: file-token-limit
+        name: file size ratchet (approx 5000 tokens; changed files)
+        entry: python3 scripts/check_file_token_limit.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push, manual]
