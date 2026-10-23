@@ -64,7 +64,7 @@ def metadata(features: list[str]) -> dict[str, object]:
     ]
     if features:
         command.extend(["--features", ",".join(features)])
-    return json.loads(subprocess.check_output(command, text=True))
+    return json.loads(subprocess.check_output(command, text=True, encoding="utf-8"))
 
 
 def main() -> int:

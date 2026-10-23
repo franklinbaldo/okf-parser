@@ -45,7 +45,7 @@ def _normalized(text: str) -> str:
 
 
 def _run(*command: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, capture_output=True, check=False, text=True)  # noqa: S603
+    return subprocess.run(command, capture_output=True, check=False, text=True, encoding="utf-8")  # noqa: S603
 
 
 def _spec_commit(checkout: Path, spec: str) -> str:
