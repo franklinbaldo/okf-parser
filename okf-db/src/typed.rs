@@ -325,23 +325,61 @@ fn text(value: Option<&Value>) -> DbValue {
     }
 }
 
-/// The authored value's lossless raw form for a declared type.
+/// Whether a declared type can hold structured YAML (`MAP`, `STRUCT`,
+/// `JSON`, ...): the families this module has no scalar carrier for.
+fn holds_structure(logical_type: &LogicalType) -> bool {
+    logical_type.family == TypeFamily::Unsupported
+}
+
+/// A mapping or list as the JSON text its raw column carries.
+fn structured_text(value: &Value) -> Option<String> {
+    matches!(value, Value::Object(_) | Value::Array(_)).then(|| value.to_string())
+}
+
+/// The authored value's lossless raw form for a declared type. A mapping or
+/// list under a type that can hold structure (`MAP`, `STRUCT`, `JSON`, or a
+/// list of them) is carried as JSON text and cast from JSON (#316).
 fn raw_value(value: Option<&Value>, logical_type: &LogicalType) -> DbValue {
     if logical_type.family != TypeFamily::List {
+        if holds_structure(logical_type)
+            && let Some(text) = value.and_then(structured_text)
+        {
+            return DbValue::Text(text);
+        }
         return text(value);
     }
     let Some(Value::Array(items)) = value else {
         return DbValue::Null;
     };
+    let structured = logical_type.element.as_deref().is_some_and(holds_structure);
     let strings: Option<Vec<Option<String>>> = items
         .iter()
         .map(|item| match item {
             Value::String(text) => Some(Some(text.clone())),
             Value::Null => Some(None),
+            _ if structured => structured_text(item).map(Some),
             _ => None,
         })
         .collect();
     strings.map_or(DbValue::Null, list_value)
+}
+
+/// The typed value of one raw column. Types that hold structure try the raw
+/// text as JSON first (how mappings are carried), then as authored text.
+fn typed_expression(declared: &Declared) -> String {
+    let raw = quote_ident(&declared.raw_name);
+    let sql = &declared.logical_type.sql;
+    let plain = format!("TRY_CAST({raw} AS {sql})");
+    let logical_type = &declared.logical_type;
+    if holds_structure(logical_type) {
+        return format!("COALESCE(TRY_CAST(TRY_CAST({raw} AS JSON) AS {sql}), {plain})");
+    }
+    if logical_type.family == TypeFamily::List
+        && logical_type.element.as_deref().is_some_and(holds_structure)
+    {
+        return format!("COALESCE(TRY_CAST(TRY_CAST({raw} AS JSON[]) AS {sql}), {plain})");
+    }
+    plain
 }
 
 fn row_values(
@@ -435,10 +473,9 @@ fn populate_typed_columns(
         .filter_map(|field| {
             let declared = field.declared.as_ref()?;
             Some(format!(
-                "{} = TRY_CAST({} AS {})",
+                "{} = {}",
                 quote_ident(&field.name),
-                quote_ident(&declared.raw_name),
-                declared.logical_type.sql
+                typed_expression(declared)
             ))
         })
         .collect();
@@ -724,7 +761,62 @@ pub fn typed_value_diagnostics(
                     ),
                 });
             }
+            // A mapping key the declared STRUCT has no field for is dropped
+            // by the JSON cast; report it rather than lose it quietly.
+            let Some(dropped) = dropped_keys_condition(&field_type.logical_type) else {
+                continue;
+            };
+            let raw = format!("t.{}", quote_ident(&field_type.raw_name));
+            let typed = format!("t.{}", quote_ident(&field.name));
+            let dropped = dropped.replace("{raw}", &raw).replace("{typed}", &typed);
+            let query = format!(
+                "SELECT \"__okf_path\", CAST({raw} AS VARCHAR) FROM {table} AS t \
+                 WHERE {raw} IS NOT NULL AND {typed} IS NOT NULL AND {dropped} ORDER BY 1",
+                table = schema.table(&plan.concept_type),
+            );
+            let mut statement = connection.prepare(&query)?;
+            let losses = statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            for (path, value) in losses {
+                diagnostics.push(Diagnostic {
+                    code: Code::Okf023,
+                    severity,
+                    path,
+                    message: format!(
+                        "type `{}` field `{}` value {} has keys declared type `{}` has no \
+                         field for; they would be dropped",
+                        plan.concept_type,
+                        field.name,
+                        quote_literal(&value),
+                        field_type.logical_type.sql
+                    ),
+                });
+            }
         }
     }
     Ok(diagnostics)
+}
+
+/// The SQL condition (over `{raw}` and `{typed}`) that an authored mapping
+/// lost keys in its JSON cast, for types that hold structure.
+fn dropped_keys_condition(logical_type: &LogicalType) -> Option<&'static str> {
+    if holds_structure(logical_type) {
+        return Some(
+            "json_type(TRY_CAST({raw} AS JSON)) = 'OBJECT' AND NOT list_has_all(\
+             json_keys(to_json({typed})), json_keys(TRY_CAST({raw} AS JSON)))",
+        );
+    }
+    if logical_type.family == TypeFamily::List
+        && logical_type.element.as_deref().is_some_and(holds_structure)
+    {
+        return Some(
+            "EXISTS (SELECT 1 FROM range(len({raw})) AS r(i) \
+             WHERE json_type(TRY_CAST({raw}[r.i + 1] AS JSON)) = 'OBJECT' AND NOT list_has_all(\
+             json_keys(to_json({typed}[r.i + 1])), json_keys(TRY_CAST({raw}[r.i + 1] AS JSON))))",
+        );
+    }
+    None
 }

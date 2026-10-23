@@ -41,9 +41,10 @@ cross-links or missing type specifications.
   `docs/types/{slug}.md`. Each type's `.schema.sql` beside its spec (the same
   one `sql`/`duckdb --spec-template` run) is also checked: an authored,
   non-null value its declared column type cannot hold — text outside an
-  `ENUM`, an invalid `DATE`, a mapping or list of mappings under a `MAP`,
-  `STRUCT` or `STRUCT[]` column — is `OKF023` instead of a silent `NULL` in
-  the typed table. A schema that fails to run is a command error.
+  `ENUM`, an invalid `DATE`, a scalar or list under a `MAP`, a mapping key a
+  `STRUCT` has no field for — is `OKF023` instead of a silent `NULL` (or a
+  silently dropped key) in the typed table. Mappings and lists of mappings
+  under `MAP`, `STRUCT`, `JSON` and their lists are read through JSON. A schema that fails to run is a command error.
 - `--normative-spec` — promote missing or mismatched required specifications,
   and `OKF023`, from advisory diagnostics to normative errors.
 - `--classify` — add a deterministic `classification` object with `concepts`,
