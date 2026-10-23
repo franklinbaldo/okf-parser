@@ -158,6 +158,9 @@ pub enum Code {
     /// A foreign key matches no referenced concept.
     #[serde(rename = "OKF022")]
     Okf022,
+    /// A declared frontmatter value does not convert to its column's type.
+    #[serde(rename = "OKF023")]
+    Okf023,
     /// A local Markdown link does not resolve.
     #[serde(rename = "OKF101")]
     Okf101,
@@ -182,6 +185,7 @@ impl Code {
             Self::Okf020 => "OKF020",
             Self::Okf021 => "OKF021",
             Self::Okf022 => "OKF022",
+            Self::Okf023 => "OKF023",
             Self::Okf101 => "OKF101",
             Self::Okf102 => "OKF102",
         }

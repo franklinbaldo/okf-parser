@@ -130,7 +130,8 @@ enum Command {
         /// Skip files matching this gitignore-style pattern (repeatable).
         #[arg(long, value_name = "PATTERN")]
         exclude: Vec<String>,
-        /// Require every type in use to have the document this template derives.
+        /// Require every type in use to have the document this template derives,
+        /// and check frontmatter values against the `.schema.sql` beside it (OKF023).
         #[arg(long, value_name = "TEMPLATE")]
         require_spec: Option<String>,
         /// Report the specification rules as errors instead of warnings.

@@ -38,9 +38,17 @@ cross-links or missing type specifications.
 
 - `--require-spec TEMPLATE` — derive the expected specification document for
   every concept type. The template must contain `{slug}`, for example
-  `docs/types/{slug}.md`.
-- `--normative-spec` — promote missing or mismatched required specifications
-  from advisory diagnostics to normative errors.
+  `docs/types/{slug}.md`. Each type's `.schema.sql` beside its spec (the same
+  one `sql`/`duckdb --spec-template` run) is also checked: an authored,
+  non-null value its declared column type cannot hold — text outside an
+  `ENUM`, an invalid `DATE`, a mapping or list of mappings under a `MAP`,
+  `STRUCT` or `STRUCT[]` column — is `OKF023` instead of a silent `NULL` in
+  the typed table. A schema that fails to run is a command error.
+- `--normative-spec` — promote missing or mismatched required specifications,
+  and `OKF023`, from advisory diagnostics to normative errors. `sql` and
+  `duckdb --spec-template` also record `OKF023` in `okf.diagnostics`, always as
+  a warning: they have no normative switch, so it never makes an export
+  non-conformant.
 - `--classify` — add a deterministic `classification` object with `concepts`,
   `reserved`, `ignored`, and `invalid_or_untyped` paths. This explains the
   existing strict check; it does not enable a second strictness mode. Ignored

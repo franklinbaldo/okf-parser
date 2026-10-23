@@ -11,12 +11,12 @@ use std::path::{Path, PathBuf};
 use duckdb::Connection;
 use okf_engine::check::{READ_CONCURRENCY, order};
 use okf_engine::specs::{SpecTemplate, SpecTemplateError};
-use okf_engine::{BundleData, LoadError, Severity, load_bundle};
+use okf_engine::{BundleData, Diagnostic, LoadError, Severity, load_bundle};
 use serde::Serialize;
 
 use crate::catalog::{Schema, quote_ident};
 use crate::declared::{DeclaredSchemaError, discover_declared_schemas};
-use crate::typed::{TypedTableError, materialize_typed_tables};
+use crate::typed::{TypedTableError, materialize_typed_tables, typed_value_diagnostics};
 
 /// The base tables, in creation order, with their columns.
 pub(crate) const TABLES: [(&str, &[(&str, &str)]); 4] = [
@@ -208,6 +208,7 @@ pub(crate) fn fill_tables(
     connection: &Connection,
     schema: &Schema,
     data: &BundleData,
+    extra: &[Diagnostic],
 ) -> Result<(), duckdb::Error> {
     for (table, columns) in TABLES {
         replace_table(connection, schema, table, columns)?;
@@ -248,6 +249,7 @@ pub(crate) fn fill_tables(
     }
     reserved.flush()?;
     let mut diagnostics = data.diagnostics.clone();
+    diagnostics.extend_from_slice(extra);
     order(&mut diagnostics);
     let mut table =
         connection.appender_to_catalog_and_db("diagnostics", &schema.catalog, &schema.name)?;
@@ -286,7 +288,8 @@ pub fn export_bundle(
         .map(SpecTemplate::new)
         .transpose()
         .map_err(ExportError::SpecTemplate)?;
-    let data = load_bundle(root, options.exclude, READ_CONCURRENCY).map_err(ExportError::Load)?;
+    let mut data =
+        load_bundle(root, options.exclude, READ_CONCURRENCY).map_err(ExportError::Load)?;
     let declarations = match template {
         Some(template) => {
             let mut types: Vec<&str> = data
@@ -304,6 +307,14 @@ pub fn export_bundle(
         }
         None => None,
     };
+    if let Some(declarations) = &declarations {
+        // `export` has no normative switch: like `check`, a warning by default.
+        // TODO: reuse the export connection's typed tables (see query.rs)
+        // instead of a scratch materialization; diagnostics are written by
+        // `fill_tables` before the typed tables exist, so that needs a reorder.
+        let typed = typed_value_diagnostics(&data, declarations, Severity::Warning)?;
+        data.diagnostics.extend(typed);
+    }
     let connection = Connection::open(options.database)?;
     let schema = Schema::current(&connection, options.schema)?;
     let collisions = existing_tables(&connection, &schema)?;
@@ -349,7 +360,7 @@ fn write(
     declarations: Option<&BTreeMap<String, crate::declared::DeclaredSchema>>,
 ) -> Result<Option<TypedSummary>, ExportError> {
     connection.execute_batch(&format!("CREATE SCHEMA IF NOT EXISTS {}", schema.sql()))?;
-    fill_tables(connection, schema, data)?;
+    fill_tables(connection, schema, data, &[])?;
     let Some(declarations) = declarations else {
         return Ok(None);
     };
