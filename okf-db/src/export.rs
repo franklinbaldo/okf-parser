@@ -308,7 +308,11 @@ pub fn export_bundle(
         None => None,
     };
     if let Some(declarations) = &declarations {
-        let typed = typed_value_diagnostics(&data, declarations, Severity::Error)?;
+        // `export` has no normative switch: like `check`, a warning by default.
+        // TODO: reuse the export connection's typed tables (see query.rs)
+        // instead of a scratch materialization; diagnostics are written by
+        // `fill_tables` before the typed tables exist, so that needs a reorder.
+        let typed = typed_value_diagnostics(&data, declarations, Severity::Warning)?;
         data.diagnostics.extend(typed);
     }
     let connection = Connection::open(options.database)?;

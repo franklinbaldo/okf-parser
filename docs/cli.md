@@ -45,7 +45,10 @@ cross-links or missing type specifications.
   `STRUCT` or `STRUCT[]` column — is `OKF023` instead of a silent `NULL` in
   the typed table. A schema that fails to run is a command error.
 - `--normative-spec` — promote missing or mismatched required specifications,
-  and `OKF023`, from advisory diagnostics to normative errors.
+  and `OKF023`, from advisory diagnostics to normative errors. `sql` and
+  `duckdb --spec-template` also record `OKF023` in `okf.diagnostics`, always as
+  a warning: they have no normative switch, so it never makes an export
+  non-conformant.
 - `--classify` — add a deterministic `classification` object with `concepts`,
   `reserved`, `ignored`, and `invalid_or_untyped` paths. This explains the
   existing strict check; it does not enable a second strictness mode. Ignored

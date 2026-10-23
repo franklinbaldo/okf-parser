@@ -635,7 +635,6 @@ pub fn typed_value_diagnostics(
     if declarations.is_empty() {
         return Ok(Vec::new());
     }
-    let plans = build_plans(data, declarations)?;
     let connection = Connection::open_in_memory()?;
     // A private scratch database: never reach the network for an extension.
     connection.execute_batch(
@@ -643,6 +642,23 @@ pub fn typed_value_diagnostics(
     )?;
     let schema = Schema::current(&connection, "okf_types")?;
     materialize_typed_tables(&connection, data, &schema, declarations, false)?;
+    typed_value_diagnostics_in(&connection, &schema, data, declarations, severity)
+}
+
+/// [`typed_value_diagnostics`] over typed tables `connection` already holds in
+/// `schema`, as [`materialize_typed_tables`] left them, so a caller that has
+/// just materialized them does not build them a second time.
+pub fn typed_value_diagnostics_in(
+    connection: &Connection,
+    schema: &Schema,
+    data: &BundleData,
+    declarations: &BTreeMap<String, DeclaredSchema>,
+    severity: Severity,
+) -> Result<Vec<Diagnostic>, TypedTableError> {
+    if declarations.is_empty() {
+        return Ok(Vec::new());
+    }
+    let plans = build_plans(data, declarations)?;
     let rows = rows_by_type(data);
     let mut diagnostics = Vec::new();
     for plan in &plans {
