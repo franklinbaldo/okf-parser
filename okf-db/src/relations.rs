@@ -18,7 +18,10 @@ pub const RELATIONS_SCHEMA: &str = "okf_relations";
 
 #[derive(Debug)]
 pub enum BundleRelationsError {
-    Read { path: PathBuf, error: std::io::Error },
+    Read {
+        path: PathBuf,
+        error: std::io::Error,
+    },
     Script(duckdb::Error),
     Catalog(duckdb::Error),
     MissingSchema,
@@ -28,12 +31,19 @@ impl fmt::Display for BundleRelationsError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Read { path, error } => {
-                write!(f, "could not read bundle relation SQL {}: {error}", path.display())
+                write!(
+                    f,
+                    "could not read bundle relation SQL {}: {error}",
+                    path.display()
+                )
             }
             Self::Script(error) => write!(f, "bundle relation SQL failed: {error}"),
             Self::Catalog(error) => write!(f, "could not inspect bundle relations: {error}"),
             Self::MissingSchema => {
-                write!(f, "bundle relation SQL removed reserved schema {RELATIONS_SCHEMA:?}")
+                write!(
+                    f,
+                    "bundle relation SQL removed reserved schema {RELATIONS_SCHEMA:?}"
+                )
             }
         }
     }
@@ -113,10 +123,8 @@ mod tests {
     use super::*;
 
     fn root(name: &str) -> PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "okf-relations-{name}-{}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("okf-relations-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&path);
         std::fs::create_dir_all(&path).unwrap();
         path
@@ -146,9 +154,11 @@ mod tests {
         let catalog = execute_bundle_relations(&connection, &root).unwrap();
         assert_eq!(catalog.relations, ["edges"]);
         let pair: (String, String) = connection
-            .query_row("SELECT source_id, target_id FROM okf_relations.edges", [], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            })
+            .query_row(
+                "SELECT source_id, target_id FROM okf_relations.edges",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
             .unwrap();
         assert_eq!(pair, ("s".into(), "t".into()));
         std::fs::remove_dir_all(root).unwrap();

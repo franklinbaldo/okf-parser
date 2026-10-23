@@ -355,9 +355,9 @@ pub fn sql(request: &str) -> Result<Response<QueryResult>, serde_json::Error> {
                 kind: "query",
                 message: error.to_string(),
             },
-            QueryError::Typed(_)
-            | QueryError::Relations(_)
-            | QueryError::RelationsRequireSpec => ProtocolError::request(&error),
+            QueryError::Typed(_) | QueryError::Relations(_) | QueryError::RelationsRequireSpec => {
+                ProtocolError::request(&error)
+            }
             QueryError::Db(_) => ProtocolError::io(&error),
         });
     Ok(outcome.into())

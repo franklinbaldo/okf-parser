@@ -48,9 +48,9 @@ impl fmt::Display for QueryError {
             Self::Declared(error) => error.fmt(f),
             Self::Typed(error) => error.fmt(f),
             Self::Relations(error) => error.fmt(f),
-            Self::RelationsRequireSpec => {
-                f.write_str("--relations requires --spec-template so okf_types is materialized first")
-            }
+            Self::RelationsRequireSpec => f.write_str(
+                "--relations requires --spec-template so okf_types is materialized first",
+            ),
             Self::Query(error) => write!(f, "query failed: {error}"),
             Self::NotAQuery => f.write_str(
                 "sql runs one read-only query (SELECT, WITH, FROM ..., VALUES); \
