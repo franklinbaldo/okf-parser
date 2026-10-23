@@ -47,7 +47,7 @@ A source installation builds that same executable as part of building the `okf-p
 
 ```bash
 eval "$(uv run --script scripts/fetch_libduckdb.py --runtime | sed 's/^/export /')"
-MATURIN_PEP517_ARGS=--no-default-features uv sync
+MATURIN_PEP517_ARGS=--no-default-features --features full uv sync
 ```
 
 Release automation must test both the platform wheel and source distribution as fresh consumers before publication.

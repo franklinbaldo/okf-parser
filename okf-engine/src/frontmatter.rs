@@ -39,11 +39,11 @@ impl fmt::Display for LossyEdit {
 
 impl std::error::Error for LossyEdit {}
 
-/// Apply `changes` to authored frontmatter: `Some(value)` sets a field to a
-/// string, `None` removes it. Everything else is kept byte for byte.
+/// Apply `changes` to authored frontmatter: `Some(value)` sets a field to an
+/// OKF YAML value, `None` removes it. Everything else is kept byte for byte.
 pub fn edit_frontmatter(
     text: &str,
-    changes: &[(String, Option<String>)],
+    changes: &[(String, Option<Value>)],
 ) -> Result<String, LossyEdit> {
     let mut expected = parse_frontmatter(text)
         .map_err(|_| LossyEdit::Unparseable)?
@@ -57,10 +57,32 @@ pub fn edit_frontmatter(
     let mapping = document.as_mapping().ok_or(LossyEdit::Unparseable)?;
     for (field, value) in changes {
         match value {
-            Some(value) => {
-                mapping.set(field.as_str(), value.as_str());
+            Some(Value::String(value)) => {
+                mapping.set(field.as_str(), yaml_edit::ScalarValue::string(value));
                 expected.insert(field.clone(), Value::String(value.clone()));
             }
+            Some(Value::Array(items)) => {
+                let sequence = if mapping
+                    .get_sequence(field.as_str())
+                    .is_some_and(|sequence| !sequence.is_flow_style())
+                {
+                    yaml_edit::Sequence::new_pending_block()
+                } else {
+                    yaml_edit::Sequence::new_flow()
+                };
+                for item in items {
+                    match item {
+                        Value::String(value) => {
+                            sequence.push(yaml_edit::ScalarValue::string(value));
+                        }
+                        Value::Null => sequence.push(yaml_edit::ScalarValue::null()),
+                        _ => return Err(LossyEdit::Diverged),
+                    }
+                }
+                mapping.set(field.as_str(), sequence);
+                expected.insert(field.clone(), Value::Array(items.clone()));
+            }
+            Some(_) => return Err(LossyEdit::Diverged),
             None => {
                 mapping.remove(field.as_str());
                 expected.remove(field);
@@ -193,10 +215,15 @@ mod tests {
         mapping
     }
 
-    fn changes(items: &[(&str, Option<&str>)]) -> Vec<(String, Option<String>)> {
+    fn changes(items: &[(&str, Option<&str>)]) -> Vec<(String, Option<Value>)> {
         items
             .iter()
-            .map(|(k, v)| ((*k).to_owned(), v.map(str::to_owned)))
+            .map(|(k, v)| {
+                (
+                    (*k).to_owned(),
+                    v.map(|value| Value::String(value.to_owned())),
+                )
+            })
             .collect()
     }
 
@@ -215,6 +242,31 @@ mod tests {
         assert_eq!(
             edited,
             "type: Nota   # the type\ntitle: 'Quoted'\nstatus: final # keep\nnew: 'yes'\n"
+        );
+    }
+
+    #[test]
+    fn list_edits_are_structured_and_preserve_observed_style() {
+        let flow = edit_frontmatter(
+            "type: Note\ntags: [a, b]\n",
+            &[("tags".into(), Some(json!(["a", "c", "123", null])))],
+        )
+        .unwrap();
+        assert!(flow.contains("tags: [a, c, '123', null]"), "{flow}");
+        assert_eq!(
+            parse_frontmatter(&flow).unwrap().mapping["tags"],
+            json!(["a", "c", "123", null])
+        );
+
+        let block = edit_frontmatter(
+            "type: Note\ntags:\n- a\n- b\n",
+            &[("tags".into(), Some(json!(["a", "c"])))],
+        )
+        .unwrap();
+        assert!(block.contains("tags:\n  - a\n  - c"), "{block}");
+        assert_eq!(
+            parse_frontmatter(&block).unwrap().mapping["tags"],
+            json!(["a", "c"])
         );
     }
 

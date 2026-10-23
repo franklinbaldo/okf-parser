@@ -1,4 +1,4 @@
-﻿name: CI
+name: CI
 
 on:
   pull_request:
@@ -19,7 +19,10 @@ jobs:
     env:
       # Link DuckDB's prebuilt library instead of compiling it (see
       # scripts/fetch_libduckdb.py); `bundled` stays the source-build default.
-      MATURIN_PEP517_ARGS: --no-default-features
+      MATURIN_PEP517_ARGS: --no-default-features --features full
+      # uv build extracts the sdist elsewhere; an absolute target lets Cargo
+      # reuse compatible dependencies from uv sync and the direct Rust build.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -30,6 +33,13 @@ jobs:
           version: "0.11.21"
           python-version: "3.12"
 
+      - name: Restore compatible Cargo dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: native-ubuntu-${{ runner.arch }}-${{ github.job }}-v1-no-default-features-${{ hashFiles('Cargo.toml', 'scripts/fetch_libduckdb.py', 'pyproject.toml') }}
+          env-vars: CARGO CC CFLAGS CXX CMAKE RUST DUCKDB MATURIN SDKROOT MACOSX_DEPLOYMENT_TARGET DEVELOPER_DIR
+          cache-bin: false
+
       - name: Fetch the pinned prebuilt libduckdb
         run: uv run --script scripts/fetch_libduckdb.py --github-env --runtime
 
@@ -37,10 +47,10 @@ jobs:
         run: cargo fmt --manifest-path rust-core/Cargo.toml --check
 
       - name: Run tests
-        run: cargo test --locked --no-default-features --manifest-path rust-core/Cargo.toml
+        run: cargo test --locked --no-default-features --features full --manifest-path rust-core/Cargo.toml
 
       - name: Build release MVP
-        run: cargo build --release --locked --no-default-features --manifest-path rust-core/Cargo.toml
+        run: cargo build --release --locked --no-default-features --features full --manifest-path rust-core/Cargo.toml
 
       - name: Install Python dependencies
         run: uv sync --frozen
@@ -72,6 +82,15 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.21"
+          python-version: "3.12"
+
+      - name: Check generated versions
+        run: uv run --script scripts/sync_versions.py --check
+
       - name: Require an unpublished version and a note fragment
         shell: bash
         # A version number identifies a RELEASE, not a pull request. Several
@@ -90,44 +109,25 @@ jobs:
           BASE: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          read_version() {
-            sed -n 's/^version = "\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)"$/\1/p'
-          }
           outranks() {
             [[ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -1)" == "$1" && "$1" != "$2" ]]
           }
 
           git fetch --quiet origin "$BASE"
-          head_version=$(read_version < pyproject.toml)
-          if [[ -z "$head_version" ]]; then
-            echo "::error file=pyproject.toml::A versão SemVer não foi encontrada."
-            exit 1
-          fi
+          head_version=$(uv run --script scripts/project_version.py)
 
           published=$(git tag --list 'v*.*.*' | sed 's/^v//' | sort -V | tail -1)
           if [[ -n "$published" ]] && ! outranks "$head_version" "$published"; then
-            echo "::error file=pyproject.toml::A versão $head_version não supera a última publicada ($published)."
+            echo "::error file=Cargo.toml::A versão $head_version não supera a última publicada ($published)."
             exit 1
           fi
 
-          if git cat-file -e "origin/$BASE:pyproject.toml" 2>/dev/null; then
-            base_version=$(git show "origin/$BASE:pyproject.toml" | read_version)
-            if [[ -n "$base_version" && "$base_version" != "$head_version" ]] \
-              && ! outranks "$head_version" "$base_version"; then
-              echo "::error file=pyproject.toml::A versão $head_version regride em relação a $base_version na base."
-              exit 1
-            fi
+          base_version=$(uv run --script scripts/project_version.py --ref "origin/$BASE")
+          if [[ "$base_version" != "$head_version" ]] \
+            && ! outranks "$head_version" "$base_version"; then
+            echo "::error file=Cargo.toml::A versão $head_version regride em relação a $base_version na base."
+            exit 1
           fi
-
-          for manifest in typescript/package.json typescript-duckdb/package.json; do
-            if [[ -f "$manifest" ]]; then
-              package_version=$(sed -n 's/^[[:space:]]*"version": "\([^"]*\)",$/\1/p' "$manifest")
-              if [[ "$package_version" != "$head_version" ]]; then
-                echo "::error file=$manifest::A versão npm $package_version difere da versão Python $head_version."
-                exit 1
-              fi
-            fi
-          done
 
           fragments="changelog/$head_version"
           shopt -s nullglob
@@ -152,7 +152,10 @@ jobs:
   quality:
     runs-on: ubuntu-latest
     env:
-      MATURIN_PEP517_ARGS: --no-default-features
+      MATURIN_PEP517_ARGS: --no-default-features --features full
+      # uv build extracts the sdist elsewhere; an absolute target lets Cargo
+      # reuse compatible dependencies from uv sync and the direct Rust build.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -162,6 +165,13 @@ jobs:
         with:
           version: "0.11.21"
           python-version: "3.12"
+
+      - name: Restore compatible Cargo dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: native-ubuntu-${{ runner.arch }}-${{ github.job }}-v1-no-default-features-${{ hashFiles('Cargo.toml', 'scripts/fetch_libduckdb.py', 'pyproject.toml') }}
+          env-vars: CARGO CC CFLAGS CXX CMAKE RUST DUCKDB MATURIN SDKROOT MACOSX_DEPLOYMENT_TARGET DEVELOPER_DIR
+          cache-bin: false
 
       - name: Fetch the pinned prebuilt libduckdb
         run: uv run --script scripts/fetch_libduckdb.py --github-env --runtime
@@ -173,7 +183,12 @@ jobs:
         run: uv lock --check
 
       - name: Check Python formatting
-        run: uv run ruff format --check .
+        shell: bash
+        run: |
+          if ! uv run ruff format --check .; then
+            uv run ruff format .
+            git diff --exit-code
+          fi
 
       - name: Lint Python
         run: uv run ruff check .
@@ -185,7 +200,9 @@ jobs:
         run: uv run vulture src --min-confidence 90
 
       - name: Run tests with coverage
-        run: uv run pytest --cov --cov-report=term-missing --cov-fail-under=85
+        # Subprocess tests run from temporary repositories. Pin both the config
+        # and source root so coverage never falls back to those fixture manifests.
+        run: uv run pytest --cov="$PWD/src/okf_parser" --cov-config=pyproject.toml --cov-report=term-missing --cov-fail-under=85
 
       - name: Verify the derived PyPI description is current
         run: uv run --script scripts/pypi_readme.py --check
@@ -233,7 +250,7 @@ jobs:
         run: node benchmarks/typescript-parser.mjs --sizes=10 --rounds=1 > "$RUNNER_TEMP/typescript-benchmark.json"
 
       - name: Dogfood the TypeScript CLI
-        run: node typescript/dist/cli.js check . > "$RUNNER_TEMP/okf-check.json"
+        run: node typescript/dist/cli.js check . | tee "$RUNNER_TEMP/okf-check.json"
 
       - name: Exercise the TypeScript formatter
         shell: bash

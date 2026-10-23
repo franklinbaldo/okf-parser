@@ -46,12 +46,81 @@ Pull requests that change release-sensitive files run this workflow automaticall
 
 The uploaded GitHub Actions artifact is evidence for review, not a public release. Its retention period is 14 days.
 
+### Parallel validation and Cargo caches
+
+The cold source consumer depends only on `sdist`, so its bundled DuckDB build runs
+alongside the five native wheel builds. `build-release-set` requires both that
+consumer and every wheel job before assembling and uploading the tested set.
+The source consumer downloads the same immutable `sdist` artifact as the aggregate
+job. It has fresh Cargo/uv directories, no restored cache or prebuilt DuckDB, and
+uses `--locked` with default features. This proves the actual source fallback on
+every run, including warm-cache runs.
+
+Native macOS and Windows wheels cache Cargo dependencies using the runner's
+existing Rust compiler, separately by runner/target, no-default-features mode,
+Python build configuration and pinned DuckDB fetcher. The cache action also hashes
+Rust/compiler environment and Cargo manifests/lockfiles. It does not cache the
+workspace crates; compilation, packaging, library verification and consumer tests
+always run. Cache restoration precedes the verified DuckDB download because cache
+cleanup can remove non-Cargo files from `target/`. The manylinux containers keep
+separate uncached builds rather than mixing their compiler/sysroot with host data.
+The release profile (`thin` LTO, one codegen unit) is unchanged.
+
+Ubuntu CI jobs cache their native dependencies separately by job, avoiding
+first-writer races between immutable debug-only and release caches. An absolute
+`CARGO_TARGET_DIR` also lets `uv sync`, direct Cargo commands and `uv build` reuse
+compatible dependencies when PEP 517 extracts the source into a temporary folder.
+Cargo still checks fingerprints and rebuilds changed workspace sources.
+
+GitHub cache visibility remains branch-scoped: a warm PR rerun can use its own
+cache, but a PR cache does not warm `main` or another PR. A cold first run still
+compiles everything. Compare the first and second runs of the same commit and
+check the cache action's hit/miss logs as well as wall time; the uncached source
+consumer may remain the longest job. Cache hits are an optimization, never a
+substitute for any release check.
+
+#### Measured cold baseline (2026-09-30)
+
+The [pre-optimization dry run](https://github.com/franklinbaldo/okf-parser/actions/runs/36770932057)
+and the [first optimized cold run](https://github.com/franklinbaldo/okf-parser/actions/runs/36776438581)
+both passed every applicable check. Times below come from GitHub job/step
+`started_at` and `completed_at`, not estimates. Workflow duration is the first
+job's start through the final job's completion, excluding initial scheduling.
+
+| Measurement | Before | Optimized, cold Cargo cache |
+| --- | ---: | ---: |
+| Release dry run critical path | 29m 33s | 17m 22s |
+| Release-set aggregate job | 16m 00s | 1m 04s |
+| Cold source consumer | 15m 05s (with host wheel, serial) | 16m 00s (own parallel job) |
+| macOS Intel wheel job | 13m 30s | 12m 51s |
+| CI quality job | 8m 16s | 6m 12s |
+| CI `uv build` step | 3m 25s | 1m 24s |
+
+CI measurements use [the previous CI run](https://github.com/franklinbaldo/okf-parser/actions/runs/36770931804)
+and [the optimized CI run](https://github.com/franklinbaldo/okf-parser/actions/runs/36776438488).
+The first optimized native wheel and quality jobs reported Cargo cache misses.
+The 41% shorter dry-run path comes from parallel validation; it does not require a
+warm cache. The remaining cold source build is deliberately retained. Individual
+runner/compiler timings vary, so the small cold Intel difference is not evidence
+of a cache benefit. The `uv build` improvement already reuses compatible
+in-job dependencies despite the initially cold external cache.
+
+To measure warm caching, make a documentation-only commit on the same PR after
+the cold run finishes, keep all Cargo/Rust, dependency, feature, compiler and
+workflow inputs unchanged, and verify exact Cargo cache hits in the next run.
+Repeat the full workflow, including the deliberately cold source consumer, and
+compare each native build job as well as the overall critical path. This uses a
+fresh set of immutable release artifacts and avoids mixing partial rerun uploads.
+The final warm observations for this change are recorded in
+[PR #308](https://github.com/franklinbaldo/okf-parser/pull/308).
+
 ## Source contract
 
 Before building, `scripts/release_contract.py verify-source` requires all of the following to agree:
 
-- `project.version` in `pyproject.toml`;
-- the Rust crate version;
+- `workspace.package.version` in the root `Cargo.toml`, the only authored version;
+- Rust crate versions inherited with `version.workspace = true`;
+- Python metadata declared with `dynamic = ["version"]`, supplied by Maturin;
 - versions in the npm manifests;
 - `PROTOCOL_VERSION` in `typescript/src/version.ts`;
 - the `@franklinbaldo/okf-parser` peer range in the DuckDB adapter;
@@ -59,6 +128,43 @@ Before building, `scripts/release_contract.py verify-source` requires all of the
 - an optional stable tag, exactly `vX.Y.Z`.
 
 Prereleases are deliberately rejected until npm dist-tag policy is implemented.
+
+## One authored release version
+
+Edit only `workspace.package.version` in the root `Cargo.toml`, then run:
+
+```bash
+uv run --script scripts/sync_versions.py
+uv run --script scripts/sync_versions.py --check
+uv run --script scripts/release_contract.py verify-source
+```
+
+The synchronizer updates the required static npm metadata, local dependency
+version constraints, lockfile workspace snapshots, the TypeScript release
+constant and the README Action example. It regenerates `README.pypi.md` from
+`README.md`. These derived files remain committed, so ordinary Cargo, Python and
+npm commands work on a checkout without a special build wrapper. Synchronization
+is idempotent and needs neither a compiler nor registry access; it preserves
+external dependency versions, resolutions and integrity hashes. `--check` reports
+drift without editing files and runs in CI and both release workflows.
+
+Rust crates inherit the workspace version directly. Maturin derives the Python
+distribution version from the `okf-core` crate. uv cache keys include Cargo
+metadata so changing the canonical version invalidates dynamic build metadata;
+its editable-project lock entry has no static version. Cargo and npm still need
+version copies in their lockfiles. After synchronization, `uv lock --check`,
+Cargo's `--locked` commands and `npm ci` validate the package-manager contracts.
+
+`typescript/src/version.ts` is generated and preserves the public
+`PROTOCOL_VERSION` export used by capabilities and MCP server metadata. The
+separate integer shell/binary protocol in Rust and Python is **not** a release
+number and is left unchanged. The unpublished DuckDB extension also retains its
+independent package version; only its lockfile's `okf-engine` entry follows the
+release. Historical release notes and tags are immutable history, not mirrors.
+
+Create a note fragment in `changelog/<version>/` for the change. Do not change a
+published tag or publish anything as part of synchronization. The tag is checked
+against the canonical version when an authorized release is initiated.
 
 ## Version numbers and release notes
 
@@ -95,7 +201,7 @@ A platform wheel therefore installs the ordinary Python package behind one `okf-
 
 The executable carries DuckDB (RFC 0024 phase 4) in one of two ways:
 
-- **Release wheels and CI** link the library DuckDB itself publishes. `scripts/fetch_libduckdb.py` downloads it for one Rust target, checks it against a pinned SHA-256 (the pins follow the `duckdb` crate in `Cargo.lock`, and a crate bump without new pins fails), cuts a macOS universal library down to the target's slice and exports `DUCKDB_LIB_DIR`; the build runs with `--no-default-features`. `scripts/ship_libduckdb.py` then puts the library into the wheel's `.data/scripts/`, which installers copy next to the executable, where its run path (`$ORIGIN`, `@executable_path`, set in `rust-core/build.rs`) and the Windows DLL search find it. `scripts/check_duckdb_shipped.py` proves every wheel ships exactly the library its executable links, the failure that broke the 0.42.6 macOS and Windows wheels, and each wheel is installed into a fresh environment and run before it is uploaded. Maturin's `auditwheel` is set to `warn`: its repair would move the binary behind a Python shim.
+- **Release wheels and CI** link the library DuckDB itself publishes. `scripts/fetch_libduckdb.py` downloads it for one Rust target, checks it against a pinned SHA-256 (the pins follow the `duckdb` crate in `Cargo.lock`, and a crate bump without new pins fails), cuts a macOS universal library down to the target's slice and exports `DUCKDB_LIB_DIR`; the build runs with `--no-default-features --features full`. `scripts/ship_libduckdb.py` then puts the library into the wheel's `.data/scripts/`, which installers copy next to the executable, where its run path (`$ORIGIN`, `@executable_path`, set in `rust-core/build.rs`) and the Windows DLL search find it. `scripts/check_duckdb_shipped.py` proves every wheel ships exactly the library its executable links, the failure that broke the 0.42.6 macOS and Windows wheels, and each wheel is installed into a fresh environment and run before it is uploaded. Maturin's `auditwheel` is set to `warn`: its repair would move the binary behind a Python shim.
 - **Source builds** (the sdist, `cargo build`) keep the default `bundled` feature and compile DuckDB in, so they need nothing downloaded; it costs about half an hour of C++.
 
 The npm native package carries the same library next to `bin/okf-core`, byte for byte (`scripts/native_from_wheel.py`).

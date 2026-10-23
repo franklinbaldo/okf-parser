@@ -1586,7 +1586,7 @@ dependencies = [
 
 [[package]]
 name = "okf-core"
-version = "0.48.0"
+version = "0.48.1"
 dependencies = [
  "axum",
  "clap",
@@ -1601,7 +1601,7 @@ dependencies = [
 
 [[package]]
 name = "okf-db"
-version = "0.48.0"
+version = "0.48.1"
 dependencies = [
  "caseless",
  "chrono",
@@ -1619,7 +1619,7 @@ dependencies = [
 
 [[package]]
 name = "okf-engine"
-version = "0.48.0"
+version = "0.48.1"
 dependencies = [
  "caseless",
  "chrono",

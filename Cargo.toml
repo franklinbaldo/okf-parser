@@ -3,7 +3,25 @@ members = ["okf-engine", "okf-db", "rust-core"]
 exclude = ["duckdb-extension"]
 resolver = "3"
 
+# The only manually maintained release version. Run scripts/sync_versions.py
+# after changing it to refresh derived package metadata.
+[workspace.package]
+version = "0.48.1"
+
 [profile.release]
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# Experimental profiles for development measurements only. Neither changes the
+# default dev profile nor the release artifact profile above.
+[profile.dev-fast]
+inherits = "dev"
+opt-level = 1
+debug = 0
+strip = "debuginfo"
+
+[profile.release-fast]
+inherits = "release"
+lto = false
+codegen-units = 16

@@ -1,24 +1,25 @@
 //! `okf-parser apply`: frontmatter edits written as SQL (RFC 0005).
 //!
 //! Each concept type becomes a table (named for the exact `type`), each
-//! scalar frontmatter field a `VARCHAR` column, in a fresh in-memory database
-//! locked like `okf-parser sql`'s: no files, no network, no settings. The
+//! scalar frontmatter field a `VARCHAR` column and each flat scalar list a
+//! list column, in a fresh in-memory database locked like `okf-parser sql`'s:
+//! no files, no network, no settings. The
 //! script then runs whole, any statements in any order (`ALTER TABLE`,
 //! `UPDATE`, `UPDATE ... FROM` across types, helper tables), and **the final
 //! tables are the answer**, row by row, column by column:
 //!
-//! - a column with a value different from the authored one sets the field
-//!   (whatever its SQL type, as text);
+//! - a column with a value different from the authored one sets the field;
+//!   scalar values stay strings and flat lists stay structured lists;
 //! - a column that became NULL where the field had a value removes it;
 //! - a column that no longer exists (dropped, or renamed, which moves its
 //!   values to the new name) removes the field from every document that had it.
 //!
 //! How the script got there is never inspected. What it may not do: add or
-//! remove rows, change the compiler-owned `__okf_*` columns, give a column the
-//! name of a list or mapping field (those are never columns, so they cannot be
-//! silently overwritten), or touch a field its `.schema.sql` declares: with a
-//! spec template those are typed, read-only columns for filtering; without
-//! one they are ordinary text fields.
+//! remove rows, change the compiler-owned `__okf_*` columns, or overwrite a
+//! mapping, nested list, or field that mixes scalar and list values. Declared
+//! scalar fields remain typed and read-only with a spec template; declared
+//! list fields are typed and writable so DuckDB can enforce their list type,
+//! `NOT NULL`, and applicable `CHECK` constraints.
 //!
 //! One consequence of reading the final state: `SET x = NULL` on a document
 //! whose `x` is an explicit YAML `null` keeps it (NULL did not change);
@@ -35,7 +36,7 @@ use okf_engine::write::{ConceptChanges, PlannedConcept};
 use serde_json::{Map, Value};
 
 use crate::catalog::{identifier_key, quote_ident, quote_literal};
-use crate::declared::{DeclaredSchemaError, discover_declared_schemas};
+use crate::declared::{DeclaredSchema, DeclaredSchemaError, discover_declared_schemas};
 use crate::typed::{ConceptRow, TypedTableError, TypedTablePlan, compile_plan};
 
 const PROTECTED: [(&str, &str); 6] = [
@@ -131,13 +132,15 @@ pub fn sugar_sql(concept_type: &str, field: &str, from: &str, to: &str) -> Strin
 struct TypeTable<'a> {
     name: &'a str,
     concepts: Vec<&'a PlannedConcept>,
-    /// Writable scalar fields, in column order.
+    /// Writable scalar or flat-list fields, in column order.
     fields: Vec<String>,
+    /// Writable fields whose relational type is a list.
+    lists: BTreeSet<String>,
     /// Compiler-owned columns (plus declared raw carriers).
     protected: Vec<String>,
     /// Declared, typed, read-only fields.
     declared: BTreeSet<String>,
-    /// Fields that are a list or mapping on some document: never columns.
+    /// Fields that are a mapping, nested list, or scalar/list mixture: never writable.
     structured: BTreeSet<String>,
 }
 
@@ -228,6 +231,10 @@ fn insert(
 }
 
 /// The authored list values of a declared list field, or NULL.
+fn flat_list(value: &Value) -> bool {
+    matches!(value, Value::Array(items) if items.iter().all(|item| matches!(item, Value::String(_) | Value::Null)))
+}
+
 fn raw_list(value: Option<&Value>) -> DbValue {
     let Some(Value::Array(items)) = value else {
         return DbValue::Null;
@@ -270,12 +277,14 @@ fn materialize_plain(connection: &Connection, table: &TypeTable<'_>) -> Result<(
         .iter()
         .map(|(name, kind)| ((*name).to_owned(), (*kind).to_owned()))
         .collect();
-    columns.extend(
-        table
-            .fields
-            .iter()
-            .map(|field| (field.clone(), "VARCHAR".to_owned())),
-    );
+    columns.extend(table.fields.iter().map(|field| {
+        let kind = if table.lists.contains(field) {
+            "VARCHAR[]"
+        } else {
+            "VARCHAR"
+        };
+        (field.clone(), kind.to_owned())
+    }));
     let definition: Vec<String> = columns
         .iter()
         .map(|(name, kind)| format!("{} {kind}", quote_ident(name)))
@@ -287,12 +296,13 @@ fn materialize_plain(connection: &Connection, table: &TypeTable<'_>) -> Result<(
         &columns,
         table.concepts.iter().map(|concept| {
             let mut row = protected_values(concept);
-            row.extend(
-                table
-                    .fields
-                    .iter()
-                    .map(|field| text(concept.frontmatter.get(field))),
-            );
+            row.extend(table.fields.iter().map(|field| {
+                if table.lists.contains(field) {
+                    raw_list(concept.frontmatter.get(field))
+                } else {
+                    text(concept.frontmatter.get(field))
+                }
+            }));
             row
         }),
     )
@@ -302,6 +312,7 @@ fn materialize_typed(
     connection: &Connection,
     table: &TypeTable<'_>,
     plan: &TypedTablePlan,
+    declaration: &DeclaredSchema,
 ) -> Result<(), PlanError> {
     let mut definition: Vec<String> = PROTECTED
         .iter()
@@ -311,6 +322,21 @@ fn materialize_typed(
         .iter()
         .map(|(name, kind)| ((*name).to_owned(), (*kind).to_owned()))
         .collect();
+    let declared_columns: HashMap<String, _> = declaration
+        .columns
+        .iter()
+        .map(|column| (identifier_key(&column.name), column))
+        .collect();
+    let writable_list_keys: HashSet<String> = plan
+        .fields
+        .iter()
+        .filter_map(|field| {
+            field.declared.as_ref().and_then(|declared| {
+                (declared.logical_type.raw_sql_type() == "VARCHAR[]")
+                    .then(|| identifier_key(&field.name))
+            })
+        })
+        .collect();
     for field in &plan.fields {
         match &field.declared {
             None => {
@@ -319,18 +345,44 @@ fn materialize_typed(
             }
             Some(declared) => {
                 let raw_type = declared.logical_type.raw_sql_type();
-                definition.push(format!("{} {raw_type}", quote_ident(&declared.raw_name)));
-                definition.push(format!(
-                    "{} {} GENERATED ALWAYS AS (TRY_CAST({} AS {})) VIRTUAL",
-                    quote_ident(&field.name),
-                    declared.logical_type.sql,
-                    quote_ident(&declared.raw_name),
-                    declared.logical_type.sql
-                ));
-                columns.push((declared.raw_name.clone(), raw_type.to_owned()));
+                if raw_type == "VARCHAR[]" {
+                    let nullable = declared_columns
+                        .get(&identifier_key(&field.name))
+                        .is_none_or(|column| column.nullable);
+                    definition.push(format!(
+                        "{} {}{}",
+                        quote_ident(&field.name),
+                        declared.logical_type.sql,
+                        if nullable { "" } else { " NOT NULL" }
+                    ));
+                    columns.push((field.name.clone(), raw_type.to_owned()));
+                } else {
+                    definition.push(format!("{} {raw_type}", quote_ident(&declared.raw_name)));
+                    definition.push(format!(
+                        "{} {} GENERATED ALWAYS AS (TRY_CAST({} AS {})) VIRTUAL",
+                        quote_ident(&field.name),
+                        declared.logical_type.sql,
+                        quote_ident(&declared.raw_name),
+                        declared.logical_type.sql
+                    ));
+                    columns.push((declared.raw_name.clone(), raw_type.to_owned()));
+                }
             }
         }
     }
+    definition.extend(
+        declaration
+            .checks
+            .iter()
+            .filter(|check| {
+                !check.columns.is_empty()
+                    && check
+                        .columns
+                        .iter()
+                        .all(|column| writable_list_keys.contains(&identifier_key(column)))
+            })
+            .map(|check| format!("CHECK ({})", check.expression)),
+    );
     create(connection, table.name, &definition)?;
     insert(
         connection,
@@ -339,12 +391,17 @@ fn materialize_typed(
         table.concepts.iter().map(|concept| {
             let mut row = protected_values(concept);
             row.extend(plan.fields.iter().map(|field| match &field.declared {
-                None => text(concept.frontmatter.get(&field.name)),
-                Some(declared) => declared_value(
-                    &concept.frontmatter,
-                    &field.name,
-                    declared.logical_type.raw_sql_type() == "VARCHAR[]",
-                ),
+                None => {
+                    if table.lists.contains(&field.name) {
+                        raw_list(concept.frontmatter.get(&field.name))
+                    } else {
+                        text(concept.frontmatter.get(&field.name))
+                    }
+                }
+                Some(declared) if declared.logical_type.raw_sql_type() == "VARCHAR[]" => {
+                    raw_list(concept.frontmatter.get(&field.name))
+                }
+                Some(_) => declared_value(&concept.frontmatter, &field.name, false),
             }));
             row
         }),
@@ -394,6 +451,89 @@ fn rows(
     Ok(out)
 }
 
+fn normalize_list_json(text: &str, table: &str, column: &str) -> Result<Value, PlanError> {
+    let parsed: Value = serde_json::from_str(text).map_err(|_| {
+        PlanError::Contract(format!(
+            "`{table}`.`{column}` did not serialize as a JSON list"
+        ))
+    })?;
+    let Value::Array(items) = parsed else {
+        return Err(PlanError::Contract(format!(
+            "`{table}`.`{column}` is not a flat list"
+        )));
+    };
+    let mut normalized = Vec::with_capacity(items.len());
+    for item in items {
+        normalized.push(match item {
+            Value::String(text) => Value::String(text),
+            Value::Null => Value::Null,
+            Value::Bool(value) => Value::String(value.to_string()),
+            Value::Number(value) => Value::String(value.to_string()),
+            _ => {
+                return Err(PlanError::Contract(format!(
+                    "`{table}`.`{column}` became a nested or structured list; apply only writes flat scalar lists"
+                )));
+            }
+        });
+    }
+    Ok(Value::Array(normalized))
+}
+
+/// Every writable row, preserving list values as arrays rather than flattening them to text.
+fn writable_rows(
+    connection: &Connection,
+    table: &str,
+    names: &[String],
+) -> Result<BTreeMap<String, Vec<Option<Value>>>, PlanError> {
+    let types: HashMap<String, String> = connection
+        .prepare(
+            "SELECT column_name, data_type FROM duckdb_columns() \
+             WHERE schema_name = 'main' AND table_name = ?",
+        )?
+        .query_map([table], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    let list_columns: Vec<bool> = names
+        .iter()
+        .map(|name| types.get(name).is_some_and(|kind| kind.ends_with("[]")))
+        .collect();
+    let select: Vec<String> = names
+        .iter()
+        .zip(&list_columns)
+        .map(|(name, list)| {
+            if *list {
+                format!("CAST(to_json({}) AS VARCHAR)", quote_ident(name))
+            } else {
+                format!("CAST({} AS VARCHAR)", quote_ident(name))
+            }
+        })
+        .collect();
+    let mut statement = connection.prepare(&format!(
+        "SELECT CAST(\"__okf_concept_id\" AS VARCHAR), {} FROM {}",
+        select.join(", "),
+        quote_ident(table)
+    ))?;
+    let mut out = BTreeMap::new();
+    let mut result = statement.query([])?;
+    while let Some(row) = result.next()? {
+        let id: Option<String> = row.get(0)?;
+        let mut values = Vec::with_capacity(names.len());
+        for (index, (name, list)) in names.iter().zip(&list_columns).enumerate() {
+            let raw: Option<String> = row.get(index + 1)?;
+            values.push(match (raw, list) {
+                (None, _) => None,
+                (Some(value), false) => Some(Value::String(value)),
+                (Some(value), true) => Some(normalize_list_json(&value, table, name)?),
+            });
+        }
+        if out.insert(id.unwrap_or_default(), values).is_some() {
+            return Err(PlanError::Contract(format!(
+                "the script duplicated rows of `{table}`; apply edits fields, not rows"
+            )));
+        }
+    }
+    Ok(out)
+}
+
 /// Plan an apply: run `sql` over `concepts` and read the changes back.
 pub fn plan_apply(
     root: &Path,
@@ -422,6 +562,8 @@ pub fn plan_apply(
     let mut tables = Vec::with_capacity(by_type.len());
     for (name, members) in by_type {
         let mut scalar = BTreeSet::new();
+        let mut lists = BTreeSet::new();
+        let mut nulls = BTreeSet::new();
         let mut structured = BTreeSet::new();
         for concept in &members {
             for (key, value) in &concept.frontmatter {
@@ -431,16 +573,33 @@ pub fn plan_apply(
                         field: key.clone(),
                     });
                 }
-                if matches!(value, Value::String(_) | Value::Null) {
-                    scalar.insert(key.clone());
-                } else {
-                    structured.insert(key.clone());
+                match value {
+                    Value::String(_) => {
+                        scalar.insert(key.clone());
+                    }
+                    Value::Null => {
+                        nulls.insert(key.clone());
+                    }
+                    value if flat_list(value) => {
+                        lists.insert(key.clone());
+                    }
+                    _ => {
+                        structured.insert(key.clone());
+                    }
                 }
             }
         }
+        for field in scalar.intersection(&lists) {
+            structured.insert(field.clone());
+        }
+        let mut writable = scalar.clone();
+        writable.extend(lists.iter().cloned());
+        writable.extend(nulls);
+        let list_fields: BTreeSet<String> = lists.difference(&structured).cloned().collect();
         let mut table = TypeTable {
             name,
-            fields: scalar.difference(&structured).cloned().collect(),
+            fields: writable.difference(&structured).cloned().collect(),
+            lists: list_fields,
             concepts: members,
             protected: PROTECTED.iter().map(|(n, _)| (*n).to_owned()).collect(),
             declared: BTreeSet::new(),
@@ -465,23 +624,32 @@ pub fn plan_apply(
                         concept_type: name.to_owned(),
                         error,
                     })?;
-                materialize_typed(&connection, &table, &plan)?;
+                materialize_typed(&connection, &table, &plan, declaration)?;
                 table.fields = plan
                     .fields
                     .iter()
-                    .filter(|field| field.declared.is_none())
+                    .filter(|field| {
+                        field.declared.as_ref().is_none_or(|declared| {
+                            declared.logical_type.raw_sql_type() == "VARCHAR[]"
+                        })
+                    })
                     .map(|field| field.name.clone())
                     .collect();
                 for field in &plan.fields {
                     if let Some(declared) = &field.declared {
-                        table.declared.insert(field.name.clone());
-                        table.protected.push(declared.raw_name.clone());
+                        if declared.logical_type.raw_sql_type() == "VARCHAR[]" {
+                            table.lists.insert(field.name.clone());
+                        } else {
+                            table.declared.insert(field.name.clone());
+                            table.protected.push(declared.raw_name.clone());
+                        }
                     }
                 }
-                let declared_keys: HashSet<String> = table
-                    .declared
+                let declared_keys: HashSet<String> = plan
+                    .fields
                     .iter()
-                    .map(|name| identifier_key(name))
+                    .filter(|field| field.declared.is_some())
+                    .map(|field| identifier_key(&field.name))
                     .collect();
                 table
                     .structured
@@ -565,7 +733,7 @@ fn compile(
             return Err(table.refuse_owned(&owned[index], &format!("changed row `{id}` in")));
         }
     }
-    let after = rows(connection, name, &writable)?;
+    let after = writable_rows(connection, name, &writable)?;
     let removed: Vec<&String> = table
         .fields
         .iter()
@@ -573,7 +741,7 @@ fn compile(
         .collect();
     let mut changes = Vec::new();
     for concept in &table.concepts {
-        let mut fields: Vec<(String, Option<String>)> = Vec::new();
+        let mut fields: Vec<(String, Option<Value>)> = Vec::new();
         for field in &removed {
             if concept.frontmatter.contains_key(field.as_str()) {
                 fields.push(((*field).clone(), None));
@@ -583,14 +751,14 @@ fn compile(
         for (column, value) in writable.iter().zip(values) {
             let authored = concept.frontmatter.get(column);
             match (value, authored) {
-                (Some(value), Some(Value::String(old))) if value == old => {}
+                (Some(value), Some(old)) if value == old => {}
                 (Some(value), _) => fields.push((column.clone(), Some(value.clone()))),
-                (None, Some(Value::String(_))) => fields.push((column.clone(), None)),
-                (None, _) => {}
+                (None, Some(Value::Null)) | (None, None) => {}
+                (None, Some(_)) => fields.push((column.clone(), None)),
             }
         }
         if !fields.is_empty() {
-            fields.sort();
+            fields.sort_by(|left, right| left.0.cmp(&right.0));
             changes.push(ConceptChanges {
                 path: concept.path.clone(),
                 fields,
@@ -629,7 +797,7 @@ mod tests {
             concept(
                 "b.md",
                 "Note",
-                json!({"type": "Note", "status": "final", "tags": ["x"]}),
+                json!({"type": "Note", "status": "final", "tags": ["x"], "meta": {"a": "b"}}),
             ),
             concept(
                 "p.md",
@@ -648,8 +816,28 @@ mod tests {
             path: path.to_owned(),
             fields: fields
                 .iter()
-                .map(|(name, value)| ((*name).to_owned(), value.map(str::to_owned)))
+                .map(|(name, value)| {
+                    (
+                        (*name).to_owned(),
+                        value.map(|value| Value::String(value.to_owned())),
+                    )
+                })
                 .collect(),
+        }
+    }
+
+    fn list_change(path: &str, field: &str, items: &[&str]) -> ConceptChanges {
+        ConceptChanges {
+            path: path.to_owned(),
+            fields: vec![(
+                field.to_owned(),
+                Some(Value::Array(
+                    items
+                        .iter()
+                        .map(|item| Value::String((*item).to_owned()))
+                        .collect(),
+                )),
+            )],
         }
     }
 
@@ -730,7 +918,7 @@ mod tests {
                 "protected column `Note`.`__okf_body`",
             ),
             (
-                "ALTER TABLE Note ADD COLUMN tags VARCHAR",
+                "ALTER TABLE Note ADD COLUMN meta VARCHAR",
                 "structured (list or mapping)",
             ),
             (
@@ -743,6 +931,14 @@ mod tests {
             let message = plan(sql).unwrap_err().to_string();
             assert!(message.contains(expected), "{sql}: {message}");
         }
+    }
+
+    #[test]
+    fn flat_lists_are_writable_and_list_functions_round_trip() {
+        assert_eq!(
+            plan("UPDATE Note SET tags = list_append(tags, 'y') WHERE tags IS NOT NULL").unwrap(),
+            [list_change("b.md", "tags", &["x", "y"])]
+        );
     }
 
     #[test]

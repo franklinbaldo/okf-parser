@@ -11,6 +11,9 @@ permissions:
 jobs:
   engine:
     runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      MATURIN_PEP517_ARGS: --no-default-features --features full
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install uv
@@ -20,15 +23,46 @@ jobs:
           python-version: "3.12"
       # Link DuckDB's prebuilt library instead of compiling it; the crates'
       # `bundled` default stays for source builds.
+      - name: Restore compatible Cargo dependencies
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: native-ubuntu-${{ runner.arch }}-${{ github.job }}-v1-no-default-features-${{ hashFiles('Cargo.toml', 'scripts/fetch_libduckdb.py', 'pyproject.toml') }}
+          env-vars: CARGO CC CFLAGS CXX CMAKE RUST DUCKDB MATURIN SDKROOT MACOSX_DEPLOYMENT_TARGET DEVELOPER_DIR
+          cache-bin: false
+
       - name: Fetch the pinned prebuilt libduckdb
         run: uv run --script scripts/fetch_libduckdb.py --github-env --runtime
       - name: Check workspace formatting
         run: cargo fmt --all --manifest-path Cargo.toml --check
       - name: Reject Rust warnings and Clippy findings
-        run: cargo clippy --workspace --all-targets --locked --no-default-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked --no-default-features --features full -- -D warnings
       - name: Test semantic engine
-        run: cargo test --locked --manifest-path Cargo.toml -p okf-engine
+        run: >-
+          python scripts/cargo_timings.py
+          --label full-engine-tests
+          --output build-metrics/full-engine-tests.json
+          --
+          cargo test --locked --manifest-path Cargo.toml -p okf-engine --timings
       - name: Test DuckDB layer
-        run: cargo test --locked --no-default-features --manifest-path Cargo.toml -p okf-db
+        run: >-
+          python scripts/cargo_timings.py
+          --label full-db-tests
+          --output build-metrics/full-db-tests.json
+          --
+          cargo test --locked --no-default-features --manifest-path Cargo.toml -p okf-db --timings
       - name: Test CLI facade
-        run: cargo test --locked --no-default-features --manifest-path Cargo.toml -p okf-core
+        run: >-
+          python scripts/cargo_timings.py
+          --label full-core-tests
+          --output build-metrics/full-core-tests.json
+          --
+          cargo test --locked --no-default-features --features full --manifest-path Cargo.toml -p okf-core --timings
+      - name: Upload full Rust timing evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rust-full-timings
+          path: |
+            build-metrics/*.json
+            target/cargo-timings/*
+          if-no-files-found: error

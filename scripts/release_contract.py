@@ -24,11 +24,14 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
 from typing import Final, Literal, Never, cast
 
-STABLE_SEMVER: Final = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+if __package__:
+    from .project_version import VersionError, project_version
+else:
+    # PEP 723/path execution places scripts/ rather than its parent on sys.path.
+    from project_version import VersionError, project_version
+
 FULL_SHA: Final = re.compile(r"^[0-9a-f]{40}$")
-ACTION_REF: Final = re.compile(
-    r"franklinbaldo/okf-parser@v(?P<version>(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*))"
-)
+ACTION_REF: Final = re.compile(r"franklinbaldo/okf-parser@v(?P<version>[^\s`\"'<>()]+)")
 PROTOCOL_VERSION: Final = re.compile(
     r'^export const PROTOCOL_VERSION = "(?P<version>[^"]+)";\s*$', re.MULTILINE
 )
@@ -256,7 +259,7 @@ def _frontmatter(path: Path) -> dict[str, str]:
     return result
 
 
-def _project_version(root: Path) -> str:
+def _verify_python_metadata(root: Path) -> None:
     path = root / "pyproject.toml"
     try:
         pyproject = tomllib.loads(path.read_text(encoding="utf-8"))
@@ -265,10 +268,15 @@ def _project_version(root: Path) -> str:
     project = _mapping(pyproject.get("project"), "project")
     if _string(project, "name", "project") != "okf-parser":
         _fail("Python package name must be 'okf-parser'")
-    version = _string(project, "version", "project")
-    if STABLE_SEMVER.fullmatch(version) is None:
-        _fail(f"version must be stable SemVer, found {version!r}")
-    return version
+    if "version" in project:
+        _fail("Python project.version must be absent; inherit the Cargo workspace version")
+    dynamic = project.get("dynamic")
+    if (
+        not isinstance(dynamic, list)
+        or not all(isinstance(field, str) for field in dynamic)
+        or "version" not in dynamic
+    ):
+        _fail("Python project.dynamic must be a list containing 'version'")
 
 
 def _verify_npm_manifest(path: Path, package: str, version: str) -> dict[str, object]:
@@ -276,7 +284,7 @@ def _verify_npm_manifest(path: Path, package: str, version: str) -> dict[str, ob
     if _string(manifest, "name", str(path)) != package:
         _fail(f"npm package name in {path} must be {package!r}")
     if _string(manifest, "version", str(path)) != version:
-        _fail(f"npm version in {path} differs from Python version")
+        _fail(f"npm version in {path} differs from workspace version")
     return manifest
 
 
@@ -347,14 +355,7 @@ def _verify_changelog(root: Path, version: str) -> Path:
 
 
 def _verify_rust_crates(root: Path, version: str) -> None:
-    """Check the Rust crate versions against the workspace version.
-
-    docs/releasing.md lists "the Rust crate version" among what verify-source
-    requires, but nothing read any Cargo.toml and okf-engine silently drifted
-    to 0.39.1 while the workspace published 0.45.0 (issue #172). The crates
-    also pin each other as internal path dependencies (rust-core on okf-db
-    and okf-engine, okf-db on okf-engine), so every number must move together.
-    """
+    """Require workspace version inheritance and synchronized internal pins."""
     crates = (
         ("okf-engine", "okf-engine", ()),
         ("okf-db", "okf-db", ("okf-engine",)),
@@ -367,8 +368,13 @@ def _verify_rust_crates(root: Path, version: str) -> None:
         except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
             _fail(f"cannot read {path}: {exc}")
         package = _mapping(manifest.get("package"), f"{path} [package]")
-        if _string(package, "version", str(path)) != version:
-            _fail(f"{name} crate version must be {version}")
+        inherited = package.get("version")
+        if (
+            not isinstance(inherited, dict)
+            or set(inherited) != {"workspace"}
+            or inherited["workspace"] is not True
+        ):
+            _fail(f"{name} crate version must inherit version.workspace = true")
         if not internal:
             continue
         dependencies = _mapping(
@@ -383,7 +389,11 @@ def _verify_rust_crates(root: Path, version: str) -> None:
 
 def verify_source(root: Path, tag: str | None = None) -> SourceContract:
     """Verify package names, versions, protocol, peer range and changelog."""
-    version = _project_version(root)
+    try:
+        version = project_version(root / "Cargo.toml")
+    except VersionError as exc:
+        _fail(str(exc))
+    _verify_python_metadata(root)
     _verify_npm_contract(root, version)
     _verify_protocol(root, version)
     _verify_rust_crates(root, version)

@@ -2,8 +2,16 @@
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
+import sys
+import textwrap
+import tomllib
 from pathlib import Path
+
+import pytest
 
 from scripts.project_version import project_version
 
@@ -21,6 +29,7 @@ PEP723_HELPERS = (
     "native_from_wheel.py",
     "registry_state.py",
     "project_version.py",
+    "sync_versions.py",
     "verify_wheel_scripts.py",
     "release_summary.py",
 )
@@ -59,14 +68,110 @@ def test_public_index_smoke_retries_real_binary_install() -> None:
     assert "run: sleep 30" not in publish
 
 
+def _job(text: str, name: str) -> str:
+    return re.split(r"\n  [a-z][a-z-]*:\n", text.split(f"\n  {name}:\n", 1)[1], maxsplit=1)[0]
+
+
 def test_dry_run_keeps_wheel_and_sdist_paths_distinct() -> None:
     dry_run = _workflow_text(WORKFLOWS[1])
-    assert 'if [[ "$artifact" == *.whl ]]; then' in dry_run
+    source = _job(dry_run, "verify-sdist")
+    aggregate = _job(dry_run, "build-release-set")
+    assert "needs: [sdist]" in source
+    assert "needs: [wheels-linux, wheels-windows, wheels-macos, sdist, verify-sdist]" in aggregate
+    assert 'uv pip install --no-cache --python "$environment/bin/python" "$artifact"' in source
     assert (
         'uv pip install --python "$environment/bin/python" --only-binary :all: "$artifact"'
-        in dry_run
+        in aggregate
     )
-    assert 'uv pip install --python "$environment/bin/python" "$artifact"' in dry_run
+    assert "for artifact" not in aggregate
+    for consumer in (source, aggregate):
+        assert 'importlib.metadata.version("okf-parser")' in consumer
+        assert "resolve_rust_core()" in consumer
+        assert "bundle.markdown_count != 1" in consumer
+        assert '"$environment/bin/okf-parser" check' in consumer
+
+
+def test_sdist_consumer_is_always_a_cold_bundled_build() -> None:
+    source = _job(_workflow_text(WORKFLOWS[1]), "verify-sdist")
+    assert "runner.temp" not in source.split("    steps:", 1)[0]
+    assert "CARGO_HOME: ${{ runner.temp }}/sdist-cargo" in source
+    assert "CARGO_TARGET_DIR: ${{ runner.temp }}/sdist-target" in source
+    assert "UV_CACHE_DIR: ${{ runner.temp }}/sdist-uv" in source
+    assert "MATURIN_PEP517_ARGS: --locked" in source
+    assert "enable-cache: false" in source
+    for forbidden in (
+        "uses: Swatinem/rust-cache",
+        "uses: actions/cache",
+        "fetch_libduckdb.py",
+        "--no-default-features",
+        "--only-binary",
+    ):
+        assert forbidden not in source
+    # Both consumers download the same immutable artifact from the same run.
+    assert "name: sdist\n          path: release/python" in source
+
+
+def test_native_cargo_caches_are_segregated_and_never_skip_validation() -> None:
+    for path in WORKFLOWS:
+        workflow = _workflow_text(path)
+        for name, key in (
+            ("wheels-windows", "wheel-windows-${{ runner.arch }}-v1"),
+            ("wheels-macos", "wheel-${{ matrix.runner }}-${{ matrix.target }}-v1"),
+        ):
+            job = _job(workflow, name)
+            assert "uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6" in job
+            assert f"shared-key: {key}-no-default-features-" in job
+            assert (
+                "${{ hashFiles('Cargo.toml', 'scripts/fetch_libduckdb.py', 'pyproject.toml') }}"
+                in job
+            )
+            assert "cache-bin: false" in job
+            assert job.index("uses: Swatinem/rust-cache") < job.index("fetch_libduckdb.py --target")
+            assert "cache-hit" not in job  # A hit never substitutes for build/test.
+            assert "--release --locked --no-default-features" in job
+            assert "scripts/ship_libduckdb.py" in job
+            assert "scripts/check_duckdb_shipped.py" in job
+            assert "Install and exercise the wheel" in job
+        linux = _job(workflow, "wheels-linux")
+        assert "uses: Swatinem/rust-cache" not in linux  # Different container toolchain.
+        assert "runner: macos-15-intel" in workflow
+        assert "runner: macos-15" in workflow
+        assert "runner: ubuntu-24.04-arm" in workflow
+
+
+def test_ci_reuses_an_absolute_target_for_pep517_and_cargo() -> None:
+    ci = _workflow_text(ROOT / ".github/workflows/ci.yml")
+    engine = _workflow_text(ROOT / ".github/workflows/rust-engine.yml")
+    for job in (_job(ci, "quality"), _job(ci, "rust-core"), _job(engine, "engine")):
+        assert "CARGO_TARGET_DIR: ${{ github.workspace }}/target" in job
+        assert "MATURIN_PEP517_ARGS: --no-default-features" in job
+        assert (
+            "shared-key: native-ubuntu-${{ runner.arch }}-${{ github.job }}-v1-no-default-features-"
+            in job
+        )
+        assert job.index("uses: Swatinem/rust-cache") < job.index("fetch_libduckdb.py --github-env")
+    quality = _job(ci, "quality")
+    assert "uv sync --frozen --all-groups" in quality
+    assert "run: uv build" in quality
+    assert "--cov-fail-under=85" in quality
+    profile = tomllib.loads((ROOT / "Cargo.toml").read_text())["profile"]["release"]
+    assert profile == {"lto": "thin", "codegen-units": 1, "strip": True}
+
+
+def test_public_index_smoke_installs_duckdb_before_readback() -> None:
+    publish = _workflow_text(WORKFLOWS[0])
+    smoke = publish.split("  smoke-test-public-index:", 1)[1].split("  finalize:", 1)[0]
+    install = 'uv pip install --python "$python" --quiet "duckdb>=1.4,<2"'
+    assert install in smoke
+    assert smoke.index(install) < smoke.index("import duckdb")
+
+
+def test_release_registry_requests_have_bounded_network_tolerance() -> None:
+    publish = _workflow_text(WORKFLOWS[0])
+    environment = publish.split("\nenv:\n", 1)[1].split("\njobs:\n", 1)[0]
+    assert 'UV_HTTP_CONNECT_TIMEOUT: "30"' in environment
+    assert 'UV_HTTP_TIMEOUT: "120"' in environment
+    assert 'UV_HTTP_RETRIES: "3"' in environment
 
 
 def test_no_inline_python_beyond_the_provenance_probe() -> None:
@@ -140,6 +245,133 @@ def test_release_notes_are_assembled_from_fragments() -> None:
 
 
 def test_the_current_release_has_fragments_not_a_flat_file() -> None:
-    version = project_version(ROOT / "pyproject.toml")
+    version = project_version(ROOT / "Cargo.toml")
     assert not (ROOT / "changelog" / f"{version}.md").exists()
     assert sorted((ROOT / "changelog" / version).glob("*.md"))
+
+
+def test_version_gate_uses_the_workspace_reader_and_generated_version_check() -> None:
+    ci = _workflow_text(ROOT / ".github/workflows/ci.yml")
+    gate = ci.split("  version-bump:", 1)[1].split("  quality:", 1)[0]
+    assert gate.index("uses: astral-sh/setup-uv@") < gate.index("uv run --script")
+    assert "uv run --script scripts/sync_versions.py --check" in gate
+    assert "head_version=$(uv run --script scripts/project_version.py)" in gate
+    assert 'base_version=$(uv run --script scripts/project_version.py --ref "origin/$BASE")' in gate
+    assert "pyproject.toml" not in gate
+    assert "read_version()" not in gate
+    assert "package_version=" not in gate
+    assert '[[ "$base_version" != "$head_version" ]]' in gate
+    assert 'git diff --name-only "origin/$BASE...HEAD"' in gate
+
+
+def _git(path: Path, *arguments: str) -> None:
+    subprocess.run(  # noqa: S603 - isolated local test repository
+        ["git", "-C", str(path), *arguments],  # noqa: S607
+        capture_output=True,
+        check=True,
+        text=True,
+    )
+
+
+def _commit(path: Path) -> None:
+    _git(path, "add", ".")
+    _git(
+        path,
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-qm",
+        "test",
+    )
+
+
+def _workspace(path: Path, version: str) -> None:
+    (path / "Cargo.toml").write_text(
+        f'[workspace.package]\nversion = "{version}"\n', encoding="utf-8"
+    )
+
+
+@pytest.mark.parametrize(
+    ("base", "head", "published", "fragment", "expected"),
+    [
+        ("1.2.3", "1.2.3", "1.2.2", "new", "OK: release 1.2.3"),
+        ("1.2.3", "1.3.0", "1.2.2", "new", "OK: release 1.3.0"),
+        ("1.2.3", "1.2.3", "1.2.3", "new", "não supera a última publicada"),
+        ("1.2.3", "1.2.3", "1.3.0", "new", "não supera a última publicada"),
+        ("1.3.0", "1.2.3", "1.2.2", "new", "regride em relação"),
+        ("1.2.3", "1.2.3", "1.2.2", "inherited", "não contribui nenhum fragmento"),
+        ("1.2.3", "1.2.3", "1.2.2", "absent", "precisa de ao menos um fragmento"),
+    ],
+)
+@pytest.mark.parametrize("legacy_base", [True, False])
+def test_version_gate_policy_runs_against_git_history(  # noqa: PLR0913
+    tmp_path: Path,
+    base: str,
+    head: str,
+    published: str,
+    fragment: str,
+    expected: str,
+    *,
+    legacy_base: bool,
+) -> None:
+    _git(tmp_path, "init", "-q", "--initial-branch=main")
+    _git(tmp_path, "remote", "add", "origin", str(tmp_path))
+    # Exercise both sides of the migration; HEAD must use only Cargo.toml.
+    if not legacy_base:
+        _workspace(tmp_path, base)
+    (tmp_path / "pyproject.toml").write_text(f'[project]\nversion = "{base}"\n', encoding="utf-8")
+    note = tmp_path / "changelog" / head / "change.md"
+    if fragment == "inherited":
+        note.parent.mkdir(parents=True)
+        note.write_text("A change already on the base.\n", encoding="utf-8")
+    _commit(tmp_path)
+    _git(tmp_path, "tag", f"v{published}")
+    _git(tmp_path, "checkout", "-qb", "feature")
+    _workspace(tmp_path, head)
+    (tmp_path / "pyproject.toml").write_text('[project]\ndynamic = ["version"]\n', encoding="utf-8")
+    if fragment == "new":
+        note.parent.mkdir(parents=True)
+        note.write_text("The current PR contributes this change.\n", encoding="utf-8")
+    _commit(tmp_path)
+
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    shutil.copyfile(ROOT / "scripts/project_version.py", scripts / "project_version.py")
+    executables = tmp_path / "bin"
+    executables.mkdir()
+    uv = executables / "uv"
+    # Exercise the actual PEP 723 helper without downloading a test interpreter.
+    uv.write_text(f'#!/bin/sh\nshift 2\nexec "{sys.executable}" "$@"\n', encoding="utf-8")
+    uv.chmod(0o755)
+    ci = _workflow_text(ROOT / ".github/workflows/ci.yml")
+    step = ci.split("      - name: Require an unpublished version and a note fragment", 1)[1]
+    script = step.split("        run: |\n", 1)[1].split("\n  quality:", 1)[0]
+    result = subprocess.run(  # noqa: S603 - test the checked-in CI script in an isolated repo
+        ["bash", "-c", textwrap.dedent(script)],  # noqa: S607
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "BASE": "main",
+            "PATH": f"{executables}{os.pathsep}{os.environ['PATH']}",
+        },
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    assert expected in result.stdout, result.stdout + result.stderr
+    assert result.returncode == (0 if expected.startswith("OK:") else 1)
+
+
+def test_coverage_scope_survives_subprocess_working_directory_changes() -> None:
+    """Keep the configured product coverage scope when a child runs in a fixture repo."""
+    ci = _workflow_text(ROOT / ".github/workflows/ci.yml")
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    sources = pyproject["tool"]["coverage"]["run"]["source"]
+    # The CLI override must match the configured scope exactly; only its path
+    # resolution changes. Passing the config alone leaves source paths relative
+    # to each subprocess's cwd and can silently miss actual product execution.
+    assert sources == ["src/okf_parser"]
+    assert f'--cov="$PWD/{sources[0]}" --cov-config=pyproject.toml' in ci
+    assert "--cov-report=term-missing --cov-fail-under=85" in ci
