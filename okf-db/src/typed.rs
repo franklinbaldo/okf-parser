@@ -325,29 +325,95 @@ fn text(value: Option<&Value>) -> DbValue {
     }
 }
 
-/// The authored value's lossless raw form for a declared type.
+/// Whether a declared type can hold structured YAML (`MAP`, `STRUCT`,
+/// `JSON`, ...): the families this module has no scalar carrier for.
+fn holds_structure(logical_type: &LogicalType) -> bool {
+    logical_type.family == TypeFamily::Unsupported
+}
+
+/// A mapping or list as the JSON text its raw column carries.
+fn structured_text(value: &Value) -> Option<String> {
+    matches!(value, Value::Object(_) | Value::Array(_)).then(|| value.to_string())
+}
+
+/// The authored value's lossless raw form for a declared type. A mapping or
+/// list under a type that can hold structure (`MAP`, `STRUCT`, `JSON`, or a
+/// list of them) is carried as JSON text and cast from JSON (#316).
 fn raw_value(value: Option<&Value>, logical_type: &LogicalType) -> DbValue {
     if logical_type.family != TypeFamily::List {
+        if holds_structure(logical_type)
+            && let Some(text) = value.and_then(structured_text)
+        {
+            return DbValue::Text(text);
+        }
         return text(value);
     }
     let Some(Value::Array(items)) = value else {
         return DbValue::Null;
     };
+    let structured = logical_type.element.as_deref().is_some_and(holds_structure);
     let strings: Option<Vec<Option<String>>> = items
         .iter()
         .map(|item| match item {
             Value::String(text) => Some(Some(text.clone())),
             Value::Null => Some(None),
+            _ if structured => structured_text(item).map(Some),
             _ => None,
         })
         .collect();
     strings.map_or(DbValue::Null, list_value)
 }
 
-fn row_values(
+/// Whether `logical_type` can carry `value` only as JSON text: a mapping or
+/// list under a structure type, or a list with a structured item under a list
+/// of them. A string that merely looks like JSON is authored text, not this.
+fn carried_as_json(value: &Value, logical_type: &LogicalType) -> bool {
+    if holds_structure(logical_type) {
+        return matches!(value, Value::Object(_) | Value::Array(_));
+    }
+    logical_type.family == TypeFamily::List
+        && logical_type.element.as_deref().is_some_and(holds_structure)
+        && matches!(value, Value::Array(items)
+            if items.iter().any(|item| item.is_object() || item.is_array()))
+}
+
+/// The typed value of one raw column holding authored text.
+fn typed_expression(declared: &Declared) -> String {
+    format!(
+        "TRY_CAST({} AS {})",
+        quote_ident(&declared.raw_name),
+        declared.logical_type.sql
+    )
+}
+
+/// The typed value of one raw column carrying a mapping or list as JSON text
+/// (#316): read as JSON first, then as authored text.
+fn structured_expression(declared: &Declared) -> String {
+    let raw = quote_ident(&declared.raw_name);
+    let sql = &declared.logical_type.sql;
+    let plain = typed_expression(declared);
+    if declared.logical_type.family != TypeFamily::List {
+        return format!("COALESCE(TRY_CAST(TRY_CAST({raw} AS JSON) AS {sql}), {plain})");
+    }
+    // The list casts item by item, so an item that is not a mapping (a scalar
+    // beside mappings) would become a NULL element quietly. Keep the list only
+    // when every authored item survived; otherwise it is NULL and OKF023.
+    let read = format!("TRY_CAST(TRY_CAST({raw} AS JSON[]) AS {sql})");
+    let all =
+        |typed: &str| format!("list_aggregate({typed}, 'count') = list_aggregate({raw}, 'count')");
+    format!(
+        "CASE WHEN {} THEN {read} WHEN {} THEN {plain} END",
+        all(&read),
+        all(&plain)
+    )
+}
+
+/// One row's insert values, and the declared fields whose authored value is
+/// carried as JSON text (see [`carried_as_json`]).
+fn row_values<'p>(
     row: &ConceptRow<'_>,
-    plan: &TypedTablePlan,
-) -> Result<Vec<DbValue>, TypedTableError> {
+    plan: &'p TypedTablePlan,
+) -> Result<(Vec<DbValue>, Vec<&'p str>), TypedTableError> {
     let declared: HashMap<String, &str> = plan
         .fields
         .iter()
@@ -362,18 +428,22 @@ fn row_values(
         DbValue::Text(row.body.to_owned()),
         list_value(split_lines(row.body).map(|line| Some(line.to_owned()))),
     ];
+    let mut structured = Vec::new();
     for field in &plan.fields {
         values.push(match &field.declared {
-            Some(declared) => raw_value(
-                aliases
+            Some(declared) => {
+                let value = aliases
                     .get(&field.name)
-                    .and_then(|authored| row.frontmatter.get(*authored)),
-                &declared.logical_type,
-            ),
+                    .and_then(|authored| row.frontmatter.get(*authored));
+                if value.is_some_and(|value| carried_as_json(value, &declared.logical_type)) {
+                    structured.push(field.name.as_str());
+                }
+                raw_value(value, &declared.logical_type)
+            }
             None => text(row.frontmatter.get(&field.name)),
         });
     }
-    Ok(values)
+    Ok((values, structured))
 }
 
 fn matching_table<'e>(
@@ -424,10 +494,15 @@ fn existing_comments(
 
 /// Cast every raw column into its typed column, in UTC when the build has a
 /// time-zone setting at all, so a `TIMESTAMPTZ` never depends on the session.
+///
+/// `structured` maps a field to the paths whose authored value is a mapping or
+/// list carried as JSON text; only those rows are read as JSON, so a string
+/// that happens to look like JSON stays authored text.
 fn populate_typed_columns(
     connection: &Connection,
     schema: &Schema,
     plan: &TypedTablePlan,
+    structured: &HashMap<&str, Vec<&str>>,
 ) -> Result<(), duckdb::Error> {
     let assignments: Vec<String> = plan
         .fields
@@ -435,21 +510,34 @@ fn populate_typed_columns(
         .filter_map(|field| {
             let declared = field.declared.as_ref()?;
             Some(format!(
-                "{} = TRY_CAST({} AS {})",
+                "{} = {}",
                 quote_ident(&field.name),
-                quote_ident(&declared.raw_name),
-                declared.logical_type.sql
+                typed_expression(declared)
             ))
         })
         .collect();
     if assignments.is_empty() {
         return Ok(());
     }
-    let update = format!(
-        "UPDATE {} SET {}",
+    let mut update = format!(
+        "UPDATE {} SET {};",
         schema.table(&plan.concept_type),
         assignments.join(", ")
     );
+    for field in &plan.fields {
+        let (Some(declared), Some(paths)) = (&field.declared, structured.get(field.name.as_str()))
+        else {
+            continue;
+        };
+        let paths: Vec<String> = paths.iter().map(|path| quote_literal(path)).collect();
+        update.push_str(&format!(
+            "\nUPDATE {} SET {} = {} WHERE \"__okf_path\" IN ({});",
+            schema.table(&plan.concept_type),
+            quote_ident(&field.name),
+            structured_expression(declared),
+            paths.join(", ")
+        ));
+    }
     let timezone: Option<String> = connection
         .query_row("SELECT current_setting('TimeZone')", [], |row| row.get(0))
         .ok();
@@ -565,6 +653,7 @@ pub fn materialize_typed_tables(
         let type_rows = rows
             .get(plan.concept_type.as_str())
             .map_or(&[][..], Vec::as_slice);
+        let mut structured: HashMap<&str, Vec<&str>> = HashMap::new();
         if !type_rows.is_empty() {
             let columns: Vec<(&str, &str)> = INTERNAL_COLUMNS
                 .iter()
@@ -595,10 +684,14 @@ pub fn materialize_typed_tables(
                 placeholders.join(", ")
             ))?;
             for row in type_rows {
-                insert.execute(params_from_iter(row_values(row, plan)?))?;
+                let (values, fields) = row_values(row, plan)?;
+                insert.execute(params_from_iter(values))?;
+                for field in fields {
+                    structured.entry(field).or_default().push(row.path);
+                }
             }
         }
-        populate_typed_columns(connection, schema, plan)?;
+        populate_typed_columns(connection, schema, plan, &structured)?;
         apply_comments(connection, schema, plan, prior_table, &prior_columns)?;
     }
     Ok(TypedMaterialization {
@@ -740,7 +833,62 @@ pub fn typed_value_diagnostics_in(
                     ),
                 });
             }
+            // A mapping key the declared STRUCT has no field for is dropped
+            // by the JSON cast; report it rather than lose it quietly.
+            let Some(dropped) = dropped_keys_condition(&field_type.logical_type) else {
+                continue;
+            };
+            let raw = format!("t.{}", quote_ident(&field_type.raw_name));
+            let typed = format!("t.{}", quote_ident(&field.name));
+            let dropped = dropped.replace("{raw}", &raw).replace("{typed}", &typed);
+            let query = format!(
+                "SELECT \"__okf_path\", CAST({raw} AS VARCHAR) FROM {table} AS t \
+                 WHERE {raw} IS NOT NULL AND {typed} IS NOT NULL AND {dropped} ORDER BY 1",
+                table = schema.table(&plan.concept_type),
+            );
+            let mut statement = connection.prepare(&query)?;
+            let losses = statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            for (path, value) in losses {
+                diagnostics.push(Diagnostic {
+                    code: Code::Okf023,
+                    severity,
+                    path,
+                    message: format!(
+                        "type `{}` field `{}` value {} has keys declared type `{}` has no \
+                         field for; they would be dropped",
+                        plan.concept_type,
+                        field.name,
+                        quote_literal(&value),
+                        field_type.logical_type.sql
+                    ),
+                });
+            }
         }
     }
     Ok(diagnostics)
+}
+
+/// The SQL condition (over `{raw}` and `{typed}`) that an authored mapping
+/// lost keys in its JSON cast, for types that hold structure.
+fn dropped_keys_condition(logical_type: &LogicalType) -> Option<&'static str> {
+    if holds_structure(logical_type) {
+        return Some(
+            "json_type(TRY_CAST({raw} AS JSON)) = 'OBJECT' AND NOT list_has_all(\
+             json_keys(to_json({typed})), json_keys(TRY_CAST({raw} AS JSON)))",
+        );
+    }
+    if logical_type.family == TypeFamily::List
+        && logical_type.element.as_deref().is_some_and(holds_structure)
+    {
+        return Some(
+            "EXISTS (SELECT 1 FROM range(len({raw})) AS r(i) \
+             WHERE json_type(TRY_CAST({raw}[r.i + 1] AS JSON)) = 'OBJECT' AND NOT list_has_all(\
+             json_keys(to_json({typed}[r.i + 1])), json_keys(TRY_CAST({raw}[r.i + 1] AS JSON))))",
+        );
+    }
+    None
 }

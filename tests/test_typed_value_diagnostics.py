@@ -3,7 +3,8 @@
 Regression tests for #319 (a value outside an ENUM, an invalid DATE) and
 #316 (a list of mappings or a mapping under a STRUCT[]/MAP column): each used
 to become NULL in the typed table with no diagnostic while ``check`` stayed
-``conformant: true``.
+``conformant: true``. Since #316's follow-up, mappings and lists of mappings
+under MAP/STRUCT/STRUCT[] are read; only what they cannot hold is reported.
 """
 
 from __future__ import annotations
@@ -62,11 +63,9 @@ def test_check_reports_a_value_outside_the_enum_319(tmp_path: Path) -> None:
     assert "`registrada_em` value '2026-13-40'" in messages
 
 
-def test_check_reports_structured_values_316(tmp_path: Path) -> None:
-    _bundle(
-        tmp_path,
-        "ha_args:\n  ligar: b64:x\n  desligar: b64:y\ncommands:\n  - key: ligar\n    code: b64:x\n",
-    )
+def test_check_reports_unconvertible_structured_values_316(tmp_path: Path) -> None:
+    # A list under a MAP, and a STRUCT element with a key it has no field for.
+    _bundle(tmp_path, "ha_args:\n  - ligar\ncommands:\n  - key: ligar\n    extra: b64:x\n")
 
     report = check_bundle(str(tmp_path), require_spec=TEMPLATE, normative_spec=True)
 
@@ -74,6 +73,28 @@ def test_check_reports_structured_values_316(tmp_path: Path) -> None:
     assert report["conformant"] is False
     assert sorted(item["message"].split("`")[3] for item in typed) == ["commands", "ha_args"]
     assert all(item["path"] == "bad.md" for item in typed)
+    assert any("would be dropped" in item["message"] for item in typed)
+
+
+def test_valid_structured_values_are_read_and_not_reported_316(tmp_path: Path) -> None:
+    _bundle(
+        tmp_path,
+        "ha_args:\n  ligar: b64:x\n  desligar: b64:y\n"
+        "commands:\n  - key: ligar\n    code: b64:x\n  - key: visor\n",
+    )
+
+    report = check_bundle(str(tmp_path), require_spec=TEMPLATE, normative_spec=True)
+    result = load_bundle(tmp_path).sql(
+        "SELECT ha_args['ligar'], ha_args['desligar'], commands "
+        'FROM "Memoria" WHERE "__okf_path" = \'bad.md\'',
+        spec_template=TEMPLATE,
+    )
+
+    assert _typed(report) == []
+    assert report["conformant"] is True
+    [(ligar, desligar, commands)] = result.rows
+    assert (ligar, desligar) == ("b64:x", "b64:y")
+    assert commands == [{"key": "ligar", "code": "b64:x"}, {"key": "visor", "code": None}]
 
 
 def test_without_normative_spec_the_finding_is_a_warning(tmp_path: Path) -> None:
@@ -106,7 +127,7 @@ def test_sql_diagnostics_carry_the_failure_319(tmp_path: Path) -> None:
 
 
 def test_duckdb_export_reports_the_failure(tmp_path: Path) -> None:
-    _bundle(tmp_path, "ha_args:\n  ligar: b64:x\n")
+    _bundle(tmp_path, "ha_args: not a mapping\n")
     database = tmp_path / "knowledge.duckdb"
 
     result = dict(export_duckdb(str(tmp_path), str(database), "okf", spec_template=TEMPLATE))
@@ -118,3 +139,31 @@ def test_duckdb_export_reports_the_failure(tmp_path: Path) -> None:
             "SELECT path FROM okf.diagnostics WHERE code = 'OKF023'"
         ).fetchall()
     assert rows == [("bad.md",)]
+
+
+def test_a_json_looking_string_is_authored_text_not_a_mapping(tmp_path: Path) -> None:
+    _bundle(tmp_path, 'ha_args: \'{"ligar": "b64:x"}\'\n')
+
+    report = check_bundle(str(tmp_path), require_spec=TEMPLATE, normative_spec=True)
+    result = load_bundle(tmp_path).sql(
+        'SELECT ha_args FROM "Memoria" WHERE "__okf_path" = \'bad.md\'',
+        spec_template=TEMPLATE,
+    )
+
+    assert result.rows == ((None,),)
+    assert [item["message"].split("`")[3] for item in _typed(report)] == ["ha_args"]
+
+
+def test_a_scalar_inside_a_struct_list_is_reported(tmp_path: Path) -> None:
+    _bundle(tmp_path, "commands:\n  - solto\n  - key: ligar\n    code: b64:x\n")
+
+    report = check_bundle(str(tmp_path), require_spec=TEMPLATE, normative_spec=True)
+    result = load_bundle(tmp_path).sql(
+        'SELECT commands FROM "Memoria" WHERE "__okf_path" = \'bad.md\'',
+        spec_template=TEMPLATE,
+    )
+
+    assert result.rows == ((None,),)
+    typed = _typed(report)
+    assert [item["message"].split("`")[3] for item in typed] == ["commands"]
+    assert report["conformant"] is False
