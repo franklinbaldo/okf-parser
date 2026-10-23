@@ -180,7 +180,9 @@ enum Command {
         after_help = "Tables: concepts, links, reserved and diagnostics (schema okf) and, \
         with --spec-template, one per declared type (schema okf_types), all on the search path. \
         The query itself cannot read files, reach the network or change settings. With --relations, \
-        trusted okf.relations.sql runs before that lockdown and may use DuckDB's ordinary I/O.\n\n\
+        trusted okf.relations.sql runs before that lockdown and may use DuckDB's ordinary I/O; \
+        views it publishes are read after the lockdown, so external data must be materialized \
+        with CREATE TABLE ... AS (a view that reads files is rejected).\n\n\
         Example: okf-parser sql notes \"SELECT concept_type, count(*) FROM concepts GROUP BY 1\""
     )]
     Sql {

@@ -11,6 +11,13 @@ optional trusted bundle-root `okf.relations.sql` after RFC 0006 materializes
 reserved `okf_relations` schema, which is then available to the read-only
 query. Relation execution requires a spec template and remains opt-in.
 
-The MCP `sql` tool deliberately does not expose this switch: ordinary MCP SQL
-keeps its read-only/no-external-access contract, while trusted relation SQL has
-the broader effect boundary documented by RFC 0021.
+Relation views are evaluated at query time, after the lockdown, so a program
+that reads external data must materialize it with `CREATE TABLE ... AS`; a
+published view that only binds with file or network access is rejected with an
+error naming the view instead of failing later when someone queries it.
+
+The MCP `sql` tool does not expose this switch. Its `spec_template` already
+runs each trusted `.schema.sql`, but on a separate declaration connection; the
+difference is that relation SQL runs on the query connection itself, before it
+is locked down. Keeping that out of MCP preserves the RFC 0008 read-only
+contract of the connection MCP queries.

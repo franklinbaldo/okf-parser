@@ -137,3 +137,45 @@ def test_decoding_follows_nested_types() -> None:
     assert decode_value("infinity", "DATE") == "infinity"
     assert decode_value([[[1], 2]], "MAP(INTEGER[], INTEGER)") == [([1], 2)]
     assert decode_value("NaN", "DOUBLE") != decode_value("NaN", "DOUBLE")
+
+
+def test_relations_are_queryable_and_the_query_stays_locked_down(tmp_path: Path) -> None:
+    template = _declared_bundle(tmp_path)
+    (tmp_path / "okf.relations.sql").write_text(
+        "CREATE VIEW okf_relations.codes AS "
+        'SELECT "__okf_path" AS path, codigo FROM okf_types."Rotina";\n',
+        encoding="utf-8",
+    )
+    bundle = load_bundle(tmp_path)
+
+    result = bundle.sql(
+        "SELECT path, codigo FROM codes ORDER BY path", spec_template=template, relations=True
+    )
+    assert result.rows == (("a.md", "alpha"), ("b.md", "beta"))
+
+    for query in (
+        "SELECT * FROM read_text('/etc/passwd')",
+        "COPY (SELECT 1) TO 'escape.csv'",
+        "SET enable_external_access = true",
+    ):
+        with pytest.raises(SqlError):
+            bundle.sql(query, spec_template=template, relations=True)
+    assert not (tmp_path / "escape.csv").exists()
+
+
+def test_relations_without_a_spec_template_is_a_sql_error(tmp_path: Path) -> None:
+    (tmp_path / "a.md").write_text("---\ntype: Note\n---\n", encoding="utf-8")
+
+    with pytest.raises(SqlError, match="spec-template"):
+        load_bundle(tmp_path).sql("SELECT 1", relations=True)
+
+
+def test_a_relation_view_that_reads_files_is_rejected(tmp_path: Path) -> None:
+    template = _declared_bundle(tmp_path)
+    (tmp_path / "okf.relations.sql").write_text(
+        "CREATE VIEW okf_relations.hosts AS SELECT * FROM read_text('/etc/hosts');\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(SqlError, match="CREATE TABLE"):
+        load_bundle(tmp_path).sql("SELECT 1", spec_template=template, relations=True)

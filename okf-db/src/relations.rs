@@ -25,6 +25,11 @@ pub enum BundleRelationsError {
     Script(duckdb::Error),
     Catalog(duckdb::Error),
     MissingSchema,
+    /// A view that only works with external access, which the query no longer has.
+    ExternalView {
+        view: String,
+        error: duckdb::Error,
+    },
 }
 
 impl fmt::Display for BundleRelationsError {
@@ -45,6 +50,13 @@ impl fmt::Display for BundleRelationsError {
                     "bundle relation SQL removed reserved schema {RELATIONS_SCHEMA:?}"
                 )
             }
+            Self::ExternalView { view, error } => write!(
+                f,
+                "relation view {RELATIONS_SCHEMA}.{view} cannot be read once the query is \
+                 locked down ({error}); views are evaluated at query time without file or \
+                 network access, so relations that read external data must be materialized \
+                 with CREATE TABLE ... AS"
+            ),
         }
     }
 }
@@ -53,7 +65,9 @@ impl std::error::Error for BundleRelationsError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Read { error, .. } => Some(error),
-            Self::Script(error) | Self::Catalog(error) => Some(error),
+            Self::Script(error) | Self::Catalog(error) | Self::ExternalView { error, .. } => {
+                Some(error)
+            }
             Self::MissingSchema => None,
         }
     }
@@ -116,6 +130,35 @@ pub fn execute_bundle_relations(
         schema: RELATIONS_SCHEMA.to_owned(),
         relations,
     })
+}
+
+/// Reject relation views that only bind with external access.
+///
+/// Call after the connection is locked down. A view is bound lazily, so a
+/// `CREATE VIEW ... AS SELECT ... FROM read_csv(...)` succeeds while the
+/// trusted script runs and would only fail when a consumer queries it. Binding
+/// every view here surfaces that at materialization, naming the view.
+pub fn verify_locked_down_views(connection: &Connection) -> Result<(), BundleRelationsError> {
+    let views = connection
+        .prepare(
+            "SELECT table_name FROM information_schema.tables \
+             WHERE table_schema = ? AND table_type = 'VIEW' ORDER BY table_name",
+        )
+        .and_then(|mut statement| {
+            statement
+                .query_map([RELATIONS_SCHEMA], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()
+        })
+        .map_err(BundleRelationsError::Catalog)?;
+    for view in views {
+        let quoted = view.replace('"', "\"\"");
+        connection
+            .prepare(&format!(
+                "SELECT * FROM {RELATIONS_SCHEMA}.\"{quoted}\" LIMIT 0"
+            ))
+            .map_err(|error| BundleRelationsError::ExternalView { view, error })?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

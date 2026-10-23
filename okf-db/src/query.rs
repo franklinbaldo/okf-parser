@@ -22,7 +22,7 @@ use serde_json::{Map, Value};
 use crate::catalog::Schema;
 use crate::declared::{DeclaredSchema, DeclaredSchemaError, discover_declared_schemas};
 use crate::export::fill_tables;
-use crate::relations::{BundleRelationsError, execute_bundle_relations};
+use crate::relations::{BundleRelationsError, execute_bundle_relations, verify_locked_down_views};
 use crate::typed::{TypedTableError, materialize_typed_tables};
 
 /// Why a query produced no rows.
@@ -166,6 +166,9 @@ fn materialize(data: &BundleData, options: QueryOptions<'_>) -> Result<Connectio
          SET autoload_known_extensions = false;
          SET lock_configuration = true;"
     ))?;
+    if options.relations {
+        verify_locked_down_views(&connection).map_err(QueryError::Relations)?;
+    }
     Ok(connection)
 }
 
@@ -440,6 +443,102 @@ mod tests {
             query_bundle(&bundle(), "SELECT 1", options),
             Err(QueryError::RelationsRequireSpec)
         ));
+    }
+
+    /// A real bundle root with a declared `Note` type and a relation program.
+    fn relations_bundle(name: &str, program: &str) -> BundleData {
+        let root =
+            std::env::temp_dir().join(format!("okf-query-relations-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let types = root.join("docs").join("types");
+        std::fs::create_dir_all(&types).unwrap();
+        std::fs::write(
+            types.join("note.schema.sql"),
+            "CREATE TABLE \"Note\" (title VARCHAR);\n",
+        )
+        .unwrap();
+        std::fs::write(root.join(crate::relations::RELATIONS_FILENAME), program).unwrap();
+        BundleData {
+            root: root.display().to_string(),
+            ..bundle()
+        }
+    }
+
+    fn relations_options() -> QueryOptions<'static> {
+        QueryOptions {
+            spec_template: Some("docs/types/{slug}.md"),
+            relations: true,
+            ..QueryOptions::default()
+        }
+    }
+
+    #[test]
+    fn relations_are_visible_and_the_query_stays_locked_down() {
+        let data = relations_bundle(
+            "e2e",
+            "CREATE VIEW okf_relations.note_titles AS \
+             SELECT \"__okf_path\" AS path FROM okf_types.\"Note\";",
+        );
+        let result = query_bundle(
+            &data,
+            "SELECT path FROM note_titles ORDER BY path",
+            relations_options(),
+        )
+        .unwrap();
+        assert_eq!(
+            result.rows,
+            [[serde_json::json!("a.md")], [serde_json::json!("b.md")]]
+        );
+
+        let escape = std::env::temp_dir().join("okf-relations-escape.csv");
+        let _ = std::fs::remove_file(&escape);
+        for sql in [
+            "SELECT * FROM read_text('/etc/passwd')".to_owned(),
+            "SELECT * FROM read_csv('/etc/hosts')".to_owned(),
+            format!("COPY (SELECT 1) TO '{}'", escape.display()),
+            "SET enable_external_access = true".to_owned(),
+            "SET search_path = 'main'".to_owned(),
+            "INSTALL httpfs".to_owned(),
+        ] {
+            assert!(
+                matches!(
+                    query_bundle(&data, &sql, relations_options()),
+                    Err(QueryError::Query(_) | QueryError::NotAQuery)
+                ),
+                "{sql} should be refused after the relation program ran"
+            );
+        }
+        assert!(!escape.exists());
+        std::fs::remove_dir_all(&data.root).unwrap();
+    }
+
+    #[test]
+    fn a_relation_view_that_reads_files_is_rejected_at_materialization() {
+        let data = relations_bundle(
+            "lazy",
+            "CREATE VIEW okf_relations.hosts AS SELECT * FROM read_text('/etc/hosts');",
+        );
+        let error = query_bundle(&data, "SELECT 1", relations_options()).unwrap_err();
+        assert!(
+            matches!(
+                error,
+                QueryError::Relations(BundleRelationsError::ExternalView { ref view, .. })
+                    if view == "hosts"
+            ),
+            "{error}"
+        );
+        assert!(error.to_string().contains("CREATE TABLE"), "{error}");
+
+        // Materializing the same read as a table runs while access is still open.
+        std::fs::write(
+            Path::new(&data.root).join(crate::relations::RELATIONS_FILENAME),
+            "CREATE TABLE okf_relations.hosts AS \
+             SELECT count(*) AS n FROM read_text('/etc/hosts');",
+        )
+        .unwrap();
+        let result = query_bundle(&data, "SELECT n FROM hosts", relations_options()).unwrap();
+        assert_eq!(result.rows, [[serde_json::json!(1)]]);
+        std::fs::remove_dir_all(&data.root).unwrap();
     }
 
     #[test]
