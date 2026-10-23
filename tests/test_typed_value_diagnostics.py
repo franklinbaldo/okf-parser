@@ -139,3 +139,31 @@ def test_duckdb_export_reports_the_failure(tmp_path: Path) -> None:
             "SELECT path FROM okf.diagnostics WHERE code = 'OKF023'"
         ).fetchall()
     assert rows == [("bad.md",)]
+
+
+def test_a_json_looking_string_is_authored_text_not_a_mapping(tmp_path: Path) -> None:
+    _bundle(tmp_path, 'ha_args: \'{"ligar": "b64:x"}\'\n')
+
+    report = check_bundle(str(tmp_path), require_spec=TEMPLATE, normative_spec=True)
+    result = load_bundle(tmp_path).sql(
+        'SELECT ha_args FROM "Memoria" WHERE "__okf_path" = \'bad.md\'',
+        spec_template=TEMPLATE,
+    )
+
+    assert result.rows == ((None,),)
+    assert [item["message"].split("`")[3] for item in _typed(report)] == ["ha_args"]
+
+
+def test_a_scalar_inside_a_struct_list_is_reported(tmp_path: Path) -> None:
+    _bundle(tmp_path, "commands:\n  - solto\n  - key: ligar\n    code: b64:x\n")
+
+    report = check_bundle(str(tmp_path), require_spec=TEMPLATE, normative_spec=True)
+    result = load_bundle(tmp_path).sql(
+        'SELECT commands FROM "Memoria" WHERE "__okf_path" = \'bad.md\'',
+        spec_template=TEMPLATE,
+    )
+
+    assert result.rows == ((None,),)
+    typed = _typed(report)
+    assert [item["message"].split("`")[3] for item in typed] == ["commands"]
+    assert report["conformant"] is False
