@@ -191,6 +191,7 @@ class _SqlRequest(BaseModel):
     query: str
     spec_template: str | None
     limit: int | None
+    relations: bool
 
 
 class _Column(BaseModel):
@@ -222,6 +223,7 @@ def query_bundle(
     *,
     spec_template: str | None = None,
     limit: int | None = None,
+    relations: bool = False,
 ) -> SqlResult:
     """Run one read-only query over ``bundle``; see :meth:`Bundle.sql`."""
     result = native_result(
@@ -231,11 +233,13 @@ def query_bundle(
             query=query,
             spec_template=spec_template,
             limit=limit,
+            relations=relations,
         ),
         {
             "query": SqlError,
             "spec_template": SpecTemplateError,
             "declared_schema": DeclaredSchemaError,
+            "request": SqlError,
         },
     )
     answer = _Result.model_validate(result)

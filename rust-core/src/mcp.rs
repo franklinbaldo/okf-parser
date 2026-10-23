@@ -496,6 +496,7 @@ impl OkfServer {
             let options = QueryOptions {
                 spec_template: args.spec_template.as_deref(),
                 limit: Some(args.limit.clamp(1, SQL_ROW_LIMIT)),
+                relations: false,
             };
             commands::sql(&args.path, exclude(&args.exclude), &args.query, options)
         })
