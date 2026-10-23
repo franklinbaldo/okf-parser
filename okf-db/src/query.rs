@@ -14,15 +14,15 @@ use std::path::Path;
 use chrono::{DateTime, NaiveDate, NaiveTime};
 use duckdb::Connection;
 use duckdb::types::{TimeUnit, Value as DbValue};
-use okf_engine::BundleData;
 use okf_engine::specs::{SpecTemplate, SpecTemplateError};
+use okf_engine::{BundleData, Severity};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
 use crate::catalog::Schema;
 use crate::declared::{DeclaredSchema, DeclaredSchemaError, discover_declared_schemas};
 use crate::export::fill_tables;
-use crate::typed::{TypedTableError, materialize_typed_tables};
+use crate::typed::{TypedTableError, materialize_typed_tables, typed_value_diagnostics};
 
 /// Why a query produced no rows.
 #[derive(Debug)]
@@ -132,7 +132,9 @@ fn materialize(data: &BundleData, spec_template: Option<&str>) -> Result<Connect
         base.sql(),
         typed.sql()
     ))?;
-    fill_tables(&connection, &base, data)?;
+    let typed_diagnostics =
+        typed_value_diagnostics(data, &declared, Severity::Error).map_err(QueryError::Typed)?;
+    fill_tables(&connection, &base, data, &typed_diagnostics)?;
     if !declared.is_empty() {
         materialize_typed_tables(&connection, data, &typed, &declared, false)
             .map_err(QueryError::Typed)?;

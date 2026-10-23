@@ -227,6 +227,8 @@ impl ProtocolError {
             }
             CheckFailure::Relational(RelationalSchemaError::Read { .. }) => Self::request(error),
             CheckFailure::Relational(_) => Self::relational_schema(error),
+            CheckFailure::Declared(_) => Self::declared_schema(error),
+            CheckFailure::Typed(_) => Self::request(error),
         }
     }
 

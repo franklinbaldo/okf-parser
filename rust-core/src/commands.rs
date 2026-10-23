@@ -7,6 +7,7 @@ use std::path::Path;
 use std::{fmt, io};
 
 use okf_db::apply::{plan_apply, sugar_sql};
+use okf_db::declared::{DeclaredSchemaError, discover_declared_schemas};
 use okf_db::export::{ExportError, ExportOptions, ExportReport, export_bundle};
 use okf_db::import::{ImportError, ImportReport, ImportRequest, import_source};
 use okf_db::infer::{InferError, scaffold_starter_schemas};
@@ -16,6 +17,7 @@ use okf_db::schema::{
     RefsMode, SchemaError, SchemaOptions, ZodImport, build_contracts, render_graphql,
     render_json_schema, render_zod,
 };
+use okf_db::typed::{TypedTableError, typed_value_diagnostics};
 use okf_engine::check::{
     self, CheckError, CheckReport, Inventory, READ_CONCURRENCY, SpecRules, check_loaded,
 };
@@ -37,6 +39,8 @@ use serde_json::Value;
 pub enum CheckFailure {
     Check(CheckError),
     Relational(RelationalSchemaError),
+    Declared(DeclaredSchemaError),
+    Typed(TypedTableError),
 }
 
 impl fmt::Display for CheckFailure {
@@ -44,6 +48,8 @@ impl fmt::Display for CheckFailure {
         match self {
             Self::Check(error) => error.fmt(f),
             Self::Relational(error) => error.fmt(f),
+            Self::Declared(error) => error.fmt(f),
+            Self::Typed(error) => error.fmt(f),
         }
     }
 }
@@ -53,6 +59,8 @@ impl std::error::Error for CheckFailure {
         match self {
             Self::Check(error) => Some(error),
             Self::Relational(error) => Some(error),
+            Self::Declared(error) => Some(error),
+            Self::Typed(error) => Some(error),
         }
     }
 }
@@ -78,13 +86,13 @@ pub fn check(
     exclude: &[String],
     options: CheckOptions<'_>,
 ) -> Result<CheckReport, CheckFailure> {
-    let Some(relational) = options.relational_schema else {
+    if options.relational_schema.is_none() && options.require_spec.is_none() {
         let rules = SpecRules {
-            require_spec: options.require_spec,
+            require_spec: None,
             normative: options.normative_spec,
         };
         return Ok(check::check(path, exclude, rules, options.classify)?);
-    };
+    }
     let template = options
         .require_spec
         .map(SpecTemplate::new)
@@ -93,11 +101,35 @@ pub fn check(
     let data = load_bundle(path, exclude, READ_CONCURRENCY).map_err(CheckError::from)?;
     let mut report = check_loaded(&data, template, options.normative_spec, options.classify)
         .map_err(CheckError::from)?;
-    let schema = load_relational_schema(&Path::new(&data.root).join(relational))
-        .map_err(CheckFailure::Relational)?;
-    report
-        .diagnostics
-        .extend(validate_relations(&data, &schema));
+    if let Some(template) = template {
+        // Values a declared `.schema.sql` type cannot hold (OKF023), so a
+        // typo is reported instead of becoming NULL in the typed table.
+        let mut types: Vec<&str> = data
+            .concepts
+            .iter()
+            .map(|concept| concept.concept_type.as_str())
+            .filter(|concept_type| !concept_type.is_empty())
+            .collect();
+        types.sort_unstable();
+        types.dedup();
+        let declarations = discover_declared_schemas(Path::new(&data.root), types, template)
+            .map_err(CheckFailure::Declared)?;
+        let severity = if options.normative_spec {
+            Severity::Error
+        } else {
+            Severity::Warning
+        };
+        report.diagnostics.extend(
+            typed_value_diagnostics(&data, &declarations, severity).map_err(CheckFailure::Typed)?,
+        );
+    }
+    if let Some(relational) = options.relational_schema {
+        let schema = load_relational_schema(&Path::new(&data.root).join(relational))
+            .map_err(CheckFailure::Relational)?;
+        report
+            .diagnostics
+            .extend(validate_relations(&data, &schema));
+    }
     check::order(&mut report.diagnostics);
     report.conformant = !report
         .diagnostics

@@ -10,8 +10,8 @@ use std::fmt;
 
 use duckdb::types::Value as DbValue;
 use duckdb::{Connection, params_from_iter};
-use okf_engine::BundleData;
 use okf_engine::specs::split_lines;
+use okf_engine::{BundleData, Code, Diagnostic, Severity};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -606,4 +606,125 @@ pub fn materialize_typed_tables(
         tables: plans.into_iter().map(|plan| plan.concept_type).collect(),
         unrecognized_tables: unrecognized,
     })
+}
+
+fn value_kind(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "a boolean",
+        Value::Number(_) => "a number",
+        Value::String(_) => "a string",
+        Value::Array(items) if items.iter().any(|item| item.is_object() || item.is_array()) => {
+            "a list of mappings or lists"
+        }
+        Value::Array(_) => "a list",
+        Value::Object(_) => "a mapping",
+    }
+}
+
+/// One `OKF023` per authored, non-null declared value that its typed column
+/// cannot hold: text that does not cast (an ENUM label, a date, a number) and
+/// structured YAML the raw column cannot carry. Without this the typed column
+/// is silently NULL (#316, #319). A key that is absent or authored as null is
+/// not reported here.
+pub fn typed_value_diagnostics(
+    data: &BundleData,
+    declarations: &BTreeMap<String, DeclaredSchema>,
+    severity: Severity,
+) -> Result<Vec<Diagnostic>, TypedTableError> {
+    if declarations.is_empty() {
+        return Ok(Vec::new());
+    }
+    let plans = build_plans(data, declarations)?;
+    let connection = Connection::open_in_memory()?;
+    // A private scratch database: never reach the network for an extension.
+    connection.execute_batch(
+        "SET autoinstall_known_extensions = false; SET autoload_known_extensions = false;",
+    )?;
+    let schema = Schema::current(&connection, "okf_types")?;
+    materialize_typed_tables(&connection, data, &schema, declarations, false)?;
+    let rows = rows_by_type(data);
+    let mut diagnostics = Vec::new();
+    for plan in &plans {
+        let type_rows = rows
+            .get(plan.concept_type.as_str())
+            .map_or(&[][..], Vec::as_slice);
+        let declared: HashMap<String, &str> = plan
+            .fields
+            .iter()
+            .filter(|field| field.declared.is_some())
+            .map(|field| (identifier_key(&field.name), field.name.as_str()))
+            .collect();
+        // Structured values never reach the raw column.
+        for row in type_rows {
+            let aliases = declared_aliases(row.path, &row.frontmatter, &declared)?;
+            for field in &plan.fields {
+                let Some(field_type) = &field.declared else {
+                    continue;
+                };
+                let Some(value) = aliases
+                    .get(&field.name)
+                    .and_then(|authored| row.frontmatter.get(*authored))
+                else {
+                    continue;
+                };
+                if value.is_null()
+                    || !matches!(
+                        raw_value(Some(value), &field_type.logical_type),
+                        DbValue::Null
+                    )
+                {
+                    continue;
+                }
+                diagnostics.push(Diagnostic {
+                    code: Code::Okf023,
+                    severity,
+                    path: row.path.to_owned(),
+                    message: format!(
+                        "type `{}` field `{}` is {} in frontmatter, which declared type `{}` \
+                         cannot hold; its typed value would be NULL",
+                        plan.concept_type,
+                        field.name,
+                        value_kind(value),
+                        field_type.logical_type.sql
+                    ),
+                });
+            }
+        }
+        // Raw text the cast rejected.
+        for field in &plan.fields {
+            let Some(field_type) = &field.declared else {
+                continue;
+            };
+            let query = format!(
+                "SELECT \"__okf_path\", CAST({raw} AS VARCHAR) FROM {table} \
+                 WHERE {raw} IS NOT NULL AND {typed} IS NULL ORDER BY 1",
+                raw = quote_ident(&field_type.raw_name),
+                typed = quote_ident(&field.name),
+                table = schema.table(&plan.concept_type),
+            );
+            let mut statement = connection.prepare(&query)?;
+            let failures = statement
+                .query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            for (path, value) in failures {
+                diagnostics.push(Diagnostic {
+                    code: Code::Okf023,
+                    severity,
+                    path,
+                    message: format!(
+                        "type `{}` field `{}` value {} does not convert to declared type `{}`; \
+                         its typed value would be NULL",
+                        plan.concept_type,
+                        field.name,
+                        quote_literal(&value),
+                        field_type.logical_type.sql
+                    ),
+                });
+            }
+        }
+    }
+    Ok(diagnostics)
 }
