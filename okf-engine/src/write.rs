@@ -142,6 +142,9 @@ pub struct RawDocument {
     crlf: bool,
     frontmatter: String,
     body: String,
+    /// The body's original bytes while `body` is unchanged, so a
+    /// frontmatter-only write never normalizes a bare `\r` in the body.
+    raw_body: Option<String>,
 }
 
 impl RawDocument {
@@ -157,9 +160,15 @@ impl RawDocument {
     fn from_split(text: &str, frontmatter: &str, body: &str) -> Self {
         Self {
             bom: text.starts_with('\u{feff}'),
-            crlf: text.contains("\r\n"),
+            // The opening delimiter's line ending is the frontmatter's style;
+            // a `\r\n` that occurs only in the body says nothing about it.
+            crlf: text
+                .split_inclusive('\n')
+                .next()
+                .is_some_and(|line| line.ends_with("\r\n")),
             frontmatter: frontmatter.to_owned(),
             body: body.to_owned(),
+            raw_body: Some(raw_tail(text, body.len()).to_owned()),
         }
     }
 
@@ -170,18 +179,33 @@ impl RawDocument {
             text.push('\n');
         }
         text.push_str("---\n");
-        text.push_str(&self.body);
-        if self.crlf {
-            text = text.replace('\n', "\r\n");
+        match &self.raw_body {
+            Some(raw) => {
+                text = self.line_endings(text);
+                text.push_str(raw);
+            }
+            None => {
+                text.push_str(&self.body);
+                text = self.line_endings(text);
+            }
         }
         let mut bytes = if self.bom { BOM.to_vec() } else { Vec::new() };
         bytes.extend_from_slice(text.as_bytes());
         bytes
     }
 
+    fn line_endings(&self, text: String) -> String {
+        if self.crlf {
+            text.replace('\n', "\r\n")
+        } else {
+            text
+        }
+    }
+
     pub fn with_body(&self, body: String) -> Self {
         Self {
             body,
+            raw_body: None,
             ..self.clone()
         }
     }
@@ -202,6 +226,23 @@ impl RawDocument {
     pub fn body(&self) -> &str {
         &self.body
     }
+}
+
+/// The suffix of `text` whose newline-normalized form is `normalized_len`
+/// bytes long. Normalization folds `\r\n` into `\n` and turns a bare `\r` into
+/// `\n`, so walking back over `text` finds the suffix.
+fn raw_tail(text: &str, normalized_len: usize) -> &str {
+    let bytes = text.as_bytes();
+    let (mut start, mut remaining) = (bytes.len(), normalized_len);
+    while remaining > 0 && start > 0 {
+        start -= if bytes[..start].ends_with(b"\r\n") {
+            2
+        } else {
+            1
+        };
+        remaining -= 1;
+    }
+    &text[start..]
 }
 
 type Signature = (u64, u128);
@@ -1039,6 +1080,28 @@ mod tests {
         let raw = RawDocument::parse(source).unwrap();
         assert_eq!(raw.render(), source);
         assert_eq!(raw.body, "# A\n");
+    }
+
+    #[test]
+    fn frontmatter_edits_keep_body_bytes_with_bare_cr() {
+        let source = "---\ntype: Note\n---\n$C_{\rm raw}$\r\nnext\n";
+        let raw = RawDocument::parse(source.as_bytes()).unwrap();
+        assert_eq!(raw.body, "$C_{\nm raw}$\nnext\n");
+        let edited = raw.with_frontmatter("type: Note\nstatus: final".into());
+        assert_eq!(
+            edited.render(),
+            b"---\ntype: Note\nstatus: final\n---\n$C_{\rm raw}$\r\nnext\n"
+        );
+        let crlf = RawDocument::parse(b"---\r\ntype: Note\r\n---\r\na\rb\r\n").unwrap();
+        assert_eq!(
+            crlf.with_frontmatter("type: Note\nstatus: final".into())
+                .render(),
+            b"---\r\ntype: Note\r\nstatus: final\r\n---\r\na\rb\r\n"
+        );
+        assert_eq!(
+            crlf.with_body("c\n".into()).render(),
+            b"---\r\ntype: Note\r\n---\r\nc\r\n"
+        );
     }
 
     #[test]
